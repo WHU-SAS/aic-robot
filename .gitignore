@@ -1,0 +1,28 @@
+# Local settings and secrets
+.vscode/
+.idea/
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# ROS 2 / build outputs
+build/
+install/
+log/
+dist/
+
+# Node tooling if added later
+node_modules/
+
+# Local records
+*.log
+*.bag
+*.db3
+*.mcap
