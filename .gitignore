@@ -1,0 +1,11 @@
+# Local editor settings, credentials and caches
+.vscode/
+.idea/
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.log
