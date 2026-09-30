@@ -4,10 +4,6 @@
 /WHEELTEC R3X系列底盘资料/
 /vendor_reference/
 
-# Hardware photos stay local; the written inventory can be shared separately
-/硬件信息/*.jpg
-/硬件信息/*.png
-
 # Local editor state, credentials and caches
 .vscode/
 .idea/
