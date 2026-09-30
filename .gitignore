@@ -1,0 +1,28 @@
+# Manufacturer reference archives and local-only extracted examples
+/WHEELTEC 智能小车底盘开发参考资料/
+/WHEELTEC C07A核心板(Ti-MSPM0G3507)附送资料/
+/WHEELTEC R3X系列底盘资料/
+/vendor_reference/
+
+# Hardware photos stay local; the written inventory can be shared separately
+/硬件信息/*.jpg
+/硬件信息/*.png
+
+# Local editor state, credentials and caches
+.vscode/
+.idea/
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.pem
+
+# Build and Keil generated files
+/demo/01_motor_encoder/build/
+/demo/01_motor_encoder/keil/Listings/
+/demo/01_motor_encoder/keil/Objects/
+/demo/01_motor_encoder/keil/*.uvguix.*
+/demo/01_motor_encoder/keil/*.uvoptx
+*.log
