@@ -14,6 +14,15 @@ SDK 的上游项目是 [ftservo/FTServo_Python](https://github.com/ftservo/FTSer
 
 URDF 中有 6 个旋转关节，最后一关节的限制范围与其他关节不同。其 `meshes/*.stl` 外观网格没有包含在此目录中，因此不能直接用它显示完整外观；它也没有碰撞体和惯性参数，不能作为已验证的动力学模型。URDF 中的限制值不是实测设备参数。原参考包没有随此文件提供明确的来源和再分发许可记录；公开发布前需核对来源和使用权限。
 
+## 飞特舵机常用网址
+
+| 入口 | 用途 |
+| --- | --- |
+| [FTServo / FEETECH Debug Software](https://gitee.com/ftservo/fddebug/tree/master) | 飞特舵机调试软件项目入口 |
+| [FT 管理平台](http://doc.feetech.cn/#/prodinfodownload?srcType=FTServo-emanual-ab4947a479784a71a8cb7928) | 飞特舵机产品资料与下载入口 |
+
+这两个入口是机械臂舵机开发的重要参考。使用时按实际舵机型号选择对应工具与资料。
+
 ## 使用边界
 
 - 这个目录没有控制脚本、录制动作、ROS 2 工程或网页控制平台。
