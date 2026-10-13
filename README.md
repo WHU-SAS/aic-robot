@@ -30,6 +30,16 @@ cd car-arm
 ./scripts/host hardware/k230_blue_pick_onboard.py --execute --hands-free
 ```
 
+### 小车行驶时保持机械臂准备位
+
+**小车行驶过程中，机械臂必须保持准备位和扭矩，以维持整车平衡。** 行驶前在`car-arm/`目录执行并确认到位：
+
+```bash
+./scripts/host hardware/move_ready.py --execute
+```
+
+准备位为六轴`0°、−80°、80°、80°、0°、30°`，与中立位不同。当前未自动与小车启动联动；抓取等改变姿态的操作在小车停稳后进行。准备位包含张开夹爪目标，持物行驶策略另外确定。详见[回准备位说明](car-arm/docs/准备位脚本.md)。
+
 ## 团队协作
 
 每位成员使用自己的 GitHub 账号克隆仓库。修改前同步 `main`，在自己的分支上开发，通过 Pull Request 合并。不要提交密钥、本机环境、日志和构建产物。
