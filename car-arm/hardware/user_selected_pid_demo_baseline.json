@@ -1,0 +1,148 @@
+{
+  "status": "user_adopted_permanent_baseline_not_certified",
+  "parameters": {
+    "1": {
+      "P": 16,
+      "I": 0,
+      "D": 100,
+      "integral_limit": 0,
+      "startup": 16,
+      "deadband26": 1,
+      "deadband27": 1,
+      "speed": 150,
+      "acceleration": 5
+    },
+    "2": {
+      "P": 16,
+      "I": 24,
+      "D": 160,
+      "integral_limit": 48,
+      "startup": 12,
+      "deadband26": 1,
+      "deadband27": 1,
+      "speed": 600,
+      "acceleration": 20
+    },
+    "3": {
+      "P": 10,
+      "I": 4,
+      "D": 140,
+      "integral_limit": 24,
+      "startup": 4,
+      "deadband26": 2,
+      "deadband27": 3,
+      "speed": 600,
+      "acceleration": 20
+    },
+    "4": {
+      "P": 4,
+      "I": 3,
+      "D": 60,
+      "integral_limit": 16,
+      "startup": 16,
+      "deadband26": 1,
+      "deadband27": 1,
+      "speed": 600,
+      "acceleration": 20
+    },
+    "5": {
+      "P": 4,
+      "I": 0,
+      "D": 60,
+      "integral_limit": 0,
+      "startup": 16,
+      "deadband26": 1,
+      "deadband27": 1,
+      "speed": 150,
+      "acceleration": 5
+    },
+    "6": {
+      "P": 8,
+      "I": 0,
+      "D": 60,
+      "integral_limit": 0,
+      "startup": 16,
+      "deadband26": 1,
+      "deadband27": 1,
+      "speed": 150,
+      "acceleration": 5
+    }
+  },
+  "adoption": "User finalized axes1/5/6 I=0 and integral limit=0, all other parameters unchanged. EEPROM written using separate one-byte registers, double-read verified, all locks1. Arm returned neutral and torque OFF.",
+  "verified_at": "2026-10-12T16:15:46.967683+08:00",
+  "tuning_policy": "Use this user-selected baseline in practice; make focused adjustments only when new problems appear.",
+  "changed_parameter_count": 4,
+  "software_motion_defaults_provenance": "User adopted project-wide defaults; normal and neutral return both axes2/3/4=600/20, other axes=150/5. Updated 2026-10-11T17:05:36.715935+08:00",
+  "requested_pid": {
+    "1": {
+      "P": 16,
+      "I": 0,
+      "D": 100,
+      "integral_limit": 0
+    },
+    "2": {
+      "P": 16,
+      "I": 24,
+      "D": 160,
+      "integral_limit": 48
+    },
+    "3": {
+      "P": 10,
+      "I": 4,
+      "D": 140,
+      "integral_limit": 24
+    },
+    "4": {
+      "P": 4,
+      "I": 3,
+      "D": 60,
+      "integral_limit": 16
+    },
+    "5": {
+      "P": 4,
+      "I": 0,
+      "D": 60,
+      "integral_limit": 0
+    },
+    "6": {
+      "P": 8,
+      "I": 0,
+      "D": 60,
+      "integral_limit": 0
+    }
+  },
+  "entry": "hardware/run_task.py",
+  "motion_entry_policy": "Routine pick runs verify this saved baseline without PID writes; user directs parameter changes.",
+  "motion_defaults_reference": "hardware/motion_defaults.json",
+  "return_to_neutral": {
+    "1": {
+      "speed_raw": 150,
+      "acceleration_raw": 5
+    },
+    "2": {
+      "speed_raw": 600,
+      "acceleration_raw": 20
+    },
+    "3": {
+      "speed_raw": 600,
+      "acceleration_raw": 20
+    },
+    "4": {
+      "speed_raw": 600,
+      "acceleration_raw": 20
+    },
+    "5": {
+      "speed_raw": 150,
+      "acceleration_raw": 5
+    },
+    "6": {
+      "speed_raw": 150,
+      "acceleration_raw": 5
+    }
+  },
+  "task_entry": "hardware/run_task.py",
+  "task_entry_status": "manual_stage_confirmation_implemented_pending_hardware_validation",
+  "source_provenance": "docs/BASELINE.md",
+  "default_pick_entry": "hardware/k230_blue_pick_onboard.py",
+  "pick_entry_status": "user_accepted_20261013"
+}

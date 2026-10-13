@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+aic_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+cd "$aic_root"
+if [ -x "$aic_root/.venv-vision/bin/python" ]; then
+    exec env -u PYTHONPATH "$aic_root/.venv-vision/bin/python" "$@"
+fi
+exec env -u PYTHONPATH PYTHONPATH="$aic_root/.vision_deps" /usr/bin/python3 "$@"

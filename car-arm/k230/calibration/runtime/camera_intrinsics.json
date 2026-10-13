@@ -1,0 +1,284 @@
+{
+  "status": "current_focus_candidate_not_adopted",
+  "image_width": 1280,
+  "image_height": 960,
+  "camera_matrix": [
+    [
+      1557.1519230392394,
+      0.0,
+      652.6190112541295
+    ],
+    [
+      0.0,
+      2071.9262915432655,
+      351.65104271651114
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "distortion_coefficients": [
+    0.007061391877438198,
+    -0.4686099916413142,
+    -0.024136013528305484,
+    -0.0007221035444262936,
+    4.661493780952732
+  ],
+  "rms_reprojection_error_px": 0.5178049635503056,
+  "intrinsic_standard_deviations": [
+    4.957067356758413,
+    6.06807220673511,
+    4.163659850680283,
+    5.817495735285522,
+    0.021876465540287625,
+    0.447116885059357,
+    0.0006864248719702198,
+    0.0011547779694329378,
+    2.697069569220016,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "source_session": "session_0003",
+  "accepted_views": [
+    {
+      "file": "image_0006.jpg",
+      "reprojection_rms_px": 0.3638795373749967
+    },
+    {
+      "file": "image_0008.jpg",
+      "reprojection_rms_px": 0.375128422373444
+    },
+    {
+      "file": "image_0010.jpg",
+      "reprojection_rms_px": 0.4131821381201147
+    },
+    {
+      "file": "image_0013.jpg",
+      "reprojection_rms_px": 0.5393084307404296
+    },
+    {
+      "file": "image_0016.jpg",
+      "reprojection_rms_px": 0.3965324260593283
+    },
+    {
+      "file": "image_0018.jpg",
+      "reprojection_rms_px": 0.3960155736559971
+    },
+    {
+      "file": "image_0019.jpg",
+      "reprojection_rms_px": 0.4474258064187403
+    },
+    {
+      "file": "image_0022.jpg",
+      "reprojection_rms_px": 0.7296423074917191
+    },
+    {
+      "file": "image_0028.jpg",
+      "reprojection_rms_px": 0.4778953541728171
+    },
+    {
+      "file": "image_0030.jpg",
+      "reprojection_rms_px": 0.5846077868833861
+    },
+    {
+      "file": "image_0031.jpg",
+      "reprojection_rms_px": 0.40754478759035845
+    },
+    {
+      "file": "image_0032.jpg",
+      "reprojection_rms_px": 0.5231404875523208
+    },
+    {
+      "file": "image_0036.jpg",
+      "reprojection_rms_px": 0.4373830308662
+    },
+    {
+      "file": "image_0037.jpg",
+      "reprojection_rms_px": 0.5470395574098346
+    },
+    {
+      "file": "image_0039.jpg",
+      "reprojection_rms_px": 0.468494476611446
+    },
+    {
+      "file": "image_0040.jpg",
+      "reprojection_rms_px": 0.4401127501153983
+    },
+    {
+      "file": "image_0042.jpg",
+      "reprojection_rms_px": 0.6602777086683308
+    },
+    {
+      "file": "image_0043.jpg",
+      "reprojection_rms_px": 0.4653568109226519
+    },
+    {
+      "file": "image_0044.jpg",
+      "reprojection_rms_px": 0.5000242129805368
+    },
+    {
+      "file": "image_0045.jpg",
+      "reprojection_rms_px": 0.6912364004160874
+    },
+    {
+      "file": "image_0046.jpg",
+      "reprojection_rms_px": 0.5999869581032927
+    },
+    {
+      "file": "image_0049.jpg",
+      "reprojection_rms_px": 0.6971587373236462
+    },
+    {
+      "file": "image_0050.jpg",
+      "reprojection_rms_px": 0.6494358262108376
+    },
+    {
+      "file": "image_0056.jpg",
+      "reprojection_rms_px": 0.4440869201057194
+    },
+    {
+      "file": "image_0057.jpg",
+      "reprojection_rms_px": 0.40336206775389816
+    }
+  ],
+  "board": {
+    "squares_x": 5,
+    "squares_y": 7,
+    "square_mm_measured": 28.54,
+    "marker_mm_assumed": 14.27,
+    "dictionary": "DICT_5X5_100"
+  },
+  "capture_settings": {
+    "width": 1280,
+    "status": "completed",
+    "overlay_saved": false,
+    "robot_commands_sent": false,
+    "schedule": "elapsed-second slots; missed slots are not burst-captured",
+    "target_count": 60,
+    "saved_count": 60,
+    "finished_elapsed_ms": 61362,
+    "height": 960,
+    "vflip": false,
+    "interval_ms": 1000,
+    "duration_ms": 60000,
+    "focus_setting": "keep the current lens setting; not electronically measured",
+    "jpeg_quality": 95,
+    "missed_slots": 0,
+    "hmirror": false,
+    "purpose": "intrinsics_recheck_at_current_manual_focus",
+    "pixel_format": "RGB565"
+  },
+  "applicability": "current manual lens focus, source sensor mode, RGB565, hmirror=False, vflip=False",
+  "source_hashes": [
+    {
+      "file": "image_0006.jpg",
+      "sha256": "cf24cb9ae136721dc19b3675d92d27e9714055a0e90d70d260aa35dc4b98b6b5"
+    },
+    {
+      "file": "image_0008.jpg",
+      "sha256": "a6249701419e8150b0dfa18c7c16c6d4ee7a501ffef793cdefc63912f5f6e751"
+    },
+    {
+      "file": "image_0010.jpg",
+      "sha256": "f6b32d83851b7f3d15a307696ef0ddba54a553c3693355d86840d0479d99b828"
+    },
+    {
+      "file": "image_0013.jpg",
+      "sha256": "878625a704a5b261ca2bd6b01c30f646b3739944f386c5de369f8bfbf6bba873"
+    },
+    {
+      "file": "image_0016.jpg",
+      "sha256": "d540fda74b52030f8f3536b95f55ef74b7e4dc51bc71f40e0da18fd93f86fe29"
+    },
+    {
+      "file": "image_0018.jpg",
+      "sha256": "67a41fd5108d1ee531c1ec7683b18513f0691fbe8c30a3a0c10e4e9a4dc82150"
+    },
+    {
+      "file": "image_0019.jpg",
+      "sha256": "9b65a7a4087431a824122fef94a01e02852a59a7c6adf97b29c04d4eea2817e5"
+    },
+    {
+      "file": "image_0022.jpg",
+      "sha256": "ffd61f3d0835d22bbae63bef3d0835a7fc7b20165967200ed6413c79c2dd8279"
+    },
+    {
+      "file": "image_0028.jpg",
+      "sha256": "ec3de44cfe5e8606ab04f45b7088e05b3e8ec916dbde648bfca322f1547b6b91"
+    },
+    {
+      "file": "image_0030.jpg",
+      "sha256": "ede3e3584b843b50dac913552eb254dfd7e13a6ba81c89dcd4f591225f7ed44a"
+    },
+    {
+      "file": "image_0031.jpg",
+      "sha256": "4dd89e6462491a9abfe71c18333c6a73f09a2553607781726978a042fbb31e5e"
+    },
+    {
+      "file": "image_0032.jpg",
+      "sha256": "e937351f1a3f97c578c55b0857f11a566b88bbf31a290e40514b60bd3afa5211"
+    },
+    {
+      "file": "image_0036.jpg",
+      "sha256": "b9c42404140b2a4f4357f33b4e27e387806366a89e2cced17cce79403f2ccccd"
+    },
+    {
+      "file": "image_0037.jpg",
+      "sha256": "a91e6cec6aabec718026694cba4c3d0964076c0273ea258c05b0be43f54566c8"
+    },
+    {
+      "file": "image_0039.jpg",
+      "sha256": "d92f479174713b4167010e0a7a2d9e26ca7bbcd0af7040bcf49697e5f60f1fe3"
+    },
+    {
+      "file": "image_0040.jpg",
+      "sha256": "072800d787eb0f587d5cadaf05592288166c8252a37caaca1ba34e8630fbce7b"
+    },
+    {
+      "file": "image_0042.jpg",
+      "sha256": "9350404cc2b51104b28545fa41bc1fc1133fa3d14f951b1be5c963d07427a324"
+    },
+    {
+      "file": "image_0043.jpg",
+      "sha256": "595a4f35d335e1381ec0588cdbb915c8f5b7e5f5ec270c7da0d6921413873da5"
+    },
+    {
+      "file": "image_0044.jpg",
+      "sha256": "97ceb2d8cb8c574efdc3e2d496bbb5a65ed9242fa26aeb6f1be9651a43c4414d"
+    },
+    {
+      "file": "image_0045.jpg",
+      "sha256": "e4bfc19113cadb477bb8f641d6dcd012c89343d8f33877f62769152bed42c193"
+    },
+    {
+      "file": "image_0046.jpg",
+      "sha256": "a38f107fdbc3eebdf2f700b5c2f2a49f4e4758e775978c67945b196e702b99a7"
+    },
+    {
+      "file": "image_0049.jpg",
+      "sha256": "270d547a81e2a207d6e4d8b514ab4e6f19701a7369e26c63f806e5b2cd7f2553"
+    },
+    {
+      "file": "image_0050.jpg",
+      "sha256": "36556e48187a7d2a3c96c730646bea6f76d20bae3068f8710268bfa3a6efe6fe"
+    },
+    {
+      "file": "image_0056.jpg",
+      "sha256": "8091983c0634ee2bb1cd8c23affa04057269805d7211dbd902bb0549c4296272"
+    },
+    {
+      "file": "image_0057.jpg",
+      "sha256": "9c1a2d4477247e4cd84d94bd12b6b4bea8ac6d73dc1ee8fec4ddaec09baf3e5c"
+    }
+  ],
+  "default_replaced": false
+}

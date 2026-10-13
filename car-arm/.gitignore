@@ -1,0 +1,35 @@
+# Python and installed environments
+__pycache__/
+*.py[cod]
+/.vision_deps
+/.host_deps
+/.venv*
+/.pytest_cache/
+/.codex/
+/.vscode/
+# Local acquisitions, analyses and execution artifacts
+/hardware/logs/
+/calibration/pid/
+/k230/photos/
+/k230/grasp_pairs/
+/k230/fixed_tip_top_pairs/
+/k230/extrinsics/
+/k230/runtime_checks/
+/k230/calibration_results/
+/docs/history/
+/.local_archive/
+# Legacy migration inventories are local historical evidence
+/docs/migration.json
+/docs/REVIEW_20261013.json
+/docs/provenance/
+# ROS2 generated directories
+/ros2_ws/build/
+/ros2_ws/install/
+/ros2_ws/log/
+# Local credentials and editor/transfer leftovers
+.env
+.env.*
+*.partial
+*.transfer
+*.tmp
+*~
