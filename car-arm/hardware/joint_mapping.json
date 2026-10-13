@@ -1,0 +1,113 @@
+{
+  "servo_model": "ST-3215-C018",
+  "baud": 1000000,
+  "id_order": "bottom_to_top",
+  "legacy_neutral_count": 2048,
+  "angle_mapping_status": "zero_and_positive_direction_validated; nominal_servo_scale_from_manufacturer",
+  "zero_reference_note": "2026-10-01 六轴目标 2048 时实物直立，和 URDF 全零关节中心布局一致；ID 1–6 以 2048 为软件角度零位。ID 6 的闭合目标为 2048，设备下限 2040 留出 8 个编码计数余量。六轴受控小幅正向测试已由用户目视确认方向；角度比例尚未用量角工具独立测量。",
+  "joints": [
+    {
+      "id": 1,
+      "name": "joint_1",
+      "zero_count": 2048,
+      "positive_direction": -1,
+      "positive_direction_note": "从上往下看逆时针；2026-10-01 手动转动后编码从 2049 降至 1679",
+      "urdf_joint_name": "Rotation",
+      "software_angle_limits_deg": [
+        -90,
+        90
+      ],
+      "software_count_limits": [
+        1024,
+        3072
+      ]
+    },
+    {
+      "id": 2,
+      "name": "joint_2",
+      "zero_count": 2048,
+      "positive_direction": 1,
+      "positive_direction_note": "用户指定的正方向；2026-10-01 手动转动后编码从 2042 升至 2563",
+      "urdf_joint_name": "Rotation2",
+      "software_angle_limits_deg": [
+        -90,
+        90
+      ],
+      "software_count_limits": [
+        1024,
+        3072
+      ]
+    },
+    {
+      "id": 3,
+      "name": "joint_3",
+      "zero_count": 2048,
+      "positive_direction": 1,
+      "positive_direction_note": "用户指定的正方向；2026-10-01 手动转动后编码从 2042 升至 2763",
+      "urdf_joint_name": "Rotation3",
+      "software_angle_limits_deg": [
+        -90,
+        90
+      ],
+      "software_count_limits": [
+        1024,
+        3072
+      ]
+    },
+    {
+      "id": 4,
+      "name": "joint_4",
+      "zero_count": 2048,
+      "positive_direction": 1,
+      "positive_direction_note": "用户指定的正方向；2026-10-01 手动转动后编码从 2044 升至 2596",
+      "urdf_joint_name": "Rotation4",
+      "software_angle_limits_deg": [
+        -90,
+        90
+      ],
+      "software_count_limits": [
+        1024,
+        3072
+      ]
+    },
+    {
+      "id": 5,
+      "name": "joint_5",
+      "zero_count": 2048,
+      "positive_direction": -1,
+      "positive_direction_note": "从上往下看逆时针；2026-10-01 手动转动后编码从 2044 降至 983",
+      "urdf_joint_name": "Rotation5",
+      "software_angle_limits_deg": [
+        -90,
+        90
+      ],
+      "software_count_limits": [
+        1024,
+        3072
+      ]
+    },
+    {
+      "id": 6,
+      "name": "joint_6",
+      "zero_count": 2048,
+      "positive_direction": 1,
+      "positive_direction_note": "夹爪从闭合朝打开；2026-10-01 手动转动后编码从 2048 升至 2572；闭合零位 2048，设备下限 2040 保留 8 编码计数余量",
+      "urdf_joint_name": "Rotation6",
+      "software_angle_limits_deg": [
+        0,
+        90
+      ],
+      "software_count_limits": [
+        2048,
+        3072
+      ]
+    }
+  ],
+  "gripper_open_count": 3072,
+  "gripper_closed_count": 2048,
+  "gripper_lower_limit_count": 2040,
+  "encoder_counts_per_revolution": 4096,
+  "encoder_scale_source": "https://www.feetech.cn/en/525603.html",
+  "physical_base_frame_note": "基座 +Z 向上；基座 +X 指向用户所说的白墙侧。2026-10-01 受控正角测试中，2–4 号让夹爪朝白墙侧倾斜，1/5 号从上往下看逆时针，6 号夹爪张开；均由用户目视确认。",
+  "scale_validation_note": "飞特 ST-3215-C018 官方标称 360°/4096 编码计数；约 57 计数的逐轴往返已验证编码响应，但未用量角工具独立测量连杆实际角度。6 号数值是舵机输出角，非夹爪开口角。"
+}

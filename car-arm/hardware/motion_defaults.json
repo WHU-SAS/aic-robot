@@ -1,0 +1,70 @@
+{
+  "updated": "2026-10-11T17:05:36.715935+08:00",
+  "status": "user_selected_provisional_defaults",
+  "scope": "Default motion speed and acceleration for all future project tasks unless user explicitly overrides; route checks and task-specific protections remain separate.",
+  "speed_unit": "encoder_counts_per_second with phase18 BIT2=1",
+  "phase18_expected": 12,
+  "phase18_is_readonly": true,
+  "motion": {
+    "1": {
+      "speed_raw": 150,
+      "acceleration_raw": 5
+    },
+    "2": {
+      "speed_raw": 600,
+      "acceleration_raw": 20
+    },
+    "3": {
+      "speed_raw": 600,
+      "acceleration_raw": 20
+    },
+    "4": {
+      "speed_raw": 600,
+      "acceleration_raw": 20
+    },
+    "5": {
+      "speed_raw": 150,
+      "acceleration_raw": 5
+    },
+    "6": {
+      "speed_raw": 150,
+      "acceleration_raw": 5
+    }
+  },
+  "return_to_neutral": {
+    "1": {
+      "speed_raw": 150,
+      "acceleration_raw": 5
+    },
+    "2": {
+      "speed_raw": 600,
+      "acceleration_raw": 20
+    },
+    "3": {
+      "speed_raw": 600,
+      "acceleration_raw": 20
+    },
+    "4": {
+      "speed_raw": 600,
+      "acceleration_raw": 20
+    },
+    "5": {
+      "speed_raw": 150,
+      "acceleration_raw": 5
+    },
+    "6": {
+      "speed_raw": 150,
+      "acceleration_raw": 5
+    }
+  },
+  "return_command": "one synchronous final-goal packet",
+  "storage": "Software command defaults; send with each position command. Do not adopt power-on runtime zero values.",
+  "pid_baseline": "hardware/user_selected_pid_demo_baseline.json",
+  "future_change_policy": "Use the adopted baseline and these motion defaults; make focused changes only when practical issues appear or user requests an override.",
+  "return_policy": "User requested neutral return use the same per-axis speed/acceleration as normal motion: axes2/3/4=600/20, axes1/5/6=150/5.",
+  "task_entry": "hardware/run_task.py",
+  "task_entry_status": "manual_stage_confirmation_implemented_pending_hardware_validation",
+  "source_provenance": "docs/BASELINE.md",
+  "default_pick_entry": "hardware/k230_blue_pick_onboard.py",
+  "pick_entry_status": "user_accepted_20261013"
+}

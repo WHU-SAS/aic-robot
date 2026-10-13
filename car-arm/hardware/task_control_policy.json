@@ -1,0 +1,24 @@
+{
+  "status": "user_selected_manual_stage_confirmation",
+  "approved_by_user": true,
+  "stage_progression": "explicit_operator_confirmation_for_every_stage_including_neutral",
+  "automatic_torque_release": false,
+  "automatic_stage_completion": false,
+  "runtime_position_envelope_enabled": false,
+  "runtime_speed_threshold_enabled": false,
+  "feedback_interval_threshold_enabled": false,
+  "settle_gate_enabled": false,
+  "scope": "Current supervised workflow only; a future automatic default requires user agreement",
+  "retained_checks": [
+    "task input schema",
+    "software and device target limits",
+    "actual saved PID, mode, phase and EEPROM lock",
+    "model table-route check",
+    "serial packet integrity and communication errors",
+    "fresh current-position hold initialization"
+  ],
+  "fault_policy": "Stop further command dispatch; no automatic neutral command, retarget or torque release",
+  "user_authorization": "User cancelled proposed motion envelope/speed/feedback-gap/settle/release conditions and chose case-by-case confirmation per stage, retaining torque after neutral.",
+  "applies_to": "hardware/run_task.py manual task entry",
+  "pick_demo_policy": "User-accepted K230 four-stage automatic pick uses hardware/k230_pick_config.json; it does not call the manual run method."
+}
