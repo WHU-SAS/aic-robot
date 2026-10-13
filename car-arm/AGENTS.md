@@ -1,6 +1,7 @@
 # AIC car-arm 工作规则
 
 - 本项目为 K230 项目；所有代码、模型、数据和配置从本根目录解析，不读取相邻 USB 摄像头项目。
+- 小车行驶时机械臂必须保持用户指定准备位与扭矩以维持平衡；行驶前使用 `./scripts/host hardware/move_ready.py --execute` 并确认到位。抓取等改变姿态的操作在小车停稳后执行。准备位不是六轴2048中立位；不自行修改目标或新增小车联动、持物策略。
 - 机械臂控制设计由用户主导。PID、速度/加速度、运行阶段与保护策略的改变由用户决定，不自行新增或调整。
 - 当前参数在 `hardware/user_selected_pid_demo_baseline.json`；速度与加速度在 `hardware/motion_defaults.json`。正常动作和回中立使用相同配置、一次同步发送最终目标。
 - 旧 PID 实验不属于本项目，不复制、恢复、提交或上传。`.local_archive/` 永远不导出。
