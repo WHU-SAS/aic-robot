@@ -1,9 +1,9 @@
 # Python and installed environments
 __pycache__/
 *.py[cod]
-/.vision_deps/
-/.host_deps/
-/.venv*/
+/.vision_deps
+/.host_deps
+/.venv*
 /.pytest_cache/
 /.codex/
 /.vscode/
