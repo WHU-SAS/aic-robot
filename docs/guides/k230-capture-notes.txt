@@ -1,6 +1,6 @@
 K230 每3秒拍一次标定板
 
-在 CanMV IDE 停止旧程序，打开 capture_calibration.py 并运行。
+在 CanMV IDE 停止旧程序，打开 device/k230/diagnostics/capture_calibration.py 并运行。
 保持实时预览，每隔3秒保存一张原图，不显示倒计时，也没有拍摄数量上限。
 终端每拍一张显示 SAVED 和路径。拍够后点 IDE 停止。
 照片保存在开发板 /sdcard/calibration/session_0001/ 等新目录，不覆盖旧照片。
@@ -11,7 +11,7 @@ K230 每3秒拍一次标定板
 先拍1～2分钟，采到20～40张后停止。
 
 把该 session 文件夹导出到电脑后，筛选命令：
-./scripts/vision k230/select_calibration.py /照片/session_0001
+./scripts/vision tools/calibration/select_calibration.py /照片/session_0001
 
 筛选使用项目原有5×7 ChArUco、DICT_5X5_100图案：
 要求全部24个内角点及17个标记可识别，推算图案四角在画面内并留3像素边缘。

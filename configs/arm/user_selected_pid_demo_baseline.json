@@ -111,9 +111,9 @@
       "integral_limit": 0
     }
   },
-  "entry": "hardware/run_task.py",
+  "entry": "host/apps/run_task.py",
   "motion_entry_policy": "Routine pick runs verify this saved baseline without PID writes; user directs parameter changes.",
-  "motion_defaults_reference": "hardware/motion_defaults.json",
+  "motion_defaults_reference": "configs/arm/motion_defaults.json",
   "return_to_neutral": {
     "1": {
       "speed_raw": 150,
@@ -140,9 +140,9 @@
       "acceleration_raw": 5
     }
   },
-  "task_entry": "hardware/run_task.py",
+  "task_entry": "host/apps/run_task.py",
   "task_entry_status": "manual_stage_confirmation_implemented_pending_hardware_validation",
-  "source_provenance": "docs/BASELINE.md",
-  "default_pick_entry": "hardware/k230_blue_pick_onboard.py",
+  "source_provenance": "docs/guides/arm/BASELINE.md",
+  "default_pick_entry": "host/apps/k230_blue_pick_onboard.py",
   "pick_entry_status": "user_accepted_20261013"
 }

@@ -1,7 +1,7 @@
 /* Standalone MSPM0G3507 UART1 link test; no motor PWM or motion commands.
  * PA08 = UART1 TX, PA09 = UART1 RX, 115200 8N1.
  * UART0 PA10/PA11 provides optional USB debug logs at the same baud.
- * Reuses the repository TI SDK under ../01_motor_encoder/source/.
+ * Uses the shared repository SDK in third_party/ti_mspm0_sdk/.
  */
 #include <stdbool.h>
 #include <stdint.h>

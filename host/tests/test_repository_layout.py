@@ -1,6 +1,8 @@
 """Migration regressions: numerical behavior and paths, never hardware access."""
 import hashlib
 import json
+import subprocess
+import tempfile
 from pathlib import Path
 import unittest
 import xml.etree.ElementTree as ET
@@ -47,5 +49,37 @@ class LayoutTests(unittest.TestCase):
         tree=ast.parse(code)
         imports=[n.module or '' for n in ast.walk(tree) if isinstance(n,ast.ImportFrom)]
         self.assertFalse(any(n.startswith(('host','scipy','serial')) for n in imports))
+
+
+    def test_configuration_reference_paths_exist(self):
+        keys={'pid_baseline','task_entry','default_pick_entry','source_provenance',
+              'entry','motion_defaults_reference','intrinsics','extrinsics'}
+        for config in (ROOT/'configs/arm').glob('*.json'):
+            for key,value in json.loads(config.read_text()).items():
+                if key in keys:
+                    self.assertTrue((ROOT/value).is_file(),f'{config.name}: {key}={value}')
+        provenance=json.loads((ROOT/'configs/vision/runtime/provenance.json').read_text())
+        for model in provenance['models'].values():
+            self.assertEqual(hashlib.sha256((ROOT/model['runtime']).read_bytes()).hexdigest(),model['sha256'])
+
+    def test_analysis_help_needs_no_local_capture_data(self):
+        for tool in ['tools/calibration/audit_intrinsics.py',
+                     'tools/calibration/recheck_intrinsics.py',
+                     'tools/analysis/replay_onboard_detector.py']:
+            with self.subTest(tool=tool):
+                result=subprocess.run([str(ROOT/'scripts/vision'),str(ROOT/tool),'--help'],
+                                      cwd=ROOT,text=True,capture_output=True)
+                self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_replay_reports_the_requested_missing_image(self):
+        with tempfile.TemporaryDirectory() as folder:
+            run=Path(folder)/'missing_run';output=Path(folder)/'result'
+            result=subprocess.run([str(ROOT/'scripts/vision'),
+                str(ROOT/'tools/analysis/replay_onboard_detector.py'),str(run),'--output',str(output)],
+                cwd=ROOT,text=True,capture_output=True)
+            self.assertEqual(result.returncode,1,result.stderr)
+            rows=json.loads((output/'summary.json').read_text())
+            self.assertEqual(rows[0]['run'],str(run))
+            self.assertIn(str(run/'frame.jpg'),rows[0]['reason'])
 
 if __name__=='__main__':unittest.main()

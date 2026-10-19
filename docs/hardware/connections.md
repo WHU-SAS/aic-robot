@@ -12,7 +12,7 @@
 | 电机 / 驱动 | MG513XP28_12V ×2、现有 TB6612 双路稳压驱动板；详细引脚见 [电机例程接线](../../device/mspm0/motor_encoder/使用说明.md#1-接线) |
 | 调试器 | 野火 fireDAP，CMSIS-DAP / SWD |
 
-机械臂零位、方向和限位读取 [关节映射](../../configs/arm/joint_mapping.json)，不按 ID 数字推断。全部 17 个小车硬件原始资料保留在 [car/硬件信息](../../hardware/car)。
+机械臂零位、方向和限位读取 [关节映射](../../configs/arm/joint_mapping.json)，不按 ID 数字推断。全部 17 个小车硬件原始资料保留在 [hardware/car](../../hardware/car)。
 
 ## 两种机械臂连接方式
 

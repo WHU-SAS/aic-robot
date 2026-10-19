@@ -72,7 +72,7 @@ from pathlib import Path
 import cv2,numpy
 root=Path.cwd()
 sys.path.insert(0,str(root/'host/vision'))
-from face_geometry import face_candidates,pose_candidates
+from host.vision.face_geometry import face_candidates,pose_candidates
 intr=json.loads((root/'data/k230/calibration_results/camera_intrinsics.json').read_text())
 K=numpy.array(intr['camera_matrix']);K[0]*=2;K[1]*=2
 D=numpy.array(intr['distortion_coefficients'])

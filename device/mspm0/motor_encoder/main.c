@@ -1,7 +1,7 @@
 /* R3X bench demo, adapted from WHEELTEC C07A TB6612 example.
  * Board: LCKFB Tianmengxing MSPM0G3507; see README.md before wiring.
  * Only this file, demo_control.c and ti_msp_dl_config.c are application
- * build inputs. Original Hardware/ files are retained as references.
+ * build inputs. Original template files are isolated in third_party/reference/.
  */
 #include "ti_msp_dl_config.h"
 #include "demo_control.h"

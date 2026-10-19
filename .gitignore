@@ -15,6 +15,7 @@ venv/
 /.host_deps
 /.venv*
 /.pytest_cache/
+/.codex/
 /data/
 /.local_archive/
 *.partial

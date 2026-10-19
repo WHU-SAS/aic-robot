@@ -14,15 +14,14 @@ import shutil
 import cv2
 import numpy as np
 
-HERE=(REPO_ROOT/'data/k230')
 
 def save(path,value):path.write_text(json.dumps(value,ensure_ascii=False,indent=2)+'\n')
 def read(path):return json.loads(path.read_text())
 
 def main():
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--images',type=Path,required=True);p.add_argument('--selection',type=Path,required=True);p.add_argument('--output',type=Path,required=True);args=p.parse_args()
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--images',type=Path,required=True);p.add_argument('--selection',type=Path,required=True);p.add_argument('--baseline',type=Path,default=REPO_ROOT/'configs/vision/runtime/camera_intrinsics.json');p.add_argument('--output',type=Path,required=True);args=p.parse_args()
  source=args.images.resolve();selection=read(args.selection);out=args.output.resolve();out.mkdir(parents=True,exist_ok=False)
- old_path=HERE/'calibration_results/camera_intrinsics.json';old=read(old_path);shutil.copy2(old_path,out/'previous_intrinsics.json');shutil.copy2(args.selection,out/'selection.json')
+ old_path=args.baseline.resolve();old=read(old_path);shutil.copy2(old_path,out/'previous_intrinsics.json');shutil.copy2(args.selection,out/'selection.json')
  board=cv2.aruco.CharucoBoard((5,7),28.54,14.27,cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_100));board.setLegacyPattern(False);detector=cv2.aruco.CharucoDetector(board)
  objects=[];points=[];names=[];size=None;hashes=[];corner_sets=[]
  for item in selection['images']:

@@ -3,14 +3,15 @@
   "models": {
     "intrinsics": {
       "source": "k230/grasp_pairs/current_focus_19_28_20261013/snapshot/current_intrinsics.json",
-      "runtime": "k230/calibration/runtime/camera_intrinsics.json",
+      "runtime": "configs/vision/runtime/camera_intrinsics.json",
       "sha256": "9bd4426442417c9425f146971464a4946463a3b5704095decc5d2ed7075f0e07"
     },
     "extrinsics": {
       "source": "k230/grasp_pairs/current_focus_19_28_20261013/camera_in_base_candidate.json",
-      "runtime": "k230/calibration/runtime/camera_in_base.json",
+      "runtime": "configs/vision/runtime/camera_in_base.json",
       "sha256": "23c0b00a119b5c78dcbbd7a00b3a9b75828faffef07e5d21a03fe496cfbb75b3"
     }
   },
-  "calibration_accuracy": "current-focus provisional calibration; user accepted demo behavior, not a new measured error bound"
+  "calibration_accuracy": "current-focus provisional calibration; user accepted demo behavior, not a new measured error bound",
+  "source_paths_are_historical": true
 }

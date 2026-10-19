@@ -1,6 +1,6 @@
 # 当前控制参数来源
 
-本项目从独立USB机械臂项目复制用户最终选定并写入舵机的参数，复制后在本项目核对、保留；旧PID试验数据和脚本未迁入或上传。当前抓取入口只核对参数，不自动写PID。用户控制后续数值变更。
+当前入口核对以下已保存参数，不自动写入。后续调整由用户决定。
 
 | 舵机 | P | I | D | 积分限幅 | 最小启动力 | 死区26/27 | 速度/加速度 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -13,4 +13,6 @@
 
 数值权威来源为`configs/arm/user_selected_pid_demo_baseline.json`和`configs/arm/motion_defaults.json`。正常动作与另行执行的回中立使用相同速度/加速度配置。K230抓取完成仍保持抬升，不自动回中立。
 
-迁移时期的逐文件哈希和旧记录地址保存在本地历史目录。运行标定来源独立记录于`configs/vision/runtime/provenance.json`。抓取配置中`inherited_geometry_source_sha256`指继承代码的历史来源哈希，不是当前修改后源码哈希。
+运行标定来源独立记录于`configs/vision/runtime/provenance.json`。抓取配置中`inherited_geometry_source_sha256`指继承代码的历史来源哈希，不是当前修改后源码哈希。
+
+标定快照中的 `intrinsics_file` 是采集时来源记录；实际加载路径由 `configs/arm/k230_pick_config.json` 指定。

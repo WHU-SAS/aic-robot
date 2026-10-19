@@ -14,9 +14,9 @@ import numpy as np
 
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('image',type=Path)
+p.add_argument('--intrinsics',type=Path,default=REPO_ROOT/'configs/vision/runtime/camera_intrinsics.json')
 a=p.parse_args()
-root=(REPO_ROOT/'data/k230')
-cal=json.loads((root/'calibration_results/camera_intrinsics.json').read_text())
+cal=json.loads(a.intrinsics.read_text())
 K=np.array(cal['camera_matrix'],dtype=float)
 D=np.array(cal['distortion_coefficients'],dtype=float)
 im=cv2.imread(str(a.image))

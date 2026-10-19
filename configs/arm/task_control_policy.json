@@ -19,6 +19,6 @@
   ],
   "fault_policy": "Stop further command dispatch; no automatic neutral command, retarget or torque release",
   "user_authorization": "User cancelled proposed motion envelope/speed/feedback-gap/settle/release conditions and chose case-by-case confirmation per stage, retaining torque after neutral.",
-  "applies_to": "hardware/run_task.py manual task entry",
-  "pick_demo_policy": "User-accepted K230 four-stage automatic pick uses hardware/k230_pick_config.json; it does not call the manual run method."
+  "applies_to": "host/apps/run_task.py manual task entry",
+  "pick_demo_policy": "User-accepted K230 four-stage automatic pick uses configs/arm/k230_pick_config.json; it does not call the manual run method."
 }

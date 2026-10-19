@@ -1661,5 +1661,14 @@
     "car/硬件信息/连接线与接线端子_配件.jpg": "hardware/car/连接线与接线端子_配件.jpg",
     "car/硬件信息/野火fireDAP调试器_接口标识.jpg": "hardware/car/野火fireDAP调试器_接口标识.jpg"
   },
-  "reference_archive": "third_party/reference: never in runtime import paths; retained pending Windows rebuild; no original files discarded"
+  "reference_archive": "third_party/reference: never in runtime import paths; retained pending Windows rebuild; no original files discarded",
+  "retired_duplicate_documents": [
+    "docs/guides/arm/CURRENT_STATE.md",
+    "docs/history/2026-10-20-docs-batch1.md",
+    "docs/history/2026-10-20-layout-migration.md",
+    "docs/history/car-arm/GIT_PREP.md",
+    "docs/history/car-arm/REVIEW_20261013.md",
+    "docs/history/car-arm/MIGRATION.md",
+    "docs/history/car-arm/git_preparation_20261013.json"
+  ]
 }
