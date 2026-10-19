@@ -1,6 +1,6 @@
 # Linux：现有 PC 辅助抓取
 
-当前源码位置为仓库 `car-arm/`，以下相对命令从仓库根目录开始。此入口使用 Linux 串口与进程接口，不作为 Windows / CanMV 原生运行命令。
+当前源码位于仓库 `host/`、`device/`，配置位于 `configs/`，以下相对命令从仓库根目录开始。此入口使用 Linux 串口与进程接口，不作为 Windows / CanMV 原生运行命令。
 
 ## 角色与连接
 
@@ -11,7 +11,7 @@ K230 提取角点 / 棱线 → PC OpenCV 解算蓝色 20 mm 方块位姿 → PC 
 ## 环境
 
 ```bash
-cd car-arm
+cd /home/xd/Desktop/aic-robot
 python3 -m venv .venv-host
 .venv-host/bin/python -m pip install -r requirements-host.txt
 python3 -m venv .venv-vision
@@ -25,11 +25,11 @@ python3 -m venv .venv-vision
 ```bash
 # 以下两项不访问硬件
 ./scripts/host scripts/offline_check.py
-./scripts/host -m unittest discover -s hardware/tests
+./scripts/host -m unittest discover -s host/tests
 # 相机识别，不打开舵机串口；IDE 须停止并断开
-./scripts/host hardware/k230_blue_pick_onboard.py --detect-only
+./scripts/pick-blue --detect-only
 # 舵机仅 Ping / 读取，不发送运动目标
-./scripts/host hardware/probe_linux_servos.py
+./scripts/host host/apps/probe_linux_servos.py
 ```
 
 USB 连接或重连后，按本机实际用户和设备设置访问权限。本机示例：
@@ -45,17 +45,17 @@ sudo setfacl -m u:xd:rw   /dev/serial/by-id/usb-Kendryte_CanMV_001000000-if00   
 现场就位、手已离开运动区时执行：
 
 ```bash
-./scripts/host hardware/k230_blue_pick_onboard.py --execute --hands-free
+./scripts/pick-blue --execute --hands-free
 ```
 
-每次重新定位，按四阶段执行，结束保持抬升和扭矩。当前没有指定位置放置、自动确认夹起、自动回中立或断扭矩。动作、参数和偏移含义见 [模块 README](../../car-arm/README.md) 与 [详细流程](../../car-arm/docs/K230_ONBOARD_PICK.md)。
+每次重新定位，按四阶段执行，结束保持抬升和扭矩。当前没有指定位置放置、自动确认夹起、自动回中立或断扭矩。动作、参数和偏移含义见 [根 README](../../README.md) 与 [详细流程](arm/K230_ONBOARD_PICK.md)。
 
 小车行驶前：
 
 ```bash
-./scripts/host hardware/move_ready.py --execute
+./scripts/arm-ready --execute
 ```
 
-脚本一次同步发送准备位最终目标后退出，**不自动确认到位**。由人确认到位、停稳，并在行驶期间保持姿态和扭矩。准备位会张开夹爪；持物行驶另行确定。见 [准备位说明](../../car-arm/docs/准备位脚本.md)。
+脚本一次同步发送准备位最终目标后退出，**不自动确认到位**。由人确认到位、停稳，并在行驶期间保持姿态和扭矩。准备位会张开夹爪；持物行驶另行确定。见 [准备位说明](arm/准备位脚本.md)。
 
-结构整理期间继续用这些现有入口；根目录简写命令仅列入后续迁移计划，尚未提供。
+可直接使用根入口 `./scripts/pick-blue`、`./scripts/arm-ready`、`./scripts/check`。旧 car-arm 命令由薄兼容层转发。

@@ -1,0 +1,350 @@
+{
+  "source_commit": "be5f48f82044a2143352449938e046e8b2e9fdd1",
+  "synthetic_regression_only": true,
+  "counts": [
+    [
+      2048,
+      2048,
+      2048,
+      2048,
+      2048,
+      2048
+    ],
+    [
+      2048,
+      2615,
+      1500,
+      2400,
+      2048,
+      2389
+    ],
+    [
+      2200,
+      2400,
+      1800,
+      2600,
+      2080,
+      2500
+    ]
+  ],
+  "reports": [
+    {
+      "reference": "actual midpoint of mean distal2mm STL tip regions, provisional",
+      "alignment_reference": "nominal_20mm_contact_midpoint_without_legacy_offset",
+      "alignment_nominal_contact_count": 2158,
+      "estimated_cube_projection_mm": 20.0,
+      "alignment_center_Base_mm": [
+        -13.032539042480408,
+        -0.14162211787348364,
+        514.7403468352657
+      ],
+      "gripper_midpoint_Base_mm": [
+        -13.032539042480408,
+        7.204704416543246,
+        514.2063717544079
+      ],
+      "fixed_tip_center_Base_mm": [
+        -13.211037112934633,
+        13.950004242360592,
+        514.0926040410995
+      ],
+      "moving_tip_center_Base_mm": [
+        -12.854040972026183,
+        0.4594045907258988,
+        514.3201394677161
+      ],
+      "link_min_z_mm": {
+        "wan2": 407.34710636828095,
+        "zhua": 418.1814628392458
+      },
+      "table_z_Base_mm": -63.30504067237496,
+      "link_clearance_above_table_mm": {
+        "wan2": 470.6521470406559,
+        "zhua": 481.48650351162075
+      }
+    },
+    {
+      "reference": "actual midpoint of mean distal2mm STL tip regions, provisional",
+      "alignment_reference": "nominal_20mm_contact_midpoint_without_legacy_offset",
+      "alignment_nominal_contact_count": 2158,
+      "estimated_cube_projection_mm": 20.0,
+      "alignment_center_Base_mm": [
+        172.8623615337107,
+        -0.14162211787348364,
+        445.82784344509173
+      ],
+      "gripper_midpoint_Base_mm": [
+        171.30312756838094,
+        -15.269476672179817,
+        443.3904329193459
+      ],
+      "fixed_tip_center_Base_mm": [
+        172.3629422874183,
+        13.950004242360592,
+        445.3783852101213
+      ],
+      "moving_tip_center_Base_mm": [
+        170.2433128493436,
+        -44.488957586720225,
+        441.4024806285706
+      ],
+      "link_min_z_mm": {
+        "wan2": 350.4152474361682,
+        "zhua": 353.8653155488098
+      },
+      "table_z_Base_mm": -63.30504067237496,
+      "link_clearance_above_table_mm": {
+        "wan2": 413.7202881085432,
+        "zhua": 417.17035622118476
+      }
+    },
+    {
+      "reference": "actual midpoint of mean distal2mm STL tip regions, provisional",
+      "alignment_reference": "nominal_20mm_contact_midpoint_without_legacy_offset",
+      "alignment_nominal_contact_count": 2191,
+      "estimated_cube_projection_mm": 24.4614877469959,
+      "alignment_center_Base_mm": [
+        204.32509850136614,
+        -54.04655314019149,
+        416.9079179953643
+      ],
+      "gripper_midpoint_Base_mm": [
+        194.33169112442684,
+        -71.77681435070407,
+        414.4824802070105
+      ],
+      "fixed_tip_center_Base_mm": [
+        207.95463065477858,
+        -38.14192534567203,
+        416.0799637277106
+      ],
+      "moving_tip_center_Base_mm": [
+        180.7087515940751,
+        -105.41170335573611,
+        412.8849966863104
+      ],
+      "link_min_z_mm": {
+        "wan2": 345.8607743859387,
+        "zhua": 348.74247542351725
+      },
+      "table_z_Base_mm": -63.30504067237496,
+      "link_clearance_above_table_mm": {
+        "wan2": 409.1658150583137,
+        "zhua": 412.04751609589226
+      }
+    }
+  ],
+  "plan_xy_m": [
+    0.22,
+    0.02
+  ],
+  "plan": {
+    "hover": [
+      1989,
+      2403,
+      2885,
+      2677,
+      2048,
+      2389
+    ],
+    "descend": [
+      1989,
+      2572,
+      3004,
+      2388,
+      2048,
+      2389
+    ],
+    "close": [
+      1989,
+      2572,
+      3004,
+      2388,
+      2048,
+      2151
+    ],
+    "lift": [
+      1989,
+      2403,
+      2885,
+      2677,
+      2048,
+      2151
+    ],
+    "tilt_deg": 20,
+    "opening_count": 2389,
+    "opening_angle_deg": 29.970703124999996,
+    "closing_count": 2151,
+    "nominal_closing_count": 2171,
+    "extra_closing_counts": 20,
+    "alignment_reference": "nominal_20mm_contact_midpoint_without_legacy_offset",
+    "cube_offset_toward_moving_finger_mm": 0,
+    "estimated_cube_projection_mm": 21.725771805905538,
+    "low_min_tip_model_mm": 15.0,
+    "hover_min_tip_model_mm": 80.0,
+    "lift_min_tip_model_mm": 80.0,
+    "model_correction_applied": false,
+    "physical_low_height_is_estimate": true,
+    "table_z_Base_mm": -63.30504067237496,
+    "target_FK": {
+      "hover": {
+        "reference": "actual midpoint of mean distal2mm STL tip regions, provisional",
+        "alignment_reference": "nominal_20mm_contact_midpoint_without_legacy_offset",
+        "alignment_nominal_contact_count": 2171,
+        "estimated_cube_projection_mm": 21.725771805905538,
+        "alignment_center_Base_mm": [
+          219.82162573381646,
+          20.11932761071082,
+          17.423183477237295
+        ],
+        "gripper_midpoint_Base_mm": [
+          220.13391035573227,
+          5.825325131886068,
+          20.12536039986077
+        ],
+        "fixed_tip_center_Base_mm": [
+          218.4232622061219,
+          35.009640044228625,
+          18.075318334503862
+        ],
+        "moving_tip_center_Base_mm": [
+          221.84455850534266,
+          -23.358989780456486,
+          22.17540246521768
+        ],
+        "link_min_z_mm": {
+          "wan2": 16.60207160095102,
+          "zhua": 18.666451864097738
+        },
+        "table_z_Base_mm": -63.30504067237496,
+        "link_clearance_above_table_mm": {
+          "wan2": 79.90711227332598,
+          "zhua": 81.9714925364727
+        }
+      },
+      "descend": {
+        "reference": "actual midpoint of mean distal2mm STL tip regions, provisional",
+        "alignment_reference": "nominal_20mm_contact_midpoint_without_legacy_offset",
+        "alignment_nominal_contact_count": 2171,
+        "estimated_cube_projection_mm": 21.725771805905538,
+        "alignment_center_Base_mm": [
+          220.08490339466601,
+          20.143220793330787,
+          -47.428033140214005
+        ],
+        "gripper_midpoint_Base_mm": [
+          220.39306104496671,
+          5.84884378031263,
+          -44.727364085488595
+        ],
+        "fixed_tip_center_Base_mm": [
+          218.6855436541501,
+          35.0334428177544,
+          -46.77597089209899
+        ],
+        "moving_tip_center_Base_mm": [
+          222.10057843578335,
+          -23.335755257129136,
+          -42.67875727887819
+        ],
+        "link_min_z_mm": {
+          "wan2": -48.254092538796606,
+          "zhua": -46.19149181633626
+        },
+        "table_z_Base_mm": -63.30504067237496,
+        "link_clearance_above_table_mm": {
+          "wan2": 15.050948133578352,
+          "zhua": 17.113548856038697
+        }
+      },
+      "close": {
+        "reference": "actual midpoint of mean distal2mm STL tip regions, provisional",
+        "alignment_reference": "nominal_20mm_contact_midpoint_without_legacy_offset",
+        "alignment_nominal_contact_count": 2171,
+        "estimated_cube_projection_mm": 21.725771805905538,
+        "alignment_center_Base_mm": [
+          220.08490339466601,
+          20.143220793330787,
+          -47.428033140214005
+        ],
+        "gripper_midpoint_Base_mm": [
+          219.97173370618134,
+          21.472864577602028,
+          -47.44850923922274
+        ],
+        "fixed_tip_center_Base_mm": [
+          218.6855436541501,
+          35.0334428177544,
+          -46.77597089209899
+        ],
+        "moving_tip_center_Base_mm": [
+          221.25792375821254,
+          7.9122863374496575,
+          -48.12104758634649
+        ],
+        "link_min_z_mm": {
+          "wan2": -48.254092538796606,
+          "zhua": -50.25484502725757
+        },
+        "table_z_Base_mm": -63.30504067237496,
+        "link_clearance_above_table_mm": {
+          "wan2": 15.050948133578352,
+          "zhua": 13.050195645117384
+        }
+      },
+      "lift": {
+        "reference": "actual midpoint of mean distal2mm STL tip regions, provisional",
+        "alignment_reference": "nominal_20mm_contact_midpoint_without_legacy_offset",
+        "alignment_nominal_contact_count": 2171,
+        "estimated_cube_projection_mm": 21.725771805905538,
+        "alignment_center_Base_mm": [
+          219.82162573381646,
+          20.11932761071082,
+          17.423183477237295
+        ],
+        "gripper_midpoint_Base_mm": [
+          219.70842475520413,
+          21.448968555315638,
+          17.402695945782824
+        ],
+        "fixed_tip_center_Base_mm": [
+          218.4232622061219,
+          35.009640044228625,
+          18.075318334503862
+        ],
+        "moving_tip_center_Base_mm": [
+          220.9935873042864,
+          7.88829706640265,
+          16.730073557061782
+        ],
+        "link_min_z_mm": {
+          "wan2": 16.60207160095102,
+          "zhua": 14.600829956145715
+        },
+        "table_z_Base_mm": -63.30504067237496,
+        "link_clearance_above_table_mm": {
+          "wan2": 79.90711227332598,
+          "zhua": 77.90587062852067
+        }
+      }
+    }
+  },
+  "protected_sha256": {
+    "configs/arm/joint_mapping.json": "cacbbd1f01849cc45ec9f2a37d2c170789b9989b1a6f4e169058da239ec5cb22",
+    "configs/arm/motion_defaults.json": "0e034dd19b1c925227384f38054b1dd245768f02c450e8fa4ba364b16b40eda4",
+    "configs/arm/ready_pose.json": "f29c60638a57fc8825487a29cfed02237ef6fcc6f3fb222491886e90bdb8b5c4",
+    "configs/arm/task_control_policy.json": "87e27c196114a2ba39a1eea5a2dab096341a46847947fbc3846e06beed96af7a",
+    "configs/arm/user_selected_pid_demo_baseline.json": "218718963c6535f88140ce1bbcc0a37c74d2dd6c54238fb342811aaef1c3eaf2",
+    "configs/vision/runtime/camera_in_base.json": "23c0b00a119b5c78dcbbd7a00b3a9b75828faffef07e5d21a03fe496cfbb75b3",
+    "configs/vision/runtime/camera_intrinsics.json": "9bd4426442417c9425f146971464a4946463a3b5704095decc5d2ed7075f0e07",
+    "configs/vision/runtime/provenance.json": "dc1936cd0262958ab037e12851350e0d34980a090c5afc68ee80d8fd01f826aa",
+    "models/genkiarm/genkiarm.urdf": "27fd9261031d83dae7a0c54a67bec332d5c5c6c3cfab2dabf941f211f6ab5d05",
+    "models/genkiarm/meshes/AAA.stl": "f44b05317a5c6827e9252a2d6c5ed9713b93a2f68117bd0917e49d2067d67cd9",
+    "models/genkiarm/meshes/BBB.stl": "6be75ed450f199f0a7f1947a248b3177f99f5560ff5df42945dc202286312d2a",
+    "models/genkiarm/meshes/CCC.stl": "8e2906cad1b77a84443d5932493bd368943b60ade84a7121d74f7524514adf31",
+    "models/genkiarm/meshes/CCC2.stl": "8e2906cad1b77a84443d5932493bd368943b60ade84a7121d74f7524514adf31",
+    "models/genkiarm/meshes/DDD.stl": "b825e11da1ad4864edb73917edd49f4b2e82696ef73b7c16c5a3ea927a01f6fe",
+    "models/genkiarm/meshes/EEE.stl": "3c142f27dd77a326caeddef6e9f986dbd5965d76591d67c757dbf3d32737d6d0",
+    "models/genkiarm/meshes/FFF.stl": "e46a78e8e82e2d2d36a73a6764543614b35406b3a45823aa55db6c43cd53ae11"
+  }
+}

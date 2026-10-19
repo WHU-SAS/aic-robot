@@ -9,3 +9,21 @@ __pycache__/
 .venv/
 venv/
 *.log
+
+# Canonical local environments and generated data
+/.vision_deps
+/.host_deps
+/.venv*
+/.pytest_cache/
+/data/
+/.local_archive/
+*.partial
+*.transfer
+*.tmp
+*~
+# Keil build products and machine-specific probe settings
+build/
+Objects/
+Listings/
+*.uvoptx
+*.uvguix.*

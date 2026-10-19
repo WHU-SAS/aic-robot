@@ -9,10 +9,10 @@
 | K230 | CanMV-K230-LP4 V3.0；脚本读取固件 v1.8-0-gc2d1f5c，MicroPython 1.21；CanMV IDE K230 4.0.9 |
 | 舵机 | 飞特 ST-3215-C018，ID 1～6，1,000,000 bps，转换板 URT-2 |
 | 底盘主控 | 立创天猛星 MSPM0G3507 |
-| 电机 / 驱动 | MG513XP28_12V ×2、现有 TB6612 双路稳压驱动板；详细引脚见 [电机例程接线](../../car/demo/01_motor_encoder/使用说明.md#1-接线) |
+| 电机 / 驱动 | MG513XP28_12V ×2、现有 TB6612 双路稳压驱动板；详细引脚见 [电机例程接线](../../device/mspm0/motor_encoder/使用说明.md#1-接线) |
 | 调试器 | 野火 fireDAP，CMSIS-DAP / SWD |
 
-机械臂零位、方向和限位读取 [关节映射](../../car-arm/hardware/joint_mapping.json)，不按 ID 数字推断。全部 17 个小车硬件原始资料保留在 [car/硬件信息](../../car/硬件信息/)。
+机械臂零位、方向和限位读取 [关节映射](../../configs/arm/joint_mapping.json)，不按 ID 数字推断。全部 17 个小车硬件原始资料保留在 [car/硬件信息](../../hardware/car)。
 
 ## 两种机械臂连接方式
 
@@ -62,10 +62,10 @@ VREF 感知目标电压，不承担目标板供电。天猛星 Type-C 输入为�
 
 RST/NRST 为需要硬件复位 / Connect under Reset 时的可选线，未接本身不能解释 E310。当前 SWD 无应答原因未定。用户已确认实际信号对应；此前根据照片推断误接 5V/TX/RX 的判断已撤回，不再作为故障结论。
 
-Keil 配置、下载步骤和失败记录分别见 [UART 工程说明](../../car/demo/02_uart1_link/README.md)、[历史记录](../history/2026-10-19-hardware-bringup.md)。
+Keil 配置、下载步骤和失败记录分别见 [UART 工程说明](../../device/mspm0/uart_link/README.md)、[历史记录](../history/2026-10-19-hardware-bringup.md)。
 
 ## 整车方案边界
 
-现有草案为 11.1V / 5000mAh / 10C 电池经分线、稳压分别供舵机、电机与控制板。该草案尚非整车带载供电验收结果。电机例程的 PA12 / STBY 接法及车轮悬空操作要求沿用 [原使用说明](../../car/demo/01_motor_encoder/使用说明.md)。
+现有草案为 11.1V / 5000mAh / 10C 电池经分线、稳压分别供舵机、电机与控制板。该草案尚非整车带载供电验收结果。电机例程的 PA12 / STBY 接法及车轮悬空操作要求沿用 [原使用说明](../../device/mspm0/motor_encoder/使用说明.md)。
 
-小车行驶时机械臂保持 [准备位和扭矩](../../car-arm/docs/准备位脚本.md)。当前没有自动控制联动或持物行驶策略。
+小车行驶时机械臂保持 [准备位和扭矩](../guides/arm/准备位脚本.md)。当前没有自动控制联动或持物行驶策略。

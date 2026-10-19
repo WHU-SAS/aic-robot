@@ -1,4 +1,7 @@
-#!/usr/bin/env python3
-"""K230 extracts faces; PC solves pose/IK and reuses the existing four-stage pick."""
-from k230_blue_pick import main
-if __name__=='__main__':raise SystemExit(main(default_backend='k230'))
+"""Compatibility entry; implementation lives at repository root host/apps."""
+from pathlib import Path
+import runpy
+import sys
+root=Path(__file__).resolve().parents[2]
+sys.path.insert(0,str(root))
+runpy.run_path(str(root/'host/apps'/Path(__file__).name),run_name='__main__')

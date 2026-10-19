@@ -59,7 +59,7 @@ GPIO 编号与物理脚号是两套编号。优先按实物 `IO_3`、`IO_4` 丝�
 
 ## 已通过的回环测试
 
-脚本：[../examples/uart1_loopback.py](../../arm/examples/uart1_loopback.py)。在 CanMV IDE 中打开并运行；测试脚本不保存为开机自动运行的 `main.py`。
+脚本：[../examples/uart1_loopback.py](../../device/k230/diagnostics/uart1_loopback.py)。在 CanMV IDE 中打开并运行；测试脚本不保存为开机自动运行的 `main.py`。
 
 - 参数：**UART1，115200 bps，8 数据位，无校验，1 停止位（8N1）**。
 - 测试接线：断电后，仅用一根杜邦线连接 `IO_3 ↔ IO_4`；这两个信号脚与 URT-2 等外设断开。
@@ -89,7 +89,7 @@ GPIO 编号与物理脚号是两套编号。优先按实物 `IO_3`、`IO_4` 丝�
 
 ## 六舵机只读检测
 
-脚本：[../examples/uart1_servo_read.py](../../arm/examples/uart1_servo_read.py)。适用当前 K230 V3.0/v1.8、URT-2、ST-3215-C018、ID 1～6、1,000,000 bps。用户已确认舵机独立电源接好并打开；本次舵机上报电压为 **12.1～12.2V**。这是舵机内部测量值，不替代万用表实测或电源规格确认。
+脚本：[../examples/uart1_servo_read.py](../../device/k230/diagnostics/uart1_servo_read.py)。适用当前 K230 V3.0/v1.8、URT-2、ST-3215-C018、ID 1～6、1,000,000 bps。用户已确认舵机独立电源接好并打开；本次舵机上报电压为 **12.1～12.2V**。这是舵机内部测量值，不替代万用表实测或电源规格确认。
 
 运行前保持四线接法、URT-2 电平开关 3V3、URT-2 USB 拔除，拆除原 IO_3/IO_4 回环线。舵机应接 TTL-Bus，舵机电源与 K230 共地。
 
@@ -162,7 +162,7 @@ K230 实物丝印定位：`IO_5` 与 `IO_3` 同排；`IO_6` 与 `IO_26` 同排�
 - MSPM0：启用 **UART1**，PA08 TX / PA09 RX。
 - 首轮串口测试计划使用 **115200 bps、8 数据位、无校验、1 停止位（8N1）**，双方一致；这是底盘链路参数，舵机链路仍为 UART1 / 1 Mbps。
 - 仓库当前 `car/demo/01_motor_encoder/` 配置的是 **UART0、PA10 TX / PA11 RX、115200 bps**，未包含 PA08/PA09 UART1 收发。仅接线不会让此现有固件自动回显；需要另行准备并烧录适配的通信测试固件。
-- 已新建独立测试工程 [car/demo/02_uart1_link](../../car/demo/02_uart1_link/README.md)，含 MSPM0 UART1 收发固件、Keil 工程、编译脚本和 K230 UART2 校验脚本。固件已编译，HEX 校验通过，仅覆盖 Main Flash 的 1672 字节；未改原电机工程。
+- 已新建独立测试工程 [car/demo/02_uart1_link](../../device/mspm0/uart_link/README.md)，含 MSPM0 UART1 收发固件、Keil 工程、编译脚本和 K230 UART2 校验脚本。固件已编译，HEX 校验通过，仅覆盖 Main Flash 的 1672 字节；未改原电机工程。
 - 用户选择 fireDAP / SWD 下载；首次烧录在读取 SWD 调试端口时失败：`E310: Debug access failed - cannot read DP register 0x00`。随后用户检查并表示接线没有问题；新工程请求将调试时钟从 5 MHz 降到 100 kHz 后，Keil 仍报相同 E310。**尚未烧录成功，也未开始两板通信测试。**
 - 计划使用带序号和令牌的 `K230_TEST` / `MSPM0_ACK` 请求应答验证双向链路，20/20 才通过；原样回显不计成功。测试固件不配置电机 PWM，并按原工程定义将 PA12 / TB6612 STBY 置低。
 - 对照原小车 demo 的本机 `.uvoptx`：探针为 fireDAP CMSIS-DAP，同一序列号，SWD / Protocol 2，同一 TI 设备包 1.3.1 与 Main Flash 128KB 算法。原 demo 目录保存的 `CMSIS-DAP_DebugLog_0001.log` 第 11 行显示：2026-09-29 20:09:58 成功读取 DP 地址 0x00，值 `0x6BA02477`。这确认此前 SWD 连接正常，不等于确认本次连接或完整烧录正常。

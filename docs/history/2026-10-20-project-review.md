@@ -359,10 +359,10 @@ URT-2 的 TX—TX/RX—RX 是该板官方 MCU 接法，不能套用到 K230 与 
 
 1. [项目总入口](../../README.md)
 2. [PC 抓取工程说明](../../car-arm/README.md)
-3. [抓取工程当前状态](../../car-arm/docs/CURRENT_STATE.md)
-4. [准备位说明](../../car-arm/docs/准备位脚本.md)
+3. [抓取工程当前状态](../guides/arm/CURRENT_STATE.md)
+4. [准备位说明](../guides/arm/准备位脚本.md)
 5. [Windows 硬件与联调记录](../../arm/docs/硬件与联调记录.md)（可能尚未同步到 Linux）
-6. [电机例程真实使用说明](../../car/demo/01_motor_encoder/使用说明.md)
-7. [双板 UART 测试说明](../../car/demo/02_uart1_link/README.md)（可能尚未同步到 Linux）
+6. [电机例程真实使用说明](../../device/mspm0/motor_encoder/使用说明.md)
+7. [双板 UART 测试说明](../../device/mspm0/uart_link/README.md)（可能尚未同步到 Linux）
 
 上述路径以审查时布局为准。实施迁移后应更新本报告或将其标为历史审查，避免再次形成一份与实际目录脱节的当前指南。

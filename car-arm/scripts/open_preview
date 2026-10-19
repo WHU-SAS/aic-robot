@@ -1,9 +1,4 @@
 #!/bin/sh
 set -eu
-aic_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-if [ -n "${CANMV_IDE:-}" ]; then
-    exec "$CANMV_IDE" "$aic_root/k230/camera_preview.py"
-elif command -v canmv-ide >/dev/null 2>&1; then
-    exec canmv-ide "$aic_root/k230/camera_preview.py"
-fi
-exec "$HOME/Applications/canmv-ide-4.0.9/bin/canmv-ide-launch" "$aic_root/k230/camera_preview.py"
+aic_root="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
+exec "$aic_root/scripts/open_preview" "$@"

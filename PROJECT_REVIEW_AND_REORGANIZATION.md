@@ -1,9 +1,7 @@
 # 项目审查与整理入口
 
-原 Linux 交接报告已归档为 [2026-10-20 审查快照](docs/history/2026-10-20-project-review.md)，保留原始发现与历史验证范围。
+- [当前布局、迁移结果和验证边界](docs/reorganization.md)
+- [当前硬件与功能状态](docs/status.md)
+- [原审查快照](docs/history/2026-10-20-project-review.md)
 
-- [当前整理计划、目标目录与迁移清单](docs/reorganization.md)
-- [当前验证状态与阻塞项](docs/status.md)
-- [项目总入口](README.md)
-
-第一批只整理文档；代码、配置、模型、SDK 与运行入口尚未迁移。后续按整理计划分批实施，不按历史报告目录树直接搬文件。
+目录迁移已经完成；当前命令从仓库根目录执行，见 [README](README.md)。
