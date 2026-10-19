@@ -5,6 +5,7 @@ WHU-SAS 团队的 AIC 开发代码与硬件参考资料。
 | 目录 | 内容与入口 |
 | --- | --- |
 | [car/demo/01_motor_encoder/](car/demo/01_motor_encoder/) | MSPM0G3507 双电机与编码器实验，参见 [使用说明](car/demo/01_motor_encoder/使用说明.md) |
+| [car/demo/02_uart1_link/](car/demo/02_uart1_link/) | K230 UART2 ↔ MSPM0 UART1 通信测试，参见 [接线与测试说明](car/demo/02_uart1_link/README.md) |
 | [car/硬件信息/](car/硬件信息/) | 当前硬件照片、采购记录和 [硬件说明](car/硬件信息/现有硬件与功能.txt) |
 | [arm/](arm/) | 飞特舵机 Python SDK 与机械臂 URDF，参见 [机械臂说明](arm/README.md) |
 | [car-arm/](car-arm/) | CanMV K230定位蓝色20mm方块与六轴机械臂抓取演示，参见 [运行说明](car-arm/README.md) |
@@ -18,6 +19,8 @@ WHU-SAS 团队的 AIC 开发代码与硬件参考资料。
 ## 机械臂资料
 
 SDK 和 URDF 分别放在 `arm/hardware/` 和 `arm/robot_description/`。SDK 保留原 MIT 许可证；URDF 的网格、碰撞体、惯性参数及来源限制见机械臂说明。
+
+机械臂舵机为 **ST-3215-C018，ID 1～6，1,000,000 bps**。K230 V3.0/v1.8、UART1 引脚、URT-2 接线及回环结果见 [硬件与联调记录](arm/docs/硬件与联调记录.md)。
 
 ## K230与机械臂抓取
 

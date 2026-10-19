@@ -1,0 +1,5 @@
+build/
+keil/Objects/
+keil/Listings/
+keil/*.uvoptx
+keil/*.uvguix.*
