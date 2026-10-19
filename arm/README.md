@@ -1,6 +1,6 @@
 # AIC 机械臂参考资料
 
-这个目录保留机械臂底层接口、模型、硬件联调记录与 UART 回环示例，供团队开发时核对。它不是完整的机械臂运动控制项目，也不包含小车资料。
+这个目录保留机械臂底层接口、模型、硬件联调记录与 UART 回环示例，供团队开发时核对。现有抓取程序位于 [car-arm](../car-arm/README.md)；本目录不是完整运动控制项目。全仓进度见 [状态表](../docs/status.md)。
 
 ## 当前硬件与联调入口
 
@@ -8,7 +8,7 @@
 
 **2026-10-19 实测：K230 UART1 经 URT-2 读取六个舵机全部通过，错误状态均为 0x00；测试只发送 Ping 和读取请求。**
 
-接线、UART1 物理脚号、已通过的回环测试与尚待验证项统一记录在 [硬件与联调记录](docs/硬件与联调记录.md)，后续先查此文件。测试脚本为 [UART1 回环](examples/uart1_loopback.py) 和 [六舵机只读检测](examples/uart1_servo_read.py)。
+当前接线与 UART1 物理脚号见 [硬件说明](../docs/hardware/connections.md)，完整测试、重试与更正见 [历史联调记录](../docs/history/2026-10-19-hardware-bringup.md)。测试脚本为 [UART1 回环](examples/uart1_loopback.py) 和 [六舵机只读检测](examples/uart1_servo_read.py)。
 
 ## 内容
 
