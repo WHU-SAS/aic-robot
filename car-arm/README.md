@@ -1,6 +1,6 @@
 # AIC car-arm
 
-团队仓库模块路径：`car-arm/`，从独立项目提交 `445a2b9` 导入。
+团队仓库模块路径：`car-arm/`，从独立项目提交 `445a2b9` 导入。全仓导航见 [根 README](../README.md)，验证范围见 [状态表](../docs/status.md)。当前仍使用本页命令；[后续目标目录](../docs/reorganization.md) 尚未迁移。
 
 CanMV K230 + 六轴机械臂：识别桌面上的蓝色20mm方块，张开、下探夹取并抬升。当前版本已由用户现场运行并接受（2026-10-13）。指定位置放置功能留待下一阶段开发。
 
@@ -71,7 +71,7 @@ PID等数值见 [当前基线](hardware/user_selected_pid_demo_baseline.json)，
 | `k230/calibration/runtime/` | 当前抓取使用的冻结内外参及来源哈希，纳入Git |
 | `ros2_ws/src/arm_pkg/` | SDK、FK模块、URDF及STL；当前直接Python运行，无完整ROS2构建包 |
 | `scripts/` | 主机/视觉环境入口和离线检查 |
-| `docs/` | 当前状态、执行逻辑与Git整理说明 |
+| `docs/` | 模块状态、执行逻辑与已标明日期的历史说明 |
 
 原始照片、配对编码、历史标定分析、运行日志、历史诊断和依赖环境保留本地，并由`.gitignore`排除。旧PID实验不纳入此项目或Git。
 
@@ -100,4 +100,4 @@ python3 -m venv .venv-vision
 
 前两项不访问硬件；探测只发送ping/读取请求。预览需要本机CanMV IDE，可通过`CANMV_IDE`指定可执行程序。采集只拍照、读编码，不驱动机械臂。
 
-详细说明：[当前状态](docs/CURRENT_STATE.md)、[板端抓取流程](docs/K230_ONBOARD_PICK.md)、[PC兼容入口](docs/K230_PICK_TRIAL.md)、[Git整理](docs/GIT_PREP.md)。
+详细说明：[当前状态](docs/CURRENT_STATE.md)、[板端抓取流程](docs/K230_ONBOARD_PICK.md)、[PC兼容入口](docs/K230_PICK_TRIAL.md)、[历史记录索引](../docs/history/README.md)。
