@@ -1,7 +1,9 @@
-# 第三方依赖与参考
+# 第三方依赖
 
-- [ftservo_python](ftservo_python/README.md)：PC 当前运行 SDK，保留 MIT 许可证和应答校验补丁。bootstrap 仅将此运行 SDK 加入导入路径。
-- `ti_mspm0_sdk/`：电机示例原 `source/` 的全部1438文件，逐字节迁移；保留内含 TI / CMSIS 等版权与许可，两份 MSPM0 工程共享。
-- [reference](reference/README.md)：隔离的上游 SDK、旧 URDF 与未参与构建的模板。不是运行依赖，不加入 host 或构建搜索路径。
+| 目录 | 用途 |
+| --- | --- |
+| [ftservo_python](ftservo_python/README.md) | 当前 PC 舵机 SDK，MIT 许可，保留应答 ID / 长度校验补丁 |
+| `ti_mspm0_sdk/` | 两个 MSPM0 工程共用的完整 TI SDK，保留各文件的 TI / CMSIS 等许可 |
+| [reference](reference/README.md) | 旧 SDK、模型、未使用模板；不加入运行或构建搜索路径 |
 
-本次不更新第三方版本、不改协议、不裁剪 TI SDK。各目录许可只适用于对应文件，不扩展为全仓统一许可证。
+各依赖许可分别适用；仓库未设置统一许可，公开发布前需核对模型和硬件资料授权。

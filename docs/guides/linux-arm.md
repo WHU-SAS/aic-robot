@@ -1,14 +1,8 @@
-# Linux：现有 PC 辅助抓取
+# Linux 安装与运行
 
-当前源码位于仓库 `host/`、`device/`，配置位于 `configs/`，以下相对命令从仓库根目录开始。此入口使用 Linux 串口与进程接口，不作为 Windows / CanMV 原生运行命令。
+所有命令从仓库根目录执行。PC 分别通过 USB 连接 K230 和舵机转接板；抓取前在 CanMV IDE 停止程序并断开连接。
 
-## 角色与连接
-
-K230 提取角点 / 棱线 → PC OpenCV 解算蓝色 20 mm 方块位姿 → PC FK/IK → USB 串口控制六轴。抓取时停止 CanMV IDE 脚本并断开 IDE，释放 K230 串口。
-
-本模式 PC 分别通过 USB 连接 K230 与舵机转接板；K230 UART 直连诊断是 [另一条路线](k230-and-mspm0.md)，尚未替代该程序。
-
-## 环境
+## 安装环境
 
 ```bash
 cd /home/xd/Desktop/aic-robot
@@ -18,55 +12,46 @@ python3 -m venv .venv-vision
 .venv-vision/bin/python -m pip install -r requirements-vision.txt
 ```
 
-`scripts/host` 用于串口、FK 与 SciPy；`scripts/vision` 用于 OpenCV。两套 NumPy 依赖分别维护，不合并环境。已有本机可沿用系统 Python 和 `.vision_deps` 回退方式；依赖目录不提交。2026-10-20 已有 Linux 环境离线检查通过，新电脑从零安装尚未验证。
+`./scripts/host` 用于串口、FK/IK，`./scripts/vision` 用于 OpenCV，两套 NumPy 环境分开。已有电脑也支持系统 Python 与 `.vision_deps`；新电脑从零安装尚未验证。
 
-## 检查与只读操作
+USB 重连后可能需要重新设置权限。将用户名及设备路径换成本机值：
 
 ```bash
-# 以下两项不访问硬件
-./scripts/host scripts/offline_check.py
-./scripts/host -m unittest discover -s host/tests
-# 相机识别，不打开舵机串口；IDE 须停止并断开
-./scripts/pick-blue --detect-only
-# 舵机仅 Ping / 读取，不发送运动目标
-./scripts/host host/apps/probe_linux_servos.py
+sudo setfacl -m u:xd:rw \
+  /dev/serial/by-id/usb-Kendryte_CanMV_001000000-if00 \
+  /dev/serial/by-id/usb-1a86_USB_Single_Serial_5B79033467-if00
 ```
 
-USB 连接或重连后，按本机实际用户和设备设置访问权限。本机示例：
+抓取入口可用 `--camera-port` / `--port` 指定相机 / 舵机端口。
+
+## 日常运行
 
 ```bash
-sudo setfacl -m u:xd:rw   /dev/serial/by-id/usb-Kendryte_CanMV_001000000-if00   /dev/serial/by-id/usb-1a86_USB_Single_Serial_5B79033467-if00
+./scripts/check                            # 离线检查和单元测试
+./scripts/host host/apps/probe_linux_servos.py  # 舵机只读检查
+./scripts/pick-blue --detect-only           # 仅定位
+./scripts/pick-blue --detect-only --debug-roi  # 定位并保存诊断图
+./scripts/pick-blue --execute --hands-free  # 现场就位、手离开后抓取
+./scripts/arm-ready --execute               # 行驶前回准备位
+./scripts/open_preview                     # 打开 CanMV IDE 预览脚本，连接后运行
 ```
 
-端口可用抓取入口的 `--camera-port` / `--port` 覆盖，用户名和 USB 序列号不是团队所有电脑的通用值。
+动作及结束状态见 [抓取流程](arm/K230_ONBOARD_PICK.md)、[准备位](arm/准备位脚本.md)。预览和抓取共用 K230 串口，不能同时占用。
 
-## 真机抓取与准备位
+兼容的 PC 识图入口为 `./scripts/host host/apps/k230_blue_pick.py --execute --hands-free`：从 K230 导出照片，由 PC OpenCV 提取物理面；后续定位、IK 和动作与默认入口共用。`host/apps/run_task.py` 是另一个逐阶段人工确认的任务入口。
 
-现场就位、手已离开运动区时执行：
+## 标定采集与离线分析
 
-```bash
-./scripts/pick-blue --execute --hands-free
-```
+在 CanMV IDE 运行 [capture_calibration.py](../../device/k230/diagnostics/capture_calibration.py)：640×480 预览，每 3 秒保存一张无标记原图到 `/sdcard/calibration/session_XXXX/`，点击停止结束，不覆盖旧照片。改变标定板位置、距离、倾角，每个姿态停留 3～6 秒，先拍 20～40 张；固定镜头焦点。该采集分辨率与抓取的 1280×960 不同，采集本身不更新运行内参。
 
-每次重新定位，按四阶段执行，结束保持抬升和扭矩。当前没有指定位置放置、自动确认夹起、自动回中立或断扭矩。动作、参数和偏移含义见 [根 README](../../README.md) 与 [详细流程](arm/K230_ONBOARD_PICK.md)。
-
-小车行驶前：
+导出 session 后执行：
 
 ```bash
-./scripts/arm-ready --execute
-```
-
-脚本一次同步发送准备位最终目标后退出，**不自动确认到位**。由人确认到位、停稳，并在行驶期间保持姿态和扭矩。准备位会张开夹爪；持物行驶另行确定。见 [准备位说明](arm/准备位脚本.md)。
-
-可直接使用根入口 `./scripts/pick-blue`、`./scripts/arm-ready`、`./scripts/check`。旧 car-arm 命令由薄兼容层转发。
-
-## 离线标定与回放
-
-工具显式接收数据路径，输出写入本机 data/：
-
-```bash
+./scripts/vision tools/calibration/select_calibration.py /路径/session_0001
 ./scripts/vision tools/calibration/audit_intrinsics.py --images /路径/accepted
 ./scripts/vision tools/analysis/replay_onboard_detector.py /路径/运行记录 --output data/k230/runtime_checks/replay
 ```
 
-`recheck_intrinsics.py` 默认与当前运行内参比较，可用 `--baseline` 指定旧基准。回放重复同一张保存图，只验证离线提取与定位流程，不验证真实三帧稳定性。
+筛选使用 5×7 ChArUco、DICT_5X5_100，要求 24 个内角点、17 个标记及 3 px 边距；结果写入新建 `selection_时间/accepted/` 和 `selection.json`，原图保留。完整入镜不代表内参质量合格。未挂载 SD 卡时，停止程序并断电后可用读卡器导出。
+
+`recheck_intrinsics.py` 默认与运行内参比较，可用 `--baseline` 指定基准。回放将一张保存图重复使用，只验证提取与定位，不验证真实多帧稳定性。日志和新采集均保存在不提交的 `data/`。

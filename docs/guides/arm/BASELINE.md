@@ -1,6 +1,4 @@
-# 当前控制参数来源
-
-当前入口核对以下已保存参数，不自动写入。后续调整由用户决定。
+# 当前舵机基线
 
 | 舵机 | P | I | D | 积分限幅 | 最小启动力 | 死区26/27 | 速度/加速度 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -11,8 +9,6 @@
 | 5 | 4 | 0 | 60 | 0 | 16 | 1/1 | 150/5 |
 | 6 | 8 | 0 | 60 | 0 | 16 | 1/1 | 150/5 |
 
-数值权威来源为`configs/arm/user_selected_pid_demo_baseline.json`和`configs/arm/motion_defaults.json`。正常动作与另行执行的回中立使用相同速度/加速度配置。K230抓取完成仍保持抬升，不自动回中立。
+以 `configs/arm/user_selected_pid_demo_baseline.json` 和 `motion_defaults.json` 为准。程序只核对已保存参数，调整由用户决定。正常动作与另行回中立使用相同运动配置；抓取结束不自动回中立。
 
-运行标定来源独立记录于`configs/vision/runtime/provenance.json`。抓取配置中`inherited_geometry_source_sha256`指继承代码的历史来源哈希，不是当前修改后源码哈希。
-
-标定快照中的 `intrinsics_file` 是采集时来源记录；实际加载路径由 `configs/arm/k230_pick_config.json` 指定。
+运行内外参由 `configs/arm/k230_pick_config.json` 指定，来源见 `configs/vision/runtime/provenance.json`。快照中的 `intrinsics_file` 和配置中的 `inherited_geometry_source_sha256` 是历史来源记录，不是当前加载路径或当前代码哈希。

@@ -1,11 +1,11 @@
-# 隔离的旧参考文件
+# 隔离参考
 
-这些内容原样归档，保持来源可追溯；**不加入运行导入、include 或构建路径**。
+以下文件不加入运行、include 或构建路径。
 
-| 路径 | 原用途与保留原因 |
+| 路径 | 内容 |
 | --- | --- |
-| `ftservo_upstream/` | 原 `arm/hardware/FTServo_Python-main/` SDK 和 MIT 许可证；与当前运行补丁版区分，不能覆盖它 |
-| `genkiarm_original.urdf` | 原始参考 URDF；部分角度为1.57，和当前运行的1.57079632679不同；无完整网格，不作为默认模型 |
-| `motor_template/` | 原电机目录未参与构建的 empty.c/.h、Hardware、平铺ti、旧Keil工具与打包脚本；后续Windows重编译前保留，不混用到完整SDK |
+| `ftservo_upstream/` | 未加当前应答校验补丁的旧 SDK，含 MIT 许可 |
+| `genkiarm_original.urdf` | 原参考模型，角度 1.57；运行模型使用 1.57079632679，不能互换 |
+| `motor_template/` | 未参与构建的 empty.c/.h、Hardware、平铺 TI 驱动、旧 Keil 工具和打包脚本 |
 
-已检查两个 build.py、两个 Keil 工程及当前应用 include；当前构建输入不引用这些模板。平铺驱动有13个同名异内容文件，因此按隔离归档处理，不盲目去重。`empty.syscfg` 单独保留于 motor_encoder/reference，尚未工具重新生成验证。
+平铺驱动有 13 个同名异内容文件，保留供对照；实际 MSPM0 工程使用 `third_party/ti_mspm0_sdk/` 与 `device/mspm0/platform/`。SysConfig 待复核配置单独保存在 `device/mspm0/motor_encoder/reference/empty.syscfg`。

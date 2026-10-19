@@ -1,15 +1,5 @@
-# 旧 car-arm 入口兼容目录
+# 旧命令兼容入口
 
-当前工作根目录为上一级 `aic-robot/`。源码、配置、模型、SDK 和文档已迁出本目录，见 [根 README](../README.md)。
+开发和运行使用 [仓库根目录](../README.md)。本目录只转发旧命令，不保存另一套代码或参数。
 
-推荐在仓库根目录使用：
-
-```bash
-./scripts/pick-blue --execute --hands-free
-./scripts/arm-ready --execute
-./scripts/check
-```
-
-原命令暂时可继续使用，例如在本目录运行 `./scripts/host hardware/move_ready.py --execute` 或 `./scripts/host hardware/k230_blue_pick_onboard.py --execute --hands-free`。兼容层只转发到同一套新实现，不加载旧参数或旧源码。
-
-旧采集 / 日志不会自动导入；新输出在根目录忽略提交的 `data/`。本目录不再新增开发代码。
+例如原 `./scripts/host hardware/move_ready.py --execute` 对应根目录 `./scripts/arm-ready --execute`；原 `hardware/k230_blue_pick_onboard.py` 对应 `./scripts/pick-blue`。新采集与日志在根目录 `data/`。
