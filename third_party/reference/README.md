@@ -9,5 +9,3 @@
 | `motor_template/` | 原电机目录未参与构建的 empty.c/.h、Hardware、平铺ti、旧Keil工具与打包脚本；后续Windows重编译前保留，不混用到完整SDK |
 
 已检查两个 build.py、两个 Keil 工程及当前应用 include；当前构建输入不引用这些模板。平铺驱动有13个同名异内容文件，因此按隔离归档处理，不盲目去重。`empty.syscfg` 单独保留于 motor_encoder/reference，尚未工具重新生成验证。
-
-逐文件原位置见 [迁移清单](../../docs/history/reorganization_manifest.json)。本目录没有旧 PID 实验或原始采集数据。

@@ -1,6 +1,6 @@
 # 旧 car-arm 入口兼容目录
 
-当前工作根目录为上一级 `aic-robot/`。源码、配置、模型、SDK 和文档已迁出本目录，见 [根 README](../README.md) 与 [迁移清单](../docs/history/reorganization_manifest.json)。
+当前工作根目录为上一级 `aic-robot/`。源码、配置、模型、SDK 和文档已迁出本目录，见 [根 README](../README.md)。
 
 推荐在仓库根目录使用：
 
