@@ -12,7 +12,7 @@
 | UART1 舵机只读 | [uart1_servo_read.py](../../device/k230/diagnostics/uart1_servo_read.py) | 按接线页连接 URT-2，1 Mbps；六舵机 PING / READ 均成功，错误 0x00 |
 | UART2 ↔ MSPM0 UART1 | [k230_uart2_test.py](../../device/k230/diagnostics/k230_uart2_test.py) | 先成功烧录 MSPM0 UART 固件；20/20 带序号和令牌的应答，原样回显不算通过 |
 
-前两项已有通过记录；第三项的 MSPM0 固件已下载运行，双板测试待 K230 接入。只读脚本会校验应答 ID、长度、校验和与错误状态。
+三项均已有通过记录。双板 UART 于 2026-10-20 在接线、重新上电后首轮测试 19/20（仅第 1 包未应答），保持程序不变复测 20/20；上电首包问题尚未定位。只读脚本会校验应答 ID、长度、校验和与错误状态。
 
 ## Linux 编译与 IDE
 
@@ -56,7 +56,7 @@ K230 接入 OTG USB、CanMV IDE 停止并断开后，可直接从 Linux 运行�
 ./scripts/host tools/diagnostics/test_k230_mspm0_link.py
 ```
 
-复用板端既有 20 轮测试，不控制舵机。需要每轮带序号与令牌的 `MSPM0_ACK`，20/20 才通过；日志在 `data/logs/k230_mspm0_link_*/`。当前尚未执行双板验收。
+复用板端既有 20 轮测试，不控制舵机。需要每轮带序号与令牌的 `MSPM0_ACK`，20/20 才通过；日志在 `data/logs/k230_mspm0_link_*/`。当前已通过一轮完整 20/20 验收；首次上电测试存在一次首包无应答，不能据此认定上电同步已稳定。
 
 ## Windows Keil 编译
 
