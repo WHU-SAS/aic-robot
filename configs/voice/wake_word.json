@@ -1,0 +1,8 @@
+{
+  "wake_word": "思达思达",
+  "language": "zh-CN",
+  "backend": "open_kws",
+  "status": "pending_firmware_and_enrollment",
+  "enrollment_file": null,
+  "motion_binding": null
+}

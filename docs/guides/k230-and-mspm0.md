@@ -27,6 +27,23 @@ IDE停止并断开后，从仓库根目录运行：
 
 官方`keyword_spotting.py`为“小楠小楠”唤醒；`multi_kws.py`支持“小楠小楠”、英语go/stop/wow（[官方词表](https://www.kendryte.com/k230_canmv/en/main/example/ai/ai_demo_user_manual.html#multi-command-word-wake-up)）。本机SD卡有示例代码，但缺少`kws.kmodel`及`multi_kws.kmodel`，识别与播放尚未验证；新增中文口令需要匹配的模型。SD卡已有`car_voice/`自定义“前进”程序，其配置会占用UART1并发送运动指令，不能直接当无动作语音测试运行。
 
+### 自定义唤醒：“思达思达”升级方案
+
+唤醒词保存在`configs/voice/wake_word.json`；当前状态为待升级、待录音注册，尚未启用，也未绑定动作。用户2026-10-20同意先准备升级兼容方案。
+
+- 当前板实测为CanMV v1.8 / nncase 2.11系列，`import open_kws`失败。官方最新稳定发行仍是v1.8；该模块于2026-10-16加入[开发源码](https://github.com/kendryte/canmv_k230/commit/f4c7ef90c3f1aa6ec230ce7ffaa0951d5b42e50a)。公开PreRelease的V3P0附件仍是旧的nncase 2.9构建，不能据发布页更新时间当作可用升级。
+- 候选路线：按[官方编译流程](https://www.kendryte.com/k230_canmv/en/main/userguide/how_to_build.html)构建`k230_canmv_v3p0_defconfig`，启用`open_kws`；核对源码CanMV `e2182e860ac978d8a3e1334ebf4bc4fcfa564af1`、SDK `effb2f82e822f4b5c4de2b8ee59e61a02b1a6171`及nncase 2.11配套库。源码仍保留USBDBG、UART1/2和现有FPIOA名称，但尚未编译或上板验证。
+- 必须配齐开放词汇专用`model/kws.kmodel`、`assets/`和`units.txt`（40×96输入、24×59输出）；旧二分类`kws.kmodel`和自定义“前进”的转导模型不能混用。目前尚未确认这套资源的可下载完整包；资源齐全且能加载前不刷卡。
+- 优先写备用TF卡，保留原卡作完整回退。现有12个应用/模型/配置文件已导出到本地`data/backups/k230_pre_voice_upgrade_*/`并通过SHA256校验，同时保存主机配置；这不是全卡或固件镜像备份。原始采集数据不上传。
+- 新卡先以无动作方式复核USBDBG连接、1280×960相机采集与现有定位、UART1六轴只读、UART2状态通信、16kHz音频和模型加载。保留原标定、PID、速度和准备位；任何兼容性改动另行记录。
+- 基础功能通过后，按官方流程录三遍“思达思达”，先只输出唤醒事件，统计重复唤醒、漏检和近音词误触发；动作绑定由用户后续指定。不恢复SD卡旧`car_voice/start.py`为自动启动程序。
+
+可重复检查当前固件接口及模型路径（不控制UART或运动；缺项时退出码2，路径存在也不等于模型已加载或识别通过）：
+
+```bash
+./scripts/host tools/diagnostics/check_k230_voice.py
+```
+
 ## Linux 编译与 IDE
 
 本机命令行工具位于 `~/.local/share/aic-tools/`，Python 工具环境独立；IDE 插件和设备包分别安装于 VS Code 与 CMSIS 缓存。
