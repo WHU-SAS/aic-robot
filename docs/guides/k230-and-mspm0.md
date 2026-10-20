@@ -14,6 +14,19 @@
 
 三项均已有通过记录。双板 UART 于 2026-10-20 复现首包前额外 `00` 导致旧解析器整行丢弃，改为按帧头重新同步后，确认彻底断电的一轮首包与整轮 20/20 通过。只读脚本会校验应答 ID、长度、校验和与错误状态。
 
+## K230 麦克风与语音
+
+IDE停止并断开后，从仓库根目录运行：
+
+```bash
+./scripts/host tools/diagnostics/test_k230_audio.py                       # 3秒麦克风采样统计
+./scripts/host tools/diagnostics/test_k230_audio.py --record --seconds 5  # 保存并导出5秒WAV
+```
+
+2026-10-20已验证板载麦克风16kHz/16bit/单声道采样、1秒WAV保存与回传；采样未见削波。忽略启动时约1秒的直流瞬态，预热1.5秒后统计。日志及录音仅在本地`data/logs/k230_audio_*/`，SD录音保存在`/sdcard/voice_probe/`。该程序不初始化UART，不控制底盘或舵机，不修改启动脚本。
+
+官方`keyword_spotting.py`为“小楠小楠”唤醒；`multi_kws.py`支持“小楠小楠”、英语go/stop/wow（[官方词表](https://www.kendryte.com/k230_canmv/en/main/example/ai/ai_demo_user_manual.html#multi-command-word-wake-up)）。本机SD卡有示例代码，但缺少`kws.kmodel`及`multi_kws.kmodel`，识别与播放尚未验证；新增中文口令需要匹配的模型。SD卡已有`car_voice/`自定义“前进”程序，其配置会占用UART1并发送运动指令，不能直接当无动作语音测试运行。
+
 ## Linux 编译与 IDE
 
 本机命令行工具位于 `~/.local/share/aic-tools/`，Python 工具环境独立；IDE 插件和设备包分别安装于 VS Code 与 CMSIS 缓存。
