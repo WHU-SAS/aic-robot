@@ -6,6 +6,7 @@ Linux 在仓库根目录运行 `./scripts/mspm0-build uart_link`，生成本目�
 
 ## 程序与协议
 
+- [uart_request_parser.h](uart_request_parser.h) 搜索完整帧头并校验两位序号、八位十六进制令牌；忽略帧前杂字节，在残缺帧后重新同步。
 - [main.c](main.c) 接收 `K230_TEST,<序号>,<令牌>\n`，回复 `MSPM0_ACK,<序号>,<令牌>\n`。
 - [k230_uart2_test.py](../../k230/diagnostics/k230_uart2_test.py) 发 20 轮请求，校验序号和令牌，拒绝原样回显。
 - MSPM0 使用 32 MHz SYSOSC/BUSCLK，分频后约 115211.5 bps。
@@ -23,4 +24,15 @@ UART2_MSPM0_LINK_PASS
 
 无应答时检查固件是否运行、共地、TX/RX 接线与波特率。`LOCAL_ECHO_ONLY` 表示本地回环，应拆除 TX/RX 短接。
 
-固件已在 Windows Keil 和 Linux GCC 编译（Main Flash 映像分别为 1672 / 1656 字节）；10 月 20 日 Linux 下烧录与逐字节回读已通过，USB 串口收到 `MSPM0_UART1_TEST_READY`，BCR/BSL 未变；接线、重新上电后首轮为 19/20（首包未应答），程序不变复测 20/20 通过，上电首包问题待定位。随后切换到电机例程完成 Linux 实机验收；当前主控保留电机例程，复测本通信协议前需重新烧录本 UART 固件。进度见 [项目首页](../../../README.md#当前情况)。
+2026-10-20 已在原固件复现冷启动首包失败，UART0 显示 `UART1_LINE_DISCARDED`。修复后的首次接收日志明确为 `00` + 完整请求；按帧头重新同步后，确认两板电源灯全灭再上电的一轮为 **20/20，首包通过**，没有预热或重试。`00` 的具体电气来源尚未测量。
+
+当前主控运行本 UART 测试固件。Linux 映像 1872 字节，经主板 Type-C / BSL 写入、独立两次 CRC 核验通过；写入范围之外的 Main Flash 已核对。SWD 阶段的旧映像曾逐字节回读并检查 BCR/BSL 未变；本次 BSL 仅使用 Main Flash 范围擦写命令。
+
+首次有效请求后，UART0 输出 `UART1_FIRST_RX_HEX`。要同步保存这份诊断，在仓库根目录运行：
+
+```bash
+./scripts/host tools/diagnostics/test_k230_mspm0_link.py \
+  --mspm0-log-port /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
+```
+
+先由人确认两板彻底断电再上电，测试前不连接 SWD、不发送预热包。日志在本机 `data/logs/`，不提交。编译及 BSL 步骤见 [板端联调](../../../docs/guides/k230-and-mspm0.md)。

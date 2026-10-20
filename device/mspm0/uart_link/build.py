@@ -16,7 +16,7 @@ sdk = repository / 'third_party/ti_mspm0_sdk'
 startup = root.parent / 'platform/startup_mspm0g350x_uvision.s'
 scatter = root.parent / 'platform/mspm0g3507.sct'
 library = sdk / 'ti/driverlib/lib/keil/m0p/mspm0g1x0x_g3x0x/driverlib.a'
-required = [sdk / 'ti/driverlib/driverlib.h', sdk / 'third_party/CMSIS/Core/Include/core_cm0plus.h', startup, scatter, library, root/'main.c']
+required = [sdk / 'ti/driverlib/driverlib.h', sdk / 'third_party/CMSIS/Core/Include/core_cm0plus.h', startup, scatter, library, root/'main.c', root/'uart_request_parser.h']
 for path in required:
     if not path.exists():
         raise SystemExit('Missing required dependency: ' + str(path))
@@ -50,7 +50,7 @@ run('armlink', '--cpu=Cortex-M0plus', '--scatter=' + str(scatter),
     library,
     '-o', 'build/uart1_link.axf')
 run('fromelf', '--i32combined', '--output=build/uart1_link.hex', 'build/uart1_link.axf')
-files = [root/'main.c', startup, scatter, out/'uart1_link.hex']
+files = [root/'main.c', root/'uart_request_parser.h', startup, scatter, out/'uart1_link.hex']
 (out/'sha256.json').write_text(json.dumps({str(f):hashlib.sha256(f.read_bytes()).hexdigest()
     for f in files}, indent=2), encoding='utf-8')
 print('Built build/uart1_link.hex; no flashing performed by this script.')

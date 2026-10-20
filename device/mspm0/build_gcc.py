@@ -54,7 +54,8 @@ def build(project, toolchain):
     out.mkdir(parents=True, exist_ok=True)
     gcc = str(toolchain / 'arm-none-eabi-gcc')
     objcopy = str(toolchain / 'arm-none-eabi-objcopy')
-    for dependency in [STARTUP, LINKER, LIBRARY, *(folder / s for s in sources)]:
+    headers = sorted(folder.glob('*.h'))
+    for dependency in [STARTUP, LINKER, LIBRARY, *(folder / s for s in sources), *headers]:
         if not dependency.is_file():
             raise FileNotFoundError(dependency)
     flags = ['-mcpu=cortex-m0plus', '-mthumb', '-mfloat-abi=soft', '-std=c99',
@@ -96,7 +97,7 @@ def build(project, toolchain):
     report.update({'project': project, 'compiler': subprocess.check_output([gcc, '--version'], text=True).splitlines()[0],
                    'status': 'built_and_checked_not_flashed', 'padded_flash_end': end,
                    'sha256': {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
-                              for p in [*inputs, LINKER, LIBRARY, elf, out / (basename + '.hex')]},
+                              for p in [*inputs, *headers, LINKER, LIBRARY, elf, out / (basename + '.hex')]},
                    'commands': commands})
     (out / 'build-info.json').write_text(json.dumps(report, indent=2) + '\n')
     (out / 'compile_commands.json').write_text(json.dumps(compile_commands, indent=2) + '\n')

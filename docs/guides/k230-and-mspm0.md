@@ -12,7 +12,7 @@
 | UART1 舵机只读 | [uart1_servo_read.py](../../device/k230/diagnostics/uart1_servo_read.py) | 按接线页连接 URT-2，1 Mbps；六舵机 PING / READ 均成功，错误 0x00 |
 | UART2 ↔ MSPM0 UART1 | [k230_uart2_test.py](../../device/k230/diagnostics/k230_uart2_test.py) | 先成功烧录 MSPM0 UART 固件；20/20 带序号和令牌的应答，原样回显不算通过 |
 
-三项均已有通过记录。双板 UART 于 2026-10-20 在接线、重新上电后首轮测试 19/20（仅第 1 包未应答），保持程序不变复测 20/20；上电首包问题尚未定位。只读脚本会校验应答 ID、长度、校验和与错误状态。
+三项均已有通过记录。双板 UART 于 2026-10-20 复现首包前额外 `00` 导致旧解析器整行丢弃，改为按帧头重新同步后，确认彻底断电的一轮首包与整轮 20/20 通过。只读脚本会校验应答 ID、长度、校验和与错误状态。
 
 ## Linux 编译与 IDE
 
@@ -50,7 +50,7 @@ sudo ./scripts/install-debug-usb-rules
 
 本机用户已属于 `plugdev` 和 `dialout`。pyOCD 配置为 `configs/mspm0/pyocd.yaml`（100 kHz，关闭自动解锁，使用页擦除）。2026-10-20 已通过 fireDAP 连接并读取 DP ID `0x6BA02477`、CPUID `0x410CC601` 和 128 KiB Flash / 32 KiB SRAM 容量。随后完成 UART 固件烧录、全 Flash 回读和启动日志检查；只有前 2 KiB 被改写，BCR/BSL 配置未变化。原程序备份与记录保存在本机 `data/logs/mspm0_uart_bringup_*/`。
 
-**调试连接会干扰运行**：当前 TI 设备包的连接序列会操作复位；实测 `attach` 后内核处于暂停状态，不能当作无侵入读取。通信测试前需明确恢复运行；电机运行中不要新连接调试器、打断点或单步。一次保持同一 SWD 会话并明确恢复运行的通信复测为 20/20，接收/应答计数各增加 20、丢弃计数为 0；退出调试器后复测也为 20/20。最初冷上电的首包丢失尚未复现，不能据此认定已修复。
+**调试连接会干扰运行**：当前 TI 设备包的连接序列会操作复位；实测 `attach` 后内核处于暂停状态，不能当作无侵入读取。通信测试前需明确恢复运行；电机运行中不要新连接调试器、打断点或单步。一次保持同一 SWD 会话并明确恢复运行的通信复测为 20/20，接收/应答计数各增加 20、丢弃计数为 0；退出调试器后复测也为 20/20。随后在不连接 SWD 的冷上电测试中复现并修复了帧前 `00` 导致的首包丢弃，详见通信例程。
 
 工具下载来源和 SHA256 见 `configs/mspm0/tools-lock.json`，Python 工具版本见 `configs/mspm0/requirements-tools.txt`。现有生成的 C 配置可直接编译，SysConfig 和 CCS 暂不需要安装。
 
@@ -60,9 +60,9 @@ K230 接入 OTG USB、CanMV IDE 停止并断开后，可直接从 Linux 运行�
 ./scripts/host tools/diagnostics/test_k230_mspm0_link.py
 ```
 
-当前 MSPM0 保留电机例程且已停车；运行此通信测试前需先烧录并运行 UART 测试固件，两份例程分别烧录运行。
+当前 MSPM0 已运行 UART 测试固件；电机例程与 UART 测试例程分别烧录运行。
 
-复用板端既有 20 轮测试，不控制舵机。需要每轮带序号与令牌的 `MSPM0_ACK`，20/20 才通过；日志在 `data/logs/k230_mspm0_link_*/`。当前已通过一轮完整 20/20 验收；首次上电测试存在一次首包无应答，不能据此认定上电同步已稳定。
+复用板端既有 20 轮测试，不控制舵机。需要每轮带序号与令牌的 `MSPM0_ACK`，20/20 才通过；日志在 `data/logs/k230_mspm0_link_*/`。冷上电首包已通过针对性复核：日志捕获帧前 `00`，新解析器正确接收首包并达到 20/20。同步读取 UART0 的命令见 [通信例程](../../device/mspm0/uart_link/README.md)。
 
 ## Windows Keil 编译
 
@@ -88,8 +88,27 @@ python device/mspm0/uart_link/build.py --toolchain D:/Keil_v5/ARM/ARMCLANG/bin
 
 2026-10-19 曾报 `E310: cannot read DP register 0x00` / `NO_ACK`；10 月 20 日 Linux 连接与读取已通过，Linux 下载与回读也已通过，原故障原因未定，Windows 本次未重测。此前未执行解锁、整片擦除或 NONMAIN 改写，故障证据见 [联调摘要](../history/2026-10-19-hardware-bringup.md)。
 
-## 备选：主控 USB / BSL 下载
+## 当前下载方式：主控 USB / BSL
 
-可使用立创 [MSPM0 在线烧录工具](https://wiki.lckfb.com/storage/html/mspm0-web-flasher/index.html)。Edge / Chrome 打开工具，按住 BSL → 按下并松开 RST → 松开 BSL，选择主控对应端口和本机生成的 HEX 下载；完成后断开网页串口、复位，再打开应用日志。BSL 波特率按工具设置，应用日志为 115200。下载会替换当前应用。
+fireDAP 当前停用。天猛星自身 Type-C 带 CH340 串口，可在 Linux 下载；主控由 USB 供电时断开其他外部 5V，保留两板 GND 共地。
 
-参考：[立创 Type-C / BSL](https://wiki.lckfb.com/zh-hans/web-tool/mspm0-web-flasher/introduce.html)、[fireDAP 操作说明](https://doc.embedfire.com/stm32_products/must_read/zh/latest/doc/quickstart/DAP/DAP.html)（目标器件和算法仍选 MSPM0）。
+在仓库根目录先启动命令，看到 `READY` 后，再按住 **BSL → 按下并松开 RST → 松开 BSL**：
+
+```bash
+./scripts/mspm0-build uart_link
+./scripts/mspm0-tools python tools/diagnostics/mspm0_bsl.py \
+  --hex device/mspm0/uart_link/build/gcc/uart1_link.hex --execute
+```
+
+本机默认主控端口为 `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0`，其他端口用 `--port`。工具按 9600/8N1 等待 BSL，使用默认密码；失败不会反复猜密码。只擦写映像覆盖的 Main Flash 页，不发送全片擦除、工厂复位或 NONMAIN 写入命令。写入后重新握手、核对两次映像 CRC 与范围外 Main Flash CRC，全部匹配才启动应用。
+
+本次 BSL 写入与另起会话的独立重复核验已真机通过。曾出现写后第一次 CRC 不一致，原失败日志已保留；遇到此情况可只核验、不重新擦写：
+
+```bash
+./scripts/mspm0-tools python tools/diagnostics/mspm0_bsl.py \
+  --hex device/mspm0/uart_link/build/gcc/uart1_link.hex --verify-only --start-app
+```
+
+不带 `--start-app` 时只核验。BSL 默认禁止逐字节读出，工具不修改这一策略；CRC 核验不能表述为逐字节回读。记录保存在本机 `data/logs/mspm0_bsl_*/`。
+
+也可用 Chrome/Edge 的 [立创在线烧录工具](https://wiki.lckfb.com/storage/html/mspm0-web-flasher/index.html)选择 HEX；其一键烧录包含 Main Flash 全片擦除。参考：[立创 Type-C / BSL](https://wiki.lckfb.com/zh-hans/web-tool/mspm0-web-flasher/introduce.html)、[TI BSL 协议](https://www.ti.com/lit/ug/slau887a/slau887a.pdf)、[fireDAP 操作说明](https://doc.embedfire.com/stm32_products/must_read/zh/latest/doc/quickstart/DAP/DAP.html)。

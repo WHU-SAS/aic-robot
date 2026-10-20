@@ -6,18 +6,13 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
-#include <string.h>
+#include "uart_request_parser.h"
 #include <ti/devices/msp/msp.h>
 #include <ti/driverlib/driverlib.h>
 #include <ti/driverlib/m0p/dl_core.h>
 
-#define LINE_CAPACITY 80U
-#define REQUEST_PREFIX "K230_TEST,"
-#define REQUEST_PREFIX_LEN 10U
-
 volatile uint32_t g_received_lines;
 volatile uint32_t g_acknowledged_lines;
-volatile uint32_t g_overflow_lines;
 
 static void put_string(UART_Regs *uart, const char *text)
 {
@@ -80,46 +75,37 @@ static void init_board(void)
 
 int main(void)
 {
-    char line[LINE_CAPACITY];
-    size_t used = 0U;
-    bool discard = false;
+    UartRequestParser parser = {0};
+    uint8_t first_bytes[32];
+    size_t first_used = 0U;
+    bool first_reported = false;
+    static const char hex[] = "0123456789ABCDEF";
     init_board();
     put_string(UART0, "MSPM0_UART1_TEST_READY 115200 8N1 TX=PA08 RX=PA09\r\n");
     for (;;) {
-        if (DL_UART_Main_isRXFIFOEmpty(UART1)) {
-            continue;
-        }
+        if (DL_UART_Main_isRXFIFOEmpty(UART1)) continue;
         uint8_t value = DL_UART_Main_receiveData(UART1);
-        if (value == '\r') {
-            continue;
+        if (!first_reported && first_used < sizeof(first_bytes)) {
+            first_bytes[first_used++] = value;
         }
-        if (value == '\n') {
-            if (!discard) {
-                line[used] = '\0';
-                g_received_lines++;
-                put_string(UART0, "UART1_RX ");
-                put_string(UART0, line);
-                put_string(UART0, "\r\n");
-                if (used > REQUEST_PREFIX_LEN &&
-                    strncmp(line, REQUEST_PREFIX, REQUEST_PREFIX_LEN) == 0) {
-                    put_string(UART1, "MSPM0_ACK,");
-                    put_string(UART1, line + REQUEST_PREFIX_LEN);
-                    put_string(UART1, "\n");
-                    g_acknowledged_lines++;
-                    put_string(UART0, "UART1_ACK_SENT\r\n");
-                }
-            } else {
-                g_overflow_lines++;
-                put_string(UART0, "UART1_LINE_DISCARDED\r\n");
+        if (!uart_request_feed(&parser, value)) continue;
+        g_received_lines++;
+        put_string(UART0, "UART1_RX ");
+        put_string(UART0, parser.line);
+        put_string(UART0, "\r\n");
+        put_string(UART1, "MSPM0_ACK,");
+        put_string(UART1, parser.line + UART_REQUEST_PREFIX_LEN);
+        put_string(UART1, "\n");
+        g_acknowledged_lines++;
+        put_string(UART0, "UART1_ACK_SENT\r\n");
+        if (!first_reported) {
+            put_string(UART0, "UART1_FIRST_RX_HEX ");
+            for (size_t i = 0; i < first_used; ++i) {
+                char pair[] = {hex[first_bytes[i] >> 4], hex[first_bytes[i] & 15U], ' ', '\0'};
+                put_string(UART0, pair);
             }
-            used = 0U;
-            discard = false;
-        } else if (!discard) {
-            if (value < 0x20U || value > 0x7EU || used >= sizeof(line) - 1U) {
-                discard = true;
-            } else {
-                line[used++] = (char)value;
-            }
+            put_string(UART0, "\r\n");
+            first_reported = true;
         }
     }
 }
