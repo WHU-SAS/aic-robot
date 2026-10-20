@@ -128,7 +128,7 @@ extern "C" {
 /* Port definition for Pin Group KEY */
 #define KEY_PORT                                                         (GPIOB)
 
-/* Defines for key: GPIOA.18 with pinCMx 40 on package pin 11 */
+/* B21 user key: GPIOB.21, IOMUX_PINCM49 (active low). */
 #define KEY_key_PIN                                             (DL_GPIO_PIN_21)
 #define KEY_key_IOMUX                                            (IOMUX_PINCM49)
 /* Port definition for Pin Group LED */

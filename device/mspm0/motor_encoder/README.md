@@ -6,7 +6,7 @@ MSPM0G3507 + TB6612 + 两台 MG513XP28_12V。当前为开环 PWM，编码器输�
 
 上电停止；松开 B21 后按下，0.5 秒内升到 20% PWM（10 kHz），再按一次或运行 5 秒自动停车。持续按住不反复触发。停车拉低 STBY，车轮可能惯性转动。
 
-2026-09-30 的[硬件记录](../../../hardware/car/现有硬件与功能.txt)记载按键启停、PWM、5 秒停车、编码器计数和前进测试已完成。尚未标定轮径、轮距与每圈计数，也未实现恒转速闭环。
+2026-09-30 的[硬件记录](../../../hardware/car/现有硬件与功能.txt)记载按键启停、PWM、5 秒停车、编码器计数和前进测试已完成。2026-10-20 Linux GCC 固件实机验收通过：上电停止、两轮手转正反计数、B21 启动、约 0.5 秒升至 PWM 1600、约 5 秒超时停车（`stop_reason=2`）。用户确认两轮运行正常；停车后反向计数为手动转轮。当前保留本例程，`run=0,pwm=0`。轮径、轮距与每圈计数尚未标定，也未实现恒转速闭环。
 
 ## 接线
 
@@ -34,7 +34,7 @@ Windows Keil 编译：
 python device/mspm0/motor_encoder/build.py --toolchain D:/Keil_v5/ARM/ARMCLANG/bin
 ```
 
-生成本目录 `build/motor_demo.hex` / `.axf`。Keil 和 USB / BSL 下载共用 [板端联调步骤](../../../docs/guides/k230-and-mspm0.md)。Linux SWD、UART 固件烧录与 GDB 调试已验证；电机固件尚待 Linux 实机验收。其他项目进度见 [项目首页](../../../README.md#当前情况)。
+生成本目录 `build/motor_demo.hex` / `.axf`。Keil 和 USB / BSL 下载共用 [板端联调步骤](../../../docs/guides/k230-and-mspm0.md)。Linux SWD、UART 固件烧录与 GDB 调试已验证；电机固件的 Linux 烧录、回读及悬空车轮测试也已通过。其他项目进度见 [项目首页](../../../README.md#当前情况)。
 
 入口 `main.c`，启停逻辑 `demo_control.c/.h`，引脚配置 `ti_msp_dl_config.c/.h`。`reference/empty.syscfg` 尚未重新生成验证；Keil 不自动运行 SysConfig，以当前 C 配置为准。重新生成时复核按键上拉、STBY、定时器启动及 UART 回环。旧模板隔离在 `third_party/reference/motor_template/`，不参与构建。
 

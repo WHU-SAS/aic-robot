@@ -23,4 +23,4 @@ UART2_MSPM0_LINK_PASS
 
 无应答时检查固件是否运行、共地、TX/RX 接线与波特率。`LOCAL_ECHO_ONLY` 表示本地回环，应拆除 TX/RX 短接。
 
-固件已在 Windows Keil 和 Linux GCC 编译（Main Flash 映像分别为 1672 / 1656 字节）；10 月 20 日 Linux 下烧录与逐字节回读已通过，USB 串口收到 `MSPM0_UART1_TEST_READY`，BCR/BSL 未变；接线、重新上电后首轮为 19/20（首包未应答），程序不变复测 20/20 通过，上电首包问题待定位。进度见 [项目首页](../../../README.md#当前情况)。
+固件已在 Windows Keil 和 Linux GCC 编译（Main Flash 映像分别为 1672 / 1656 字节）；10 月 20 日 Linux 下烧录与逐字节回读已通过，USB 串口收到 `MSPM0_UART1_TEST_READY`，BCR/BSL 未变；接线、重新上电后首轮为 19/20（首包未应答），程序不变复测 20/20 通过，上电首包问题待定位。随后切换到电机例程完成 Linux 实机验收；当前主控保留电机例程，复测本通信协议前需重新烧录本 UART 固件。进度见 [项目首页](../../../README.md#当前情况)。

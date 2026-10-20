@@ -36,7 +36,7 @@
 ./scripts/mspm0-tools python -m unittest discover -s device/mspm0/tests
 ```
 
-复用现有 C 源码、引脚配置和 TI SDK 的 GCC 启动文件、链接脚本、驱动库；产物在各工程 `build/gcc/`，包括 ELF、HEX、BIN、构建日志与校验记录。两份固件已通过编译、Main Flash 地址和中断向量核对。2026-10-20 已将 UART 固件在 Linux 烧录并逐字节回读通过，收到启动日志；电机固件尚未做 Linux 实机验收。
+复用现有 C 源码、引脚配置和 TI SDK 的 GCC 启动文件、链接脚本、驱动库；产物在各工程 `build/gcc/`，包括 ELF、HEX、BIN、构建日志与校验记录。两份固件已通过编译、Main Flash 地址和中断向量核对。2026-10-20 已将 UART 固件在 Linux 烧录并逐字节回读通过，收到启动日志；电机固件同日烧录、回读通过，并完成车轮悬空的按键启动、PWM 缓升、5 秒自动停车和编码器正反计数检查。
 
 2026-10-20 已在 UART 固件上实测 GDB 硬件断点与指令单步：命中 `main`，单步 PC 从 `0x28c` 前进到 `0x28e`，删除断点后恢复运行；未改写 Flash。VS Code 图形界面的 F5 操作尚未现场验证。
 
@@ -59,6 +59,8 @@ K230 接入 OTG USB、CanMV IDE 停止并断开后，可直接从 Linux 运行�
 ```bash
 ./scripts/host tools/diagnostics/test_k230_mspm0_link.py
 ```
+
+当前 MSPM0 保留电机例程且已停车；运行此通信测试前需先烧录并运行 UART 测试固件，两份例程分别烧录运行。
 
 复用板端既有 20 轮测试，不控制舵机。需要每轮带序号与令牌的 `MSPM0_ACK`，20/20 才通过；日志在 `data/logs/k230_mspm0_link_*/`。当前已通过一轮完整 20/20 验收；首次上电测试存在一次首包无应答，不能据此认定上电同步已稳定。
 
