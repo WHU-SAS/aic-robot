@@ -25,24 +25,30 @@ IDE停止并断开后，从仓库根目录运行：
 
 2026-10-20已验证板载麦克风16kHz/16bit/单声道采样、1秒WAV保存与回传；采样未见削波。忽略启动时约1秒的直流瞬态，预热1.5秒后统计。日志及录音仅在本地`data/logs/k230_audio_*/`，SD录音保存在`/sdcard/voice_probe/`。该程序不初始化UART，不控制底盘或舵机，不修改启动脚本。
 
-官方`keyword_spotting.py`为“小楠小楠”唤醒；`multi_kws.py`支持“小楠小楠”、英语go/stop/wow（[官方词表](https://www.kendryte.com/k230_canmv/en/main/example/ai/ai_demo_user_manual.html#multi-command-word-wake-up)）。本机SD卡有示例代码，但缺少`kws.kmodel`及`multi_kws.kmodel`，识别与播放尚未验证；新增中文口令需要匹配的模型。SD卡已有`car_voice/`自定义“前进”程序，其配置会占用UART1并发送运动指令，不能直接当无动作语音测试运行。
+### 自定义唤醒：“思达思达”
 
-### 自定义唤醒：“思达思达”升级方案
+唤醒词保存在`configs/voice/wake_word.json`，尚未录音注册或绑定动作。原卡实测CanMV v1.8不含`open_kws`；2026-10-20已通过USB将官方V3.0 Daily镜像`v1.8-67-g277ddb6 / nncase 2.11.0`写入备用TF卡，烧录工具返回成功。新系统已启动，USBDBG、语音模型加载、16kHz麦克风、1280×960拍照及校验回传、UART1六轴只读6/6、UART2底盘状态20/20均通过；本轮未发送运动或扭矩指令。
 
-唤醒词保存在`configs/voice/wake_word.json`；当前状态为待升级、待录音注册，尚未启用，也未绑定动作。用户2026-10-20同意先准备升级兼容方案。
+- 固件来自[官方Daily Build](https://download.kendryte.com/developer/releases/canmv_k230_micropython/daily_build/)，包含`31-OPEN-KWS`模型、特征资源和注册示例；版本、来源与哈希见[固件锁定记录](../../configs/k230/voice-firmware-lock.json)。压缩包与解压镜像均通过官方MD5校验；烧录成功不等于逐字节回读验证。
+- 原TF卡完整保留。旧卡12个应用/模型/配置文件另已导出至本机`data/backups/k230_pre_voice_upgrade_*/`并核对SHA256；不是整卡镜像备份。新卡不恢复旧`car_voice/start.py`为自动运行程序，其UART1运动指令与现有舵机接线冲突。
+- 下一步录三遍“思达思达”，先验证唤醒事件，动作绑定由用户指定。原标定、PID、速度和准备位保持不变；升级后实际定位与抓取精度尚未复核。
 
-- 当前板实测为CanMV v1.8 / nncase 2.11系列，`import open_kws`失败。官方最新稳定发行仍是v1.8；该模块于2026-10-16加入[开发源码](https://github.com/kendryte/canmv_k230/commit/f4c7ef90c3f1aa6ec230ce7ffaa0951d5b42e50a)。公开PreRelease的V3P0附件仍是旧的nncase 2.9构建，不能据发布页更新时间当作可用升级。
-- 候选路线：按[官方编译流程](https://www.kendryte.com/k230_canmv/en/main/userguide/how_to_build.html)构建`k230_canmv_v3p0_defconfig`，启用`open_kws`；核对源码CanMV `e2182e860ac978d8a3e1334ebf4bc4fcfa564af1`、SDK `effb2f82e822f4b5c4de2b8ee59e61a02b1a6171`及nncase 2.11配套库。源码仍保留USBDBG、UART1/2和现有FPIOA名称，但尚未编译或上板验证。
-- 必须配齐开放词汇专用`model/kws.kmodel`、`assets/`和`units.txt`（40×96输入、24×59输出）；旧二分类`kws.kmodel`和自定义“前进”的转导模型不能混用。目前尚未确认这套资源的可下载完整包；资源齐全且能加载前不刷卡。
-- 优先写备用TF卡，保留原卡作完整回退。现有12个应用/模型/配置文件已导出到本地`data/backups/k230_pre_voice_upgrade_*/`并通过SHA256校验，同时保存主机配置；这不是全卡或固件镜像备份。原始采集数据不上传。
-- 新卡先以无动作方式复核USBDBG连接、1280×960相机采集与现有定位、UART1六轴只读、UART2状态通信、16kHz音频和模型加载。保留原标定、PID、速度和准备位；任何兼容性改动另行记录。
-- 基础功能通过后，按官方流程录三遍“思达思达”，先只输出唤醒事件，统计重复唤醒、漏检和近音词误触发；动作绑定由用户后续指定。不恢复SD卡旧`car_voice/start.py`为自动启动程序。
-
-可重复检查当前固件接口及模型路径（不控制UART或运动；缺项时退出码2，路径存在也不等于模型已加载或识别通过）：
+IDE停止并断开后，可重复检查接口及资源，或额外加载并释放模型；均不控制运动、不打开麦克风：
 
 ```bash
 ./scripts/host tools/diagnostics/check_k230_voice.py
+./scripts/host tools/diagnostics/check_k230_voice.py --load-model
 ```
+
+新固件使用芯片唯一USB序列号；主机入口已兼容在仅连接一块CanMV时自动找到新串口，多板连接需明确`--port`。
+
+USB刷备用卡无需读卡器；进入BootROM后使用官方`k230-flash`，明确指定`SDCARD`、写入偏移`0x0`，不能沿用默认`EMMC`。重枚举权限安装一次：
+
+```bash
+sudo ./scripts/install-k230-usb-rules
+```
+
+烧录工具和镜像在本机`~/.local/share/aic-tools/k230-voice/`，原始日志、模型和录音不上传。识别准确率、录音注册及播放尚未验证；旧示例的“小楠小楠”固定模型不能替代本次开放词汇模型。
 
 ## Linux 编译与 IDE
 

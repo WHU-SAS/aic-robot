@@ -1,0 +1,2 @@
+# K230 BootROM and USB loader share VID/PID; retain access across re-enumeration.
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="29f1", ATTR{idProduct}=="0230", MODE="0660", GROUP="plugdev", TAG+="uaccess"

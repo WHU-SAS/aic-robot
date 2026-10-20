@@ -19,6 +19,13 @@ PORT = '/dev/serial/by-id/usb-Kendryte_CanMV_001000000-if00'
 
 class CameraLink:
     def __init__(self, port):
+        # Newer CanMV firmware uses a chip-specific USB serial number.
+        if port == PORT and not Path(port).exists():
+            devices = sorted(Path('/dev/serial/by-id').glob('usb-Kendryte_CanMV_*-if00'))
+            if len(devices) > 1:
+                raise RuntimeError('Multiple CanMV devices found; select one with --port')
+            if len(devices) == 1:
+                port = str(devices[0])
         self.port = serial.Serial(port, 921600, timeout=2, exclusive=True)
     def command(self, code, size=0):
         self.port.write(struct.pack('<BBI', 0x30, code, size))

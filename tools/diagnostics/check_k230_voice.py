@@ -34,6 +34,16 @@ for name in ['model/kws.kmodel','assets','units.txt','open_kws_app.py']:
   report['assets'][name]={'present':True,'directory':bool(st[0]&0x4000),'bytes':st[6]}
   if name=='assets':report['assets'][name]['files']=os.listdir(root+name)
  except OSError:report['assets'][name]={'present':False}
+if LOAD_MODEL:
+ engine=None
+ try:
+  import open_kws
+  engine=open_kws.Engine(root+'model/kws.kmodel',root+'assets')
+  report['model_load']={'passed':True}
+ except Exception as exc:
+  report['model_load']={'passed':False,'error':str(exc)}
+ finally:
+  if engine is not None:engine.deinit()
 print('VOICE_CAPABILITIES '+json.dumps(report))
 print('EXPORT_DONE')
 '''
@@ -42,6 +52,7 @@ print('EXPORT_DONE')
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port',default=PORT)
+    parser.add_argument('--load-model',action='store_true',help='Also initialize and release the open_kws model; no microphone or UART')
     args=parser.parse_args()
     requested=json.loads((ROOT/'configs/voice/wake_word.json').read_text())
     folder=ROOT/'data/logs'/datetime.now(ZoneInfo('Asia/Shanghai')).strftime('k230_voice_capabilities_%Y%m%d_%H%M%S_%f')
@@ -51,7 +62,7 @@ def main():
     try:
         link=CameraLink(args.port)
         report=None
-        for raw in link.execute(BOARD_PROBE,timeout=20):
+        for raw in link.execute('LOAD_MODEL='+repr(args.load_model)+'\n'+BOARD_PROBE,timeout=45 if args.load_model else 20):
             line=raw.decode(errors='replace')
             if line.startswith('VOICE_CAPABILITIES '):report=json.loads(line[19:])
             else:print(line,flush=True)
@@ -59,8 +70,9 @@ def main():
         record['capabilities']=report
         available=(all(report['interfaces'].values()) and report['uart_pins'] and
                    all(a['present'] for a in report['assets'].values()) and
-                   bool(report['assets'].get('assets',{}).get('files')))
-        record['status']='interfaces_and_paths_present' if available else 'upgrade_or_assets_required'
+                   bool(report['assets'].get('assets',{}).get('files')) and
+                   (not args.load_model or report.get('model_load',{}).get('passed',False)))
+        record['status']=('model_loaded' if args.load_model else 'interfaces_and_paths_present') if available else 'upgrade_or_assets_required'
         print(json.dumps(record,ensure_ascii=False,indent=2),flush=True)
         # Presence alone does not verify model loading, camera capture or recognition accuracy.
         return 0 if available else 2

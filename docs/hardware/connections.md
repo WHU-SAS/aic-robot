@@ -4,7 +4,7 @@
 
 | 部件 | 型号 / 配置 |
 | --- | --- |
-| 视觉 | CanMV-K230-LP4 V3.0；固件 v1.8-0-gc2d1f5c、MicroPython 1.21；CanMV IDE K230 4.0.9 |
+| 视觉 | CanMV-K230-LP4 V3.0；备用卡固件 v1.8-67-g277ddb6 / nncase 2.11.0（2026-10-20）；原卡 v1.8 保留；CanMV IDE K230 4.0.9 |
 | 机械臂 | 飞特 ST-3215-C018 ×6，ID 1～6，1 Mbps；URT-2 转接板 |
 | 底盘 | WHEELTEC R3X 两驱三轮底盘，MG513XP28_12V ×2，TB6612 双路稳压驱动板 |
 | 主控 / 调试器 | 立创天猛星 MSPM0G3507 / 野火 fireDAP |

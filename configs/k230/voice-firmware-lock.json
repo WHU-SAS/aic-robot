@@ -1,0 +1,49 @@
+{
+  "board": "CanMV-K230-LP4 V3.0",
+  "build": "v1.8-67-g277ddb6",
+  "nncase": "2.11.0",
+  "release_date": "2026-10-20",
+  "channel": "official daily_build",
+  "image_url": "https://download.kendryte.com/developer/releases/canmv_k230_micropython/daily_build/CanMV_K230_V3P0_micropython_v1.8-67-g277ddb6_nncase_v2.11.0.img.gz",
+  "image_bytes": 671088640,
+  "image_md5": "d041baf566fa8195219a72e2af7c4491",
+  "image_sha256": "daf51c9e72f0f189957cb0c754e6b1de59dd591d60ae5f7152fd24762eb3dab1",
+  "compressed_md5": "ad1fc28293788f53f21a82253b92c15e",
+  "compressed_sha256": "f12d521e275f6562ee05422eac94017a7c4918bafbd5d4e249c7df94164aa5a3",
+  "model": {
+    "path": "/sdcard/examples/31-OPEN-KWS/model/kws.kmodel",
+    "bytes": 947464,
+    "sha256": "5df8946a539dfd8edf9b896100f2a57692b75e5d4bdd6b7017e06614f6f2d0c6"
+  },
+  "flash_tool": {
+    "repository": "https://github.com/kendryte/k230_flash_py",
+    "commit": "887c75fd6ab942f82b88260f24c8c2dc5228e646",
+    "media_type": "SDCARD",
+    "offset": 0
+  },
+  "source_revisions": {
+    "superproject_k230_rtsmart": "effb2f82e822f4b5c4de2b8ee59e61a02b1a6171",
+    "canmv": "277ddb6ef340ca16d9eb231878727ec9e9a0b052",
+    "micropython": "0295137e60c0de862c8ee72d81c88d9e57e3973b",
+    "micropython_lib": "e025c843b60e93689f0f991d753010bb5bd6a722",
+    "micropyhon_mynewt_nimble": "42849560ba7906f023f61e5f7ff3709ba2c1dfca",
+    "lvgl": "c210a4efa2f474d0223d3e91c79963e1ae4ac0bc",
+    "pycparser": "3cf6bf5eb16f5eadd4a058e41596145c407a79ad",
+    "ybsdcard": "c6ce8fab643c8aad22b0db97b9ff1f10d4fd8d94",
+    "opensbi": "ea1ceab9f0af65251e4a5c7d943a1cfa5e9002d6",
+    "k230_rtsmart_examples": "b5297275a958919420beef2afa6ba839eefd6821",
+    "iperf": "c9b74229d0d9bfec6d2307b66b43c29a7665ad0b",
+    "k230_rtsmart_lib": "ace49c5bc05a929af7ec84e26146ebca569125fa",
+    "cJSON": "fb16e5cf358798aabb049655975cde8427101056",
+    "freetype": "1452355de99d22b0cba6ccc17bf5cdf3682ef61e",
+    "libwebsockets": "9e7b013a5c14df607269af705a79d958a6c707ff",
+    "mbedtls": "a3ff9bce6b1c554a91bb3ced0f83046442a1694c",
+    "mqttclient": "956e0c8dcac02d4b107ccb49f1990c7718b6b585",
+    "mynewt_nimble": "70da7f3a05c3ded36c08c56e481fb400c5c29bac",
+    "nncase_kmodels_v2_11": "0843f558a9cd9b9da1ddf45b214bd570ac628fc5",
+    "mpp": "1d761d12d84642c261a04d3c78ff15c4c5f0350a",
+    "rtsmart": "01d9d1c91fbd9dd68feedea15a370fbc3a25a3bf",
+    "aic8800_fw": "2a47560abfa473ef7bff32321ef3db94a469d92d",
+    "u_boot": "87041d630cdcd545dacfec19f1e90a093689dada"
+  }
+}
