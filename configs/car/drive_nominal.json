@@ -16,7 +16,8 @@
     "motor_label": "hardware/car/WHEELTEC_MG513XP28_12V电机_型号标签.jpg",
     "wheel_diameter": "hardware/car/电赛硬件采购计划_第1页.png",
     "encoder_manual": "https://www.scribd.com/document/1000178757/Wheeltec-直流电机开发手册-2025-10-20",
-    "gear_ratio_primary_build": "https://oshwhub.com/ylc00/simple-pid"
+    "gear_ratio_primary_build": "https://oshwhub.com/ylc00/simple-pid",
+    "track_width": "User supplied documentation value, 2026-10-20; left/right drive-wheel center distance, not an on-vehicle measurement"
   },
   "encoder_variant_evidence": [
     "Manufacturer manual table3-1: GMR500ppr has plastic rear cover; Hall13ppr is exposed",
@@ -24,5 +25,5 @@
     "Powered bench observed tens of thousands of counts per second; supports high-resolution variant but does not independently measure PPR"
   ],
   "measured_counts_per_wheel_revolution": null,
-  "track_width_mm": null
+  "track_width_mm": 119.2
 }
