@@ -2,7 +2,14 @@
   "wake_word": "思达思达",
   "language": "zh-CN",
   "backend": "open_kws",
-  "status": "enrolled_detection_tuning",
+  "status": "initial_test_accepted",
   "enrollment_file": "/sdcard/voice/sida_20261020_232905_002709/keyword.json",
-  "motion_binding": null
+  "motion_binding": null,
+  "detection_sensitivity": "sensitive",
+  "validation": {
+    "positive_utterances": 12,
+    "positive_wake_events": 11,
+    "near_phrase_test_wake_events": 6,
+    "near_phrase_false_wakes_accepted": true
+  }
 }

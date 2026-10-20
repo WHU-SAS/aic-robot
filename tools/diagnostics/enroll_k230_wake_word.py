@@ -39,16 +39,20 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', default=PORT)
     parser.add_argument('--listen', action='store_true', help='Test the registered word instead of enrolling')
-    parser.add_argument('--sensitivity', choices=('normal', 'sensitive', 'conservative'), default='normal',
-                        help='Official listening profile; enrollment always uses normal')
+    parser.add_argument('--sensitivity', choices=('normal', 'sensitive', 'conservative'),
+                        help='Override configured listening profile; enrollment always uses normal')
     parser.add_argument('--seconds', type=int, default=20, choices=range(5, 121), metavar='5..120')
     args = parser.parse_args()
-    if not args.listen and args.sensitivity != 'normal':
+    if not args.listen and args.sensitivity not in (None, 'normal'):
         parser.error('--sensitivity only applies to --listen')
     config_path = ROOT / 'configs/voice/wake_word.json'
     config = json.loads(config_path.read_text())
     if config['wake_word'] != '思达思达' or config['backend'] != 'open_kws':
         parser.error('This entry is configured for 思达思达 / open_kws only')
+    if args.listen:
+        args.sensitivity = args.sensitivity or config.get('detection_sensitivity', 'normal')
+        if args.sensitivity not in ('normal', 'sensitive', 'conservative'):
+            parser.error('Invalid detection_sensitivity in wake_word.json')
     stamp = datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y%m%d_%H%M%S_%f')
     folder = ROOT / 'data/logs' / ('k230_wake_' + stamp)
     folder.mkdir(parents=True)
