@@ -27,6 +27,7 @@ class InteropTests(unittest.TestCase):
             class Clock:
                 ms = 0
                 remainder = 0
+                button_press_at = None
                 def ticks_ms(self): return self.ms
                 def ticks_us(self): return self.ms * 1000
                 def ticks_diff(self, a, b): return a - b
@@ -34,6 +35,8 @@ class InteropTests(unittest.TestCase):
                     self.ms += amount
                     self.remainder += amount
                     while self.remainder >= 10:
+                        if self.button_press_at is not None:
+                            native.bridge_button(int(self.button_press_at <= self.ms < self.button_press_at + 200))
                         native.bridge_tick()
                         self.remainder -= 10
             clock = Clock()
@@ -64,10 +67,19 @@ class InteropTests(unittest.TestCase):
                 # Two runs without reboot: client synchronizes MCU's sequence watermark.
                 board.MODE = 'bench'; board.main(); board.main()
                 board.MODE = 'stop'; board.main()
+                # One short button press while driving, then release with heartbeats.
+                clock.button_press_at = clock.ms + 5800
+                board.MODE = 'button'; board.main()
+                clock.button_press_at = None
+                # Missing the button press must fail, stop, and never auto-retry.
+                board.MODE = 'button'
+                with self.assertRaises(RuntimeError): board.main()
+
             printed = [args[0][0] for args in output.call_args_list]
             self.assertEqual(printed.count('MOTOR_BENCH_PASS'), 2)
             self.assertIn('MOTOR_STATUS_PASS 20/20', printed)
             self.assertIn('MOTOR_STOP_PASS', printed)
+            self.assertEqual(printed.count('MOTOR_BUTTON_PASS'), 1)
             valid = b'R,00000001,STATUS,0,10,0,0,0,0,0,00000000'
             frame = b'@'+valid+(',%04X\n'%board.crc16(valid)).encode()
             self.assertEqual(board.decode(b'\x00noise'+frame)['run'], 0)

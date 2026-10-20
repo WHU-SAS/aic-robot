@@ -7,7 +7,7 @@
 - 上电停车，新的 START 才启动；方向沿用 `motor_encoder`，A/B 尚未对应到左右轮。
 - 10 kHz PWM，约0.5秒升到1600/8000（20%占空比），每次最多5秒。
 - K230 每轮心跳后等待200毫秒；连续1秒无新有效心跳，天猛星停止输出。STATUS 不续期；恢复心跳不会自动启动。
-- B21 只停车，不启动；30毫秒消抖，按住时拒绝 START。这个新按键语义已做离线测试，尚未实机按键复核。
+- B21 只停车，不启动；30毫秒消抖，按住时拒绝 START。2026-10-20实机短按停车通过，停车后继续心跳观察2秒未重启，编码器最终稳定。
 - 停车令 STBY=0、PWM=0，车轮可惯性滑行；不代表机械制动或车速立即为零。
 
 机械臂不参与本测试；PID、准备位和机械臂运行参数不变。
@@ -22,9 +22,12 @@
 ./scripts/host tools/diagnostics/test_k230_motor_uart.py                # 20轮状态查询，不启动
 ./scripts/host tools/diagnostics/test_k230_motor_uart.py --stop         # 停止输出并复查
 ./scripts/host tools/diagnostics/test_k230_motor_uart.py --execute --wheels-lifted
+./scripts/host tools/diagnostics/test_k230_motor_uart.py --execute --wheels-lifted --button
 ```
 
 最后一条必须先可靠架空两轮、手离开车轮。自动序列：坏校验帧不得启动 → START及重复命令 → 缓升并读取两路编码器 → STOP → 重新启动验证5秒时限 → 重新启动后不发心跳，验证1秒断链停车 → 最终STOP。遇错尝试STOP；脚本或USB连接消失后，由天猛星定时中断执行心跳超时。
+
+`--button`单独测试B21：先等待5秒，再启动一次；车轮转动时短按B21，要求收到`reason=2`及零输出，继续发送心跳观察2秒不得重启。没有按到、只触发5秒时限或其他异常均判失败，不自动重试。
 
 记录在本机 `data/logs/k230_motor_uart_*/`，不提交。首次实测：5秒停车首次被轮询观察到为5.18秒，断链为1.00秒；这是采样观察时刻，非直接测量PWM边沿。两路原始计数均变化，尚未标定每圈计数、轮径或换算速度，也没有恒转速闭环。
 

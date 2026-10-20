@@ -3,7 +3,7 @@
 from machine import UART, FPIOA
 import time
 
-MODE = "status"  # host sets "bench" only after explicit --execute --wheels-lifted
+MODE = "status"  # moving modes require host --execute --wheels-lifted
 
 def crc16(data):
     crc = 0xFFFF
@@ -166,6 +166,44 @@ def run_bench(link):
     link.stopped(1)
     print('MOTOR_BENCH_PASS')
 
+def run_button(link):
+    link.expect('STOP')
+    link.stopped(1)
+    print('MOTOR_BUTTON_READY: 5 seconds until one start; press B21 after wheels turn')
+    time.sleep_ms(5000)
+    start = link.expect('START')
+    if not start['run']:
+        raise RuntimeError('START not applied')
+    print('MOTOR_BUTTON_RUNNING: short press B21 once now')
+    started = time.ticks_ms()
+    maximum = 0
+    while time.ticks_diff(time.ticks_ms(), started) < 5400:
+        state = link.expect('HB')
+        maximum = max(maximum, state['pwm'])
+        if not state['run']:
+            if state['reason'] != 2 or state['pwm']:
+                raise RuntimeError('B21 stop not observed; no automatic retry: ' + str(state))
+            break
+        time.sleep_ms(100)
+    else:
+        raise RuntimeError('B21 stop not observed before run limit')
+    if maximum == 0:
+        raise RuntimeError('Stopped before any driven sample; repeat only after user review')
+    elapsed = (state['ms'] - start['ms']) & 0xFFFFFFFF
+    print('MOTOR_CHECK PASS button_stop', elapsed)
+    # Keep sending heartbeats after the button press/release: neither may restart.
+    stopped_at = time.ticks_ms()
+    while time.ticks_diff(time.ticks_ms(), stopped_at) < 2000:
+        state = link.expect('HB')
+        if state['run'] or state['pwm'] or state['reason'] != 2:
+            raise RuntimeError('Stopped state changed after B21: ' + str(state))
+        time.sleep_ms(100)
+    link.stopped(2)
+    print('MOTOR_CHECK PASS button_no_restart')
+    link.expect('STOP')
+    link.stopped(1)
+    print('MOTOR_BUTTON_PASS')
+
 def main():
     link = MotorLink()
     failed = False
@@ -173,6 +211,8 @@ def main():
         link.sync()
         if MODE == 'bench':
             run_bench(link)
+        elif MODE == 'button':
+            run_button(link)
         elif MODE == 'stop':
             link.expect('STOP')
             link.stopped(1)
@@ -188,7 +228,7 @@ def main():
         failed = True
         raise
     finally:
-        if MODE == 'bench' and failed:
+        if MODE in ('bench', 'button') and failed:
             try:
                 link.expect('STOP')
             except BaseException as exc:

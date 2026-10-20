@@ -6,14 +6,16 @@ static MotorParser parser;
 static uint32_t milliseconds;
 static int32_t a, b;
 static char response[180];
+static bool button;
+void bridge_button(int pressed) { button = pressed != 0; }
 void bridge_reset(void)
 {
     state = (RemoteControl){0}; parser = (MotorParser){0};
-    milliseconds = 0; a = b = 0;
+    milliseconds = 0; a = b = 0; button = false;
 }
 void bridge_tick(void)
 {
-    remote_step(&state, false);
+    remote_step(&state, button);
     milliseconds += 10;
     if (state.pwm) { ++a; --b; }
 }

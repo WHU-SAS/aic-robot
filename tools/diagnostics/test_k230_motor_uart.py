@@ -18,12 +18,15 @@ def main():
     parser.add_argument('--port', default=PORT)
     parser.add_argument('--execute', action='store_true', help='Run the approved lifted-wheel bench sequence')
     parser.add_argument('--wheels-lifted', action='store_true', help='Confirm both drive wheels are securely suspended')
+    parser.add_argument('--button', action='store_true', help='One start then manually press B21; requires --execute --wheels-lifted')
     parser.add_argument('--stop', action='store_true', help='Send STOP and confirm zero output')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
     if args.execute and (not args.wheels_lifted or args.stop):
         parser.error('--execute requires --wheels-lifted and cannot be combined with --stop')
-    mode = 'bench' if args.execute else 'stop' if args.stop else 'status'
+    if args.button and not args.execute:
+        parser.error('--button requires --execute --wheels-lifted')
+    mode = 'button' if args.button else 'bench' if args.execute else 'stop' if args.stop else 'status'
     out = args.output or ROOT/'data/logs'/datetime.now().strftime('k230_motor_uart_%Y%m%d_%H%M%S_%f')
     out.mkdir(parents=True, exist_ok=True)
     source = (ROOT/'device/k230/diagnostics/k230_motor_uart.py').read_text()
@@ -50,7 +53,7 @@ def main():
             elif line.startswith('MOTOR_CHECK PASS '):
                 result['checks'].append(line[len('MOTOR_CHECK PASS '):])
         expected = {'bench': 'MOTOR_BENCH_PASS', 'status': 'MOTOR_STATUS_PASS 20/20',
-                    'stop': 'MOTOR_STOP_PASS'}[mode]
+                    'stop': 'MOTOR_STOP_PASS', 'button': 'MOTOR_BUTTON_PASS'}[mode]
         if expected not in lines:
             raise RuntimeError('Board did not complete ' + mode + '; see board_log.txt')
         result['status'] = 'passed'
