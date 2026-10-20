@@ -23,4 +23,4 @@ UART2_MSPM0_LINK_PASS
 
 无应答时检查固件是否运行、共地、TX/RX 接线与波特率。`LOCAL_ECHO_ONLY` 表示本地回环，应拆除 TX/RX 短接。
 
-固件已在 Windows Keil 和 Linux GCC 编译（Main Flash 映像分别为 1672 / 1656 字节）；SWD E310 / NO_ACK 尚未解决，未完成烧录验收；上面是验收标准，非已通过结果。进度见 [项目首页](../../../README.md#当前情况)。
+固件已在 Windows Keil 和 Linux GCC 编译（Main Flash 映像分别为 1672 / 1656 字节）；10 月 20 日 Linux 下 SWD 连接与寄存器读取已通过，固件下载及通信验收待完成；上面是验收标准，非已通过结果。进度见 [项目首页](../../../README.md#当前情况)。
