@@ -10,11 +10,16 @@ ROOT = '/sdcard/examples/31-OPEN-KWS/'
 CHUNK = 2560
 
 
-def engine():
+def engine(sensitivity="normal"):
     eng = open_kws.Engine(ROOT + 'model/kws.kmodel', ROOT + 'assets')
     eng.set_quality(clip_ratio=0.005, min_snr=10.0)
-    eng.set_sensitivity('normal')
-    eng.set_verify(n_hyps=8, alpha=2.0, delta=1.25)
+    profiles = {'normal': (8, 2.0, 1.25), 'sensitive': (8, 0.0, 0.0),
+                'conservative': (3, 2.0, 1.25)}
+    if sensitivity not in profiles:
+        raise ValueError('Unknown sensitivity')
+    eng.set_sensitivity(sensitivity)
+    n_hyps, alpha, delta = profiles[sensitivity]
+    eng.set_verify(n_hyps=n_hyps, alpha=alpha, delta=delta)
     return eng
 
 
@@ -136,12 +141,12 @@ def finalize(folder):
         gc.collect()
 
 
-def listen(path, seconds):
+def listen(path, seconds, sensitivity="normal"):
     eng, audio, stream = None, None, None
     try:
         with open(path) as f:
             rec = json.load(f)
-        eng = engine()
+        eng = engine(sensitivity)
         eng.add_keyword(rec)
         audio = PyAudio()
         stream = audio.open(format=paInt16, channels=1, rate=16000,
@@ -151,13 +156,25 @@ def listen(path, seconds):
             os.exitpoint()
             stream.read()
         eng.reset()
+        print('VOICE_LISTEN_SETTINGS ' + json.dumps({'sensitivity': sensitivity,
+              'seconds': seconds, 'enrollment_file': path,
+              'keyword_threshold': rec['threshold'], 'mic_volume': rec.get('mic_volume', 100)}))
         print('VOICE_LISTEN_READY')
         count = 0
-        for _ in range(int(seconds * 16000 / CHUNK)):
+        began = time.ticks_ms()
+        for index in range(int(seconds * 16000 / CHUNK)):
             os.exitpoint()
-            for event in eng.push(stream.read()):
+            pcm = stream.read()
+            if len(pcm) != CHUNK * 2:
+                raise RuntimeError('Incomplete detection audio chunk')
+            for event in eng.push(pcm):
                 count += 1
                 print('VOICE_WAKE ' + json.dumps(event))
+            if index % 6 == 5:
+                print('VOICE_STATS ' + json.dumps(eng.stats()))
+        print('VOICE_LISTEN_SUMMARY ' + json.dumps({'wake_count': count,
+              'wall_ms': time.ticks_diff(time.ticks_ms(), began),
+              'audio_ms': int(seconds * 16000 / CHUNK) * 160, 'stats': eng.stats()}))
         print('VOICE_LISTEN_DONE ' + str(count))
     finally:
         if stream is not None:

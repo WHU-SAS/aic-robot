@@ -27,11 +27,11 @@ IDE停止并断开后，从仓库根目录运行：
 
 ### 自定义唤醒：“思达思达”
 
-唤醒词保存在`configs/voice/wake_word.json`，尚未录音注册或绑定动作。原卡实测CanMV v1.8不含`open_kws`；2026-10-20已通过USB将官方V3.0 Daily镜像`v1.8-67-g277ddb6 / nncase 2.11.0`写入备用TF卡，烧录工具返回成功。新系统已启动，USBDBG、语音模型加载、16kHz麦克风、1280×960拍照及校验回传、UART1六轴只读6/6、UART2底盘状态20/20均通过；本轮未发送运动或扭矩指令。
+唤醒词保存在`configs/voice/wake_word.json`，已完成三段录音注册；正常档用户初测约30%漏检，正在对照灵敏度，未绑定动作。原卡实测CanMV v1.8不含`open_kws`；2026-10-20已通过USB将官方V3.0 Daily镜像`v1.8-67-g277ddb6 / nncase 2.11.0`写入备用TF卡，烧录工具返回成功。新系统已启动，USBDBG、语音模型加载、16kHz麦克风、1280×960拍照及校验回传、UART1六轴只读6/6、UART2底盘状态20/20均通过；本轮未发送运动或扭矩指令。
 
 - 固件来自[官方Daily Build](https://download.kendryte.com/developer/releases/canmv_k230_micropython/daily_build/)，包含`31-OPEN-KWS`模型、特征资源和注册示例；版本、来源与哈希见[固件锁定记录](../../configs/k230/voice-firmware-lock.json)。压缩包与解压镜像均通过官方MD5校验；烧录成功不等于逐字节回读验证。
 - 原TF卡完整保留。旧卡12个应用/模型/配置文件另已导出至本机`data/backups/k230_pre_voice_upgrade_*/`并核对SHA256；不是整卡镜像备份。新卡不恢复旧`car_voice/start.py`为自动运行程序，其UART1运动指令与现有舵机接线冲突。
-- 下一步录三遍“思达思达”，先验证唤醒事件，动作绑定由用户指定。原标定、PID、速度和准备位保持不变；升级后实际定位与抓取精度尚未复核。
+- 使用同一注册结果对照正常/灵敏档，结合用户实际说话次数核对漏检和误唤醒；动作绑定由用户指定。原标定、PID、速度和准备位保持不变；升级后实际定位与抓取精度尚未复核。
 
 IDE停止并断开后，可重复检查接口及资源，或额外加载并释放模型；均不控制运动、不打开麦克风：
 
@@ -47,9 +47,10 @@ IDE停止并断开后，可重复检查接口及资源，或额外加载并释�
 ```bash
 ./scripts/host tools/diagnostics/enroll_k230_wake_word.py
 ./scripts/host tools/diagnostics/enroll_k230_wake_word.py --listen --seconds 20
+./scripts/host tools/diagnostics/enroll_k230_wake_word.py --listen --sensitivity sensitive --seconds 60
 ```
 
-距麦克风30～50cm；每段按回车后先静音预热约7秒，看到“现在请说”再自然说一遍“思达思达”。说完静音约0.64秒自动结束，共三段；不合格仅重录当前段。采用官方正常灵敏度与录音质量检查，注册成功后保存SD卡会话下的`keyword.json`，更新唤醒配置路径。原始PCM在SD卡`/sdcard/voice/sida_*/`，注册结果及日志在本机`data/logs/k230_wake_*/`，均不上传；不设置开机自启、不绑定运动。`--listen`只打印唤醒事件，计数不是识别准确率。
+距麦克风30～50cm；每段按回车后先静音预热约7秒，看到“现在请说”再自然说一遍“思达思达”。说完静音约0.64秒自动结束，共三段；不合格仅重录当前段。采用官方正常灵敏度与录音质量检查，注册成功后保存SD卡会话下的`keyword.json`，更新唤醒配置路径。原始PCM在SD卡`/sdcard/voice/sida_*/`，注册结果及日志在本机`data/logs/k230_wake_*/`，均不上传；不设置开机自启、不绑定运动。`--listen`不控制运动；默认正常档，`--sensitivity sensitive`为官方灵敏档（两道判定一起调整），仅当前检测生效，不重写注册文件。日志记录档位、检测时长、周期统计和拒绝计数；计数不是识别准确率，需结合用户实际说话次数及内容判定漏检和误触发。
 
 USB刷备用卡无需读卡器；进入BootROM后使用官方`k230-flash`，明确指定`SDCARD`、写入偏移`0x0`，不能沿用默认`EMMC`。重枚举权限安装一次：
 
@@ -57,7 +58,7 @@ USB刷备用卡无需读卡器；进入BootROM后使用官方`k230-flash`，明�
 sudo ./scripts/install-k230-usb-rules
 ```
 
-烧录工具和镜像在本机`~/.local/share/aic-tools/k230-voice/`，原始日志、模型和录音不上传。识别准确率、录音注册及播放尚未验证；旧示例的“小楠小楠”固定模型不能替代本次开放词汇模型。
+烧录工具和镜像在本机`~/.local/share/aic-tools/k230-voice/`，原始日志、模型和录音不上传。检测准确率及播放尚未验证；旧示例的“小楠小楠”固定模型不能替代本次开放词汇模型。
 
 ## Linux 编译与 IDE
 

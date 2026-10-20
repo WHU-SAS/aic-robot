@@ -2,7 +2,7 @@
   "wake_word": "思达思达",
   "language": "zh-CN",
   "backend": "open_kws",
-  "status": "firmware_verified_pending_enrollment",
-  "enrollment_file": null,
+  "status": "enrolled_detection_tuning",
+  "enrollment_file": "/sdcard/voice/sida_20261020_232905_002709/keyword.json",
   "motion_binding": null
 }

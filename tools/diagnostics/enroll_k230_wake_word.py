@@ -30,7 +30,7 @@ def execute(link, source, call, timeout):
             print('开始检测。请每隔约3秒说一次“思达思达”；这里只打印事件。', flush=True)
         elif line.startswith('VOICE_WAKE '):
             print('已唤醒：思达思达  ' + line[11:], flush=True)
-        elif not line.startswith(('VOICE_PROGRESS ', 'VOICE_ENROLLED ')):
+        elif not line.startswith(('VOICE_PROGRESS ', 'VOICE_ENROLLED ', 'VOICE_STATS ')):
             print(line, flush=True)
     return lines
 
@@ -39,8 +39,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', default=PORT)
     parser.add_argument('--listen', action='store_true', help='Test the registered word instead of enrolling')
+    parser.add_argument('--sensitivity', choices=('normal', 'sensitive', 'conservative'), default='normal',
+                        help='Official listening profile; enrollment always uses normal')
     parser.add_argument('--seconds', type=int, default=20, choices=range(5, 121), metavar='5..120')
     args = parser.parse_args()
+    if not args.listen and args.sensitivity != 'normal':
+        parser.error('--sensitivity only applies to --listen')
     config_path = ROOT / 'configs/voice/wake_word.json'
     config = json.loads(config_path.read_text())
     if config['wake_word'] != '思达思达' or config['backend'] != 'open_kws':
@@ -52,6 +56,10 @@ def main():
     source = (ROOT / 'device/k230/audio/wake_word.py').read_text()
     record = {'status': 'failed', 'motion_commands': False, 'remote_session': remote,
               'mode': 'listen' if args.listen else 'enroll', 'takes': []}
+    if args.listen:
+        record.pop('remote_session')
+        record.update(enrollment_file=config.get('enrollment_file'),
+                      sensitivity=args.sensitivity, seconds=args.seconds)
     link, lines = None, []
     try:
         if args.listen:
@@ -59,10 +67,13 @@ def main():
                 raise RuntimeError('尚未注册唤醒词，请先不带 --listen 运行')
             input('IDE停止并断开。按回车开始检测（预热结束后会提示）……')
             link = CameraLink(args.port)
-            lines += execute(link, source, 'listen(%r,%d)' % (config['enrollment_file'], args.seconds), args.seconds + 20)
+            lines += execute(link, source, 'listen(%r,%d,%r)' % (config['enrollment_file'], args.seconds, args.sensitivity), args.seconds + 20)
             if not any(x.startswith('VOICE_LISTEN_DONE ') for x in lines):
                 raise RuntimeError('检测未完成，详见日志')
             record['wake_count'] = int(next(x.split()[-1] for x in lines if x.startswith('VOICE_LISTEN_DONE ')))
+            summary = next((json.loads(x[len('VOICE_LISTEN_SUMMARY '):]) for x in lines
+                            if x.startswith('VOICE_LISTEN_SUMMARY ')), None)
+            record['summary'] = summary
             record['status'] = 'detection_completed'
             return 0
         print('IDE请停止并断开；距麦克风30～50cm，正常音量。每段看到“现在请说”后再开口。')
