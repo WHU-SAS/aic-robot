@@ -11,7 +11,7 @@
 | 现有电池 | WHEELTEC E326S，标签 10.8 V、2550 mAh、最大持续放电 6 A；充电上限 12.6 V |
 | 尚未接入 | 八路巡线模块 LineFollower_8CH V1.0、ICM-42688 V1.2 |
 
-机械臂零位、方向和限位见 [关节映射](../../configs/arm/joint_mapping.json)。原始手册和照片在 [hardware/car](../../hardware/car)。轮径、轮距、减速比、编码器每圈计数和输出电平尚待实测。
+机械臂零位、方向和限位见 [关节映射](../../configs/arm/joint_mapping.json)。原始手册和照片在 [hardware/car](../../hardware/car)。轮径先采用采购资料标称65 mm；减速比及每圈计数待核对对应电机型号资料，轮距尚未确定。标称值不记作实测。
 
 ## 现有 PC 抓取
 
@@ -52,6 +52,8 @@ IO_5 与 IO_3 同排，IO_6 与 IO_26 同排。MSPM0 UART0 的 PA10 TX / PA11 RX
 主控由自身 Type-C 供电；VREF 是电压参考，不是供电输出。RST 可接已确认的 NRST，用于硬件复位或 Connect under Reset。下载设置见 [板端联调](../guides/k230-and-mspm0.md)。
 
 ## 电机与供电
+
+2026-10-20只读采样确认：用户只手转左轮时A路计数大幅变化，B路基本稳定，因此 **A=左轮、B=右轮**。车头按用户确认的此前电机测试前进方向；该方向下原始编码计数A增加、B减少。当前驱动方向设置两路均为 `MOTOR_*_REVERSE=0`；此处只记录对应关系，未改动驱动方向或计数符号。
 
 电机控制引脚及验收见 [底盘例程](../../device/mspm0/motor_encoder/README.md#接线)。驱动板手册标称输入 4.5～15 V，单路持续 ≤1.2 A、峰值 ≤3.2 A（不可持续）。主控由 USB 供电时，不再接驱动板的 5V/3V3 输出，只共地；电池不得直接接主控 Type-C、5V 或 3V3。
 
