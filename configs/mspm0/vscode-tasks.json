@@ -1,0 +1,41 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "MSPM0: build UART link",
+      "type": "process",
+      "command": "${workspaceFolder}/scripts/mspm0-build",
+      "args": [
+        "uart_link"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [
+        "$gcc"
+      ]
+    },
+    {
+      "label": "MSPM0: build Motor encoder",
+      "type": "process",
+      "command": "${workspaceFolder}/scripts/mspm0-build",
+      "args": [
+        "motor_encoder"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": false
+      },
+      "problemMatcher": [
+        "$gcc"
+      ]
+    }
+  ]
+}

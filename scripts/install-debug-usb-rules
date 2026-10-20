@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+if [ "$(id -u)" -ne 0 ]; then
+    echo "Run with sudo: sudo $0" >&2
+    exit 1
+fi
+aic_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+getent group plugdev >/dev/null
+install -m 0644 "$aic_root/configs/mspm0/60-aic-debug.rules" /etc/udev/rules.d/60-aic-debug.rules
+udevadm control --reload-rules
+udevadm trigger --subsystem-match=usb --action=add
+echo 'USB rules installed. Reconnect fireDAP; SWD/flash has not been started.'

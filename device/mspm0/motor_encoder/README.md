@@ -26,7 +26,9 @@ MSPM0G3507 + TB6612 + 两台 MG513XP28_12V。当前为开环 PWM，编码器输�
 
 ## 编译与下载
 
-在仓库根目录运行：
+Linux 在仓库根目录运行 `./scripts/mspm0-build motor_encoder`，生成 `build/gcc/motor_demo.elf` / `.hex` / `.bin`。
+
+Windows Keil 编译：
 
 ```powershell
 python device/mspm0/motor_encoder/build.py --toolchain D:/Keil_v5/ARM/ARMCLANG/bin

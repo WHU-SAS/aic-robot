@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+aic_tools="${AIC_TOOLS_ROOT:-$HOME/.local/share/aic-tools}"
+export PATH="$aic_tools/mspm0-venv/bin:$aic_tools/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin:$aic_tools/cmsis-toolbox-linux-amd64/bin:$PATH"
+export CMSIS_PACK_ROOT="${CMSIS_PACK_ROOT:-$HOME/.cache/arm/packs}"
+export PYTHONPATH=
+if [ "$#" -eq 0 ]; then
+    arm-none-eabi-gcc --version | head -n 1
+    arm-none-eabi-gdb --version | head -n 1
+    pyocd --version
+    cbuild --version
+    ninja --version
+else
+    exec "$@"
+fi

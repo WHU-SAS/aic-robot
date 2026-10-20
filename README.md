@@ -13,7 +13,7 @@ K230 提取蓝色 20 mm 方块特征，Linux PC 解算位姿、FK/IK 并通过 U
 | K230 直连舵机 | UART1 回环 10/10、经 URT-2 只读六舵机 6/6 通过；运动仍由 PC 控制 |
 | 底盘电机与编码器 | 2026-09-30 记录已完成按键启停、PWM、5 秒停车、计数和前进测试；当前开环控制 |
 | K230 ↔ MSPM0 | 测试固件已编译，尚未烧录成功；SWD 报 E310 / NO_ACK，原因未定，通信未验收 |
-| 软件检查 | Linux 离线检查和 52 项单元测试通过；迁移后的 Windows Keil 工程尚待实机重编译 |
+| 软件检查 | Linux 离线检查和 52 项单元测试通过；两个 MSPM0 固件已用 Linux GCC 编译，烧录及 SWD 待验证 |
 
 **下一步：解决 MSPM0 下载故障并验证双板通信。** 指定位置放置、自动判断夹起和整车协同尚未实现。当前标定的历史 XY 拟合 RMS 约 8.4 mm，不等于实测抓取精度。
 
@@ -37,7 +37,7 @@ K230 提取蓝色 20 mm 方块特征，Linux PC 解算位姿、FK/IK 并通过 U
 | 抓取动作、偏移、日志 | [抓取流程](docs/guides/arm/K230_ONBOARD_PICK.md) |
 | 当前 PID 和运动参数 | [舵机基线](docs/guides/arm/BASELINE.md) |
 | 接线、供电、硬件型号 | [硬件接线](docs/hardware/connections.md) |
-| CanMV 测试、Keil 编译和下载 | [板端联调](docs/guides/k230-and-mspm0.md) |
+| CanMV 测试、Linux / Keil 编译和下载 | [板端联调](docs/guides/k230-and-mspm0.md) |
 | 电机 / 编码器实验 | [底盘例程](device/mspm0/motor_encoder/README.md) |
 | UART 协议与验收 | [双板通信例程](device/mspm0/uart_link/README.md) |
 | SWD 故障证据 | [2026-10-19 联调摘要](docs/history/2026-10-19-hardware-bringup.md) |

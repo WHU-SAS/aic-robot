@@ -1,0 +1,41 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "MSPM0: debug UART link",
+      "type": "cortex-debug",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "servertype": "pyocd",
+      "serverpath": "${env:HOME}/.local/share/aic-tools/mspm0-venv/bin/pyocd",
+      "targetId": "mspm0g3507",
+      "serverArgs": [
+        "--config",
+        "${workspaceFolder}/configs/mspm0/pyocd.yaml"
+      ],
+      "armToolchainPath": "${env:HOME}/.local/share/aic-tools/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin",
+      "executable": "${workspaceFolder}/device/mspm0/uart_link/build/gcc/uart1_link.elf",
+      "svdFile": "${env:HOME}/.cache/arm/packs/TexasInstruments/MSPM0G1X0X_G3X0X_DFP/1.3.1/03_SVD/MSPM0G350X.svd",
+      "preLaunchTask": "MSPM0: build UART link",
+      "runToEntryPoint": "main"
+    },
+    {
+      "name": "MSPM0: debug Motor encoder",
+      "type": "cortex-debug",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "servertype": "pyocd",
+      "serverpath": "${env:HOME}/.local/share/aic-tools/mspm0-venv/bin/pyocd",
+      "targetId": "mspm0g3507",
+      "serverArgs": [
+        "--config",
+        "${workspaceFolder}/configs/mspm0/pyocd.yaml"
+      ],
+      "armToolchainPath": "${env:HOME}/.local/share/aic-tools/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin",
+      "executable": "${workspaceFolder}/device/mspm0/motor_encoder/build/gcc/motor_demo.elf",
+      "svdFile": "${env:HOME}/.cache/arm/packs/TexasInstruments/MSPM0G1X0X_G3X0X_DFP/1.3.1/03_SVD/MSPM0G350X.svd",
+      "preLaunchTask": "MSPM0: build Motor encoder",
+      "runToEntryPoint": "main"
+    }
+  ]
+}

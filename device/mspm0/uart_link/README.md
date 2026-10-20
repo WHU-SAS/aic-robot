@@ -2,6 +2,8 @@
 
 MSPM0G3507 UART1 ↔ K230 UART2，115200/8N1、无流控。接线见 [硬件接线](../../../docs/hardware/connections.md#k230-uart2--mspm0-uart1)，编译、Keil 工程和下载步骤见 [板端联调](../../../docs/guides/k230-and-mspm0.md)。
 
+Linux 在仓库根目录运行 `./scripts/mspm0-build uart_link`，生成本目录 `build/gcc/uart1_link.elf` / `.hex` / `.bin`。
+
 ## 程序与协议
 
 - [main.c](main.c) 接收 `K230_TEST,<序号>,<令牌>\n`，回复 `MSPM0_ACK,<序号>,<令牌>\n`。
@@ -21,4 +23,4 @@ UART2_MSPM0_LINK_PASS
 
 无应答时检查固件是否运行、共地、TX/RX 接线与波特率。`LOCAL_ECHO_ONLY` 表示本地回环，应拆除 TX/RX 短接。
 
-目前固件已编译并检查 HEX（1672 字节），因 SWD E310 / NO_ACK 尚未烧录成功；上面是验收标准，非已通过结果。进度见 [项目首页](../../../README.md#当前情况)。
+固件已在 Windows Keil 和 Linux GCC 编译（Main Flash 映像分别为 1672 / 1656 字节）；SWD E310 / NO_ACK 尚未解决，未完成烧录验收；上面是验收标准，非已通过结果。进度见 [项目首页](../../../README.md#当前情况)。

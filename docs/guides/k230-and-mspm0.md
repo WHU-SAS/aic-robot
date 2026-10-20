@@ -14,6 +14,42 @@
 
 前两项已有通过记录；第三项受 MSPM0 下载故障阻塞。只读脚本会校验应答 ID、长度、校验和与错误状态。
 
+## Linux 编译与 IDE
+
+本机命令行工具位于 `~/.local/share/aic-tools/`，Python 工具环境独立；IDE 插件和设备包分别安装于 VS Code 与 CMSIS 缓存。
+
+| 工具 | 版本 |
+| --- | --- |
+| Arm GNU（含 GCC / GDB / objcopy） | 14.3.Rel1 |
+| pyOCD / CMSIS-Toolbox | 0.46.0 / 2.15.0 |
+| TI MSPM0G1X0X_G3X0X_DFP | 1.3.1 |
+| Keil Studio / Cortex-Debug | 1.20.3 / 1.12.1（VS Code 插件） |
+| clangd / Ninja | 23.1.0 / 1.13.2 |
+
+在仓库根目录执行，以下命令均不访问硬件：
+
+```bash
+./scripts/mspm0-tools                       # 查看工具版本
+./scripts/mspm0-build all                   # 编译两个工程
+./scripts/mspm0-build uart_link             # 只编译通信固件
+./scripts/mspm0-build motor_encoder         # 只编译电机固件
+./scripts/mspm0-tools python -m unittest discover -s device/mspm0/tests
+```
+
+复用现有 C 源码、引脚配置和 TI SDK 的 GCC 启动文件、链接脚本、驱动库；产物在各工程 `build/gcc/`，包括 ELF、HEX、BIN、构建日志与校验记录。两份固件已通过编译、Main Flash 地址和中断向量核对，**尚未在 Linux 烧录或运行验收**。
+
+VS Code 已配置 `Ctrl+Shift+B` 编译任务和 UART / 电机两项 Cortex-Debug 启动项。调试启动会连接并下载固件，等现场就位后再使用。配置模板在 `configs/mspm0/vscode-*.json`；本机 `.vscode/` 不提交。Keil Studio 提供 IDE 工具，现有工程通过上述 Python/GCC 入口构建，未转换为 CMSIS Solution。
+
+USB 权限规则已准备好，需现场输入 sudo 密码安装一次，再重插 fireDAP：
+
+```bash
+sudo ./scripts/install-debug-usb-rules
+```
+
+本机用户已属于 `plugdev` 和 `dialout`。pyOCD 配置为 `configs/mspm0/pyocd.yaml`（100 kHz，关闭自动解锁，使用页擦除）。SWD 连接及烧录待现场验证，软件安装不表示下载故障已解决。
+
+工具下载来源和 SHA256 见 `configs/mspm0/tools-lock.json`，Python 工具版本见 `configs/mspm0/requirements-tools.txt`。现有生成的 C 配置可直接编译，SysConfig 和 CCS 暂不需要安装。
+
 ## Windows Keil 编译
 
 需要 Keil Arm Compiler 6 和 MSPM0G3507 设备包。本机曾使用 Compiler 6.16、TI 设备包 1.3.1；其他安装位置用 `--toolchain` 指定。
@@ -27,7 +63,7 @@ python device/mspm0/uart_link/build.py --toolchain D:/Keil_v5/ARM/ARMCLANG/bin
 
 输出为各工程 `build/` 下的 HEX / AXF，不随 Git 提供。两个工程共享 `third_party/ti_mspm0_sdk/` 和 `device/mspm0/platform/`。Linux 可加 `--check-paths` 仅检查文件引用。
 
-## fireDAP / SWD 下载
+## Windows：fireDAP / SWD 下载
 
 断开电池和电机驱动信号，主控 Type-C 独立供电。按 [SWD 接线表](../hardware/connections.md#mspm0-swd) 连接后：
 
