@@ -12,7 +12,7 @@
 | UART1 舵机只读 | [uart1_servo_read.py](../../device/k230/diagnostics/uart1_servo_read.py) | 按接线页连接 URT-2，1 Mbps；六舵机 PING / READ 均成功，错误 0x00 |
 | UART2 ↔ MSPM0 UART1 | [k230_uart2_test.py](../../device/k230/diagnostics/k230_uart2_test.py) | 先成功烧录 MSPM0 UART 固件；20/20 带序号和令牌的应答，原样回显不算通过 |
 
-前两项已有通过记录；第三项待下载 MSPM0 测试固件后验证。只读脚本会校验应答 ID、长度、校验和与错误状态。
+前两项已有通过记录；第三项的 MSPM0 固件已下载运行，双板测试待 K230 接入。只读脚本会校验应答 ID、长度、校验和与错误状态。
 
 ## Linux 编译与 IDE
 
@@ -36,7 +36,7 @@
 ./scripts/mspm0-tools python -m unittest discover -s device/mspm0/tests
 ```
 
-复用现有 C 源码、引脚配置和 TI SDK 的 GCC 启动文件、链接脚本、驱动库；产物在各工程 `build/gcc/`，包括 ELF、HEX、BIN、构建日志与校验记录。两份固件已通过编译、Main Flash 地址和中断向量核对，**尚未在 Linux 烧录或运行验收**。
+复用现有 C 源码、引脚配置和 TI SDK 的 GCC 启动文件、链接脚本、驱动库；产物在各工程 `build/gcc/`，包括 ELF、HEX、BIN、构建日志与校验记录。两份固件已通过编译、Main Flash 地址和中断向量核对。2026-10-20 已将 UART 固件在 Linux 烧录并逐字节回读通过，收到启动日志；电机固件尚未做 Linux 实机验收。
 
 VS Code 已配置 `Ctrl+Shift+B` 编译任务和 UART / 电机两项 Cortex-Debug 启动项。调试启动会连接并下载固件，等现场就位后再使用。配置模板在 `configs/mspm0/vscode-*.json`；本机 `.vscode/` 不提交。Keil Studio 提供 IDE 工具，现有工程通过上述 Python/GCC 入口构建，未转换为 CMSIS Solution。
 
@@ -46,9 +46,17 @@ VS Code 已配置 `Ctrl+Shift+B` 编译任务和 UART / 电机两项 Cortex-Debu
 sudo ./scripts/install-debug-usb-rules
 ```
 
-本机用户已属于 `plugdev` 和 `dialout`。pyOCD 配置为 `configs/mspm0/pyocd.yaml`（100 kHz，关闭自动解锁，使用页擦除）。2026-10-20 已通过 fireDAP 连接并读取 DP ID `0x6BA02477`、CPUID `0x410CC601` 和 128 KiB Flash / 32 KiB SRAM 容量；使用 attach 模式，未烧录。
+本机用户已属于 `plugdev` 和 `dialout`。pyOCD 配置为 `configs/mspm0/pyocd.yaml`（100 kHz，关闭自动解锁，使用页擦除）。2026-10-20 已通过 fireDAP 连接并读取 DP ID `0x6BA02477`、CPUID `0x410CC601` 和 128 KiB Flash / 32 KiB SRAM 容量。随后完成 UART 固件烧录、全 Flash 回读和启动日志检查；只有前 2 KiB 被改写，BCR/BSL 配置未变化。原程序备份与记录保存在本机 `data/logs/mspm0_uart_bringup_*/`。
 
 工具下载来源和 SHA256 见 `configs/mspm0/tools-lock.json`，Python 工具版本见 `configs/mspm0/requirements-tools.txt`。现有生成的 C 配置可直接编译，SysConfig 和 CCS 暂不需要安装。
+
+K230 接入 OTG USB、CanMV IDE 停止并断开后，可直接从 Linux 运行双板测试：
+
+```bash
+./scripts/host tools/diagnostics/test_k230_mspm0_link.py
+```
+
+复用板端既有 20 轮测试，不控制舵机。需要每轮带序号与令牌的 `MSPM0_ACK`，20/20 才通过；日志在 `data/logs/k230_mspm0_link_*/`。当前尚未执行双板验收。
 
 ## Windows Keil 编译
 
@@ -72,7 +80,7 @@ python device/mspm0/uart_link/build.py --toolchain D:/Keil_v5/ARM/ARMCLANG/bin
 3. 先确认能读到调试 ID；Flash Download 选择 **MSPM0G3507 Main Flash 128KB** 算法，Utilities 使用同一调试器。
 4. 编译、Download，成功后复位。应用日志从主控自身 USB 串口读取，115200/8N1；fireDAP 的虚拟串口是另一设备。
 
-2026-10-19 曾报 `E310: cannot read DP register 0x00` / `NO_ACK`；10 月 20 日 Linux 连接与读取已通过，原故障原因未定，下载仍待验证。此前未执行解锁、整片擦除或 NONMAIN 改写，故障证据见 [联调摘要](../history/2026-10-19-hardware-bringup.md)。
+2026-10-19 曾报 `E310: cannot read DP register 0x00` / `NO_ACK`；10 月 20 日 Linux 连接与读取已通过，Linux 下载与回读也已通过，原故障原因未定，Windows 本次未重测。此前未执行解锁、整片擦除或 NONMAIN 改写，故障证据见 [联调摘要](../history/2026-10-19-hardware-bringup.md)。
 
 ## 备选：主控 USB / BSL 下载
 

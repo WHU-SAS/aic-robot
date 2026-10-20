@@ -1,3 +1,4 @@
 pyocd==0.46.0
 ninja==1.13.2
 pyelftools==0.33
+pyserial==3.5
