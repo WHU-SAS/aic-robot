@@ -42,6 +42,15 @@ IDE停止并断开后，可重复检查接口及资源，或额外加载并释�
 
 新固件使用芯片唯一USB序列号；主机入口已兼容在仅连接一块CanMV时自动找到新串口，多板连接需明确`--port`。
 
+注册与检测入口（仓库根目录，IDE停止并断开）：
+
+```bash
+./scripts/host tools/diagnostics/enroll_k230_wake_word.py
+./scripts/host tools/diagnostics/enroll_k230_wake_word.py --listen --seconds 20
+```
+
+距麦克风30～50cm；每段按回车后先静音预热约7秒，看到“现在请说”再自然说一遍“思达思达”。说完静音约0.64秒自动结束，共三段；不合格仅重录当前段。采用官方正常灵敏度与录音质量检查，注册成功后保存SD卡会话下的`keyword.json`，更新唤醒配置路径。原始PCM在SD卡`/sdcard/voice/sida_*/`，注册结果及日志在本机`data/logs/k230_wake_*/`，均不上传；不设置开机自启、不绑定运动。`--listen`只打印唤醒事件，计数不是识别准确率。
+
 USB刷备用卡无需读卡器；进入BootROM后使用官方`k230-flash`，明确指定`SDCARD`、写入偏移`0x0`，不能沿用默认`EMMC`。重枚举权限安装一次：
 
 ```bash
