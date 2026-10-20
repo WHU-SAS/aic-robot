@@ -26,7 +26,7 @@ UART2_MSPM0_LINK_PASS
 
 2026-10-20 已在原固件复现冷启动首包失败，UART0 显示 `UART1_LINE_DISCARDED`。修复后的首次接收日志明确为 `00` + 完整请求；按帧头重新同步后，确认两板电源灯全灭再上电的一轮为 **20/20，首包通过**，没有预热或重试。`00` 的具体电气来源尚未测量。
 
-当前主控运行本 UART 测试固件。Linux 映像 1872 字节，经主板 Type-C / BSL 写入、独立两次 CRC 核验通过；写入范围之外的 Main Flash 已核对。SWD 阶段的旧映像曾逐字节回读并检查 BCR/BSL 未变；本次 BSL 仅使用 Main Flash 范围擦写命令。
+本目录为纯通信测试固件；当前主控运行 [K230 UART 电机联调固件](../motor_uart/README.md)，协议不同，不能直接对它运行本页20轮测试。此前本UART固件的验证记录如下。Linux 映像 1872 字节，经主板 Type-C / BSL 写入、独立两次 CRC 核验通过；写入范围之外的 Main Flash 已核对。SWD 阶段的旧映像曾逐字节回读并检查 BCR/BSL 未变；本次 BSL 仅使用 Main Flash 范围擦写命令。
 
 首次有效请求后，UART0 输出 `UART1_FIRST_RX_HEX`。要同步保存这份诊断，在仓库根目录运行：
 

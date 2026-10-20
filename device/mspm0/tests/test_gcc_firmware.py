@@ -7,7 +7,7 @@ from elftools.elf.elffile import ELFFile
 from intelhex import IntelHex
 
 ROOT = Path(__file__).resolve().parents[3]
-IMAGES = [('uart_link', 'uart1_link'), ('motor_encoder', 'motor_demo')]
+IMAGES = [('uart_link', 'uart1_link'), ('motor_encoder', 'motor_demo'), ('motor_uart', 'motor_uart')]
 
 
 class FirmwareTests(unittest.TestCase):

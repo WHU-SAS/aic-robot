@@ -13,6 +13,7 @@ SDK = ROOT / 'third_party/ti_mspm0_sdk'
 PROJECTS = {
     'uart_link': ('uart1_link', ['main.c']),
     'motor_encoder': ('motor_demo', ['main.c', 'demo_control.c', 'ti_msp_dl_config.c']),
+    'motor_uart': ('motor_uart', ['main.c', '../motor_encoder/ti_msp_dl_config.c']),
 }
 STARTUP = SDK / 'ti/devices/msp/m0p/startup_system_files/gcc/startup_mspm0g350x_gcc.c'
 LINKER = SDK / 'ti/devices/msp/m0p/linker_files/gcc/mspm0g3507.lds'
@@ -55,6 +56,8 @@ def build(project, toolchain):
     gcc = str(toolchain / 'arm-none-eabi-gcc')
     objcopy = str(toolchain / 'arm-none-eabi-objcopy')
     headers = sorted(folder.glob('*.h'))
+    if project == 'motor_uart':
+        headers.append(folder / '../motor_encoder/ti_msp_dl_config.h')
     for dependency in [STARTUP, LINKER, LIBRARY, *(folder / s for s in sources), *headers]:
         if not dependency.is_file():
             raise FileNotFoundError(dependency)

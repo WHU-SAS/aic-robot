@@ -30,13 +30,14 @@
 
 ```bash
 ./scripts/mspm0-tools                       # 查看工具版本
-./scripts/mspm0-build all                   # 编译两个工程
+./scripts/mspm0-build all                   # 编译三个工程
 ./scripts/mspm0-build uart_link             # 只编译通信固件
-./scripts/mspm0-build motor_encoder         # 只编译电机固件
+./scripts/mspm0-build motor_encoder         # 只编译独立按键电机固件
+./scripts/mspm0-build motor_uart            # 编译K230控制底盘固件
 ./scripts/mspm0-tools python -m unittest discover -s device/mspm0/tests
 ```
 
-复用现有 C 源码、引脚配置和 TI SDK 的 GCC 启动文件、链接脚本、驱动库；产物在各工程 `build/gcc/`，包括 ELF、HEX、BIN、构建日志与校验记录。两份固件已通过编译、Main Flash 地址和中断向量核对。2026-10-20 已将 UART 固件在 Linux 烧录并逐字节回读通过，收到启动日志；电机固件同日烧录、回读通过，并完成车轮悬空的按键启动、PWM 缓升、5 秒自动停车和编码器正反计数检查。
+复用现有 C 源码、引脚配置和 TI SDK 的 GCC 启动文件、链接脚本、驱动库；产物在各工程 `build/gcc/`，包括 ELF、HEX、BIN、构建日志与校验记录。三个GCC固件均已通过编译、Main Flash地址和中断向量核对。2026-10-20 已将 UART 固件在 Linux 烧录并逐字节回读通过，收到启动日志；电机固件同日烧录、回读通过，并完成车轮悬空的按键启动、PWM 缓升、5 秒自动停车和编码器正反计数检查。
 
 2026-10-20 已在 UART 固件上实测 GDB 硬件断点与指令单步：命中 `main`，单步 PC 从 `0x28c` 前进到 `0x28e`，删除断点后恢复运行；未改写 Flash。VS Code 图形界面的 F5 操作尚未现场验证。
 
@@ -60,7 +61,9 @@ K230 接入 OTG USB、CanMV IDE 停止并断开后，可直接从 Linux 运行�
 ./scripts/host tools/diagnostics/test_k230_mspm0_link.py
 ```
 
-当前 MSPM0 已运行 UART 测试固件；电机例程与 UART 测试例程分别烧录运行。
+当前MSPM0运行 [motor_uart 联调固件](../../device/mspm0/motor_uart/README.md)，支持K230启停、状态与编码器回传，已完成架空轮实测。上述纯通信命令要求先另行烧录 `uart_link`，不能直接对当前电机固件运行。
+
+当前固件的只读检查：`./scripts/host tools/diagnostics/test_k230_motor_uart.py`；车轮可靠架空后，增加 `--execute --wheels-lifted` 验证启停、5秒运行时限及1秒心跳丢失停车。
 
 复用板端既有 20 轮测试，不控制舵机。需要每轮带序号与令牌的 `MSPM0_ACK`，20/20 才通过；日志在 `data/logs/k230_mspm0_link_*/`。冷上电首包已通过针对性复核：日志捕获帧前 `00`，新解析器正确接收首包并达到 20/20。同步读取 UART0 的命令见 [通信例程](../../device/mspm0/uart_link/README.md)。
 
