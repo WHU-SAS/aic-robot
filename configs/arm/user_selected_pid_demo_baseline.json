@@ -2,7 +2,7 @@
   "status": "user_adopted_permanent_baseline_not_certified",
   "parameters": {
     "1": {
-      "P": 16,
+      "P": 24,
       "I": 0,
       "D": 100,
       "integral_limit": 0,
@@ -46,7 +46,7 @@
       "acceleration": 20
     },
     "5": {
-      "P": 4,
+      "P": 24,
       "I": 0,
       "D": 60,
       "integral_limit": 0,
@@ -68,14 +68,14 @@
       "acceleration": 5
     }
   },
-  "adoption": "User finalized axes1/5/6 I=0 and integral limit=0, all other parameters unchanged. EEPROM written using separate one-byte registers, double-read verified, all locks1. Arm returned neutral and torque OFF.",
-  "verified_at": "2026-10-12T16:15:46.967683+08:00",
+  "adoption": "User optimized the servos and requested adopting their live settings on 2026-10-20. Read twice through K230 UART1/URT-2; all six model777, mode0, phase12 and EEPROM lock1. No PID, EEPROM, speed or acceleration writes performed during adoption.",
+  "verified_at": "2026-10-20T22:04:43.348881+08:00",
   "tuning_policy": "Use this user-selected baseline in practice; make focused adjustments only when new problems appear.",
-  "changed_parameter_count": 4,
+  "changed_parameter_count": 2,
   "software_motion_defaults_provenance": "User adopted project-wide defaults; normal and neutral return both axes2/3/4=600/20, other axes=150/5. Updated 2026-10-11T17:05:36.715935+08:00",
   "requested_pid": {
     "1": {
-      "P": 16,
+      "P": 24,
       "I": 0,
       "D": 100,
       "integral_limit": 0
@@ -99,7 +99,7 @@
       "integral_limit": 16
     },
     "5": {
-      "P": 4,
+      "P": 24,
       "I": 0,
       "D": 60,
       "integral_limit": 0
@@ -144,5 +144,19 @@
   "task_entry_status": "manual_stage_confirmation_implemented_pending_hardware_validation",
   "source_provenance": "docs/guides/arm/BASELINE.md",
   "default_pick_entry": "host/apps/k230_blue_pick_onboard.py",
-  "pick_entry_status": "user_accepted_20261013"
+  "pick_entry_status": "user_accepted_20261013",
+  "latest_adoption_changes": [
+    {
+      "id": 1,
+      "parameter": "P",
+      "previous": 16,
+      "adopted": 24
+    },
+    {
+      "id": 5,
+      "parameter": "P",
+      "previous": 4,
+      "adopted": 24
+    }
+  ]
 }

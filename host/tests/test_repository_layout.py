@@ -25,6 +25,8 @@ class LayoutTests(unittest.TestCase):
     def test_four_stage_ik_matches_pre_migration(self):
         self.assertEqual(self.geometry.plan(self.frozen['plan_xy_m'],[2048]*6),self.frozen['plan'])
     def test_current_model_and_control_resources_unchanged(self):
+        # PID checksum tracks the user-approved baseline; updated after the
+        # 2026-10-20 K230 double-read adoption (P1/P5=24). Geometry stays frozen.
         for name,digest in self.frozen['protected_sha256'].items():
             with self.subTest(name=name):
                 self.assertEqual(hashlib.sha256((ROOT/name).read_bytes()).hexdigest(),digest)

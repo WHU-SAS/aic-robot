@@ -334,7 +334,7 @@
     "configs/arm/motion_defaults.json": "982d015243b5e07f46c5e0b46295d1b868cf7260e4321402e9cc7c9d812d41c4",
     "configs/arm/ready_pose.json": "f29c60638a57fc8825487a29cfed02237ef6fcc6f3fb222491886e90bdb8b5c4",
     "configs/arm/task_control_policy.json": "54b0f45fc146aec6b14959dbd3a42f91420255dfc34755ac09d8d7228714236a",
-    "configs/arm/user_selected_pid_demo_baseline.json": "c97a21f37c3f9183b96d47238e774f15c6b37268d2bc4231057a1141d385baaa",
+    "configs/arm/user_selected_pid_demo_baseline.json": "6dbf52b1403fc525ded06b6bb457bbae7d4380f3411f671395915875003ebe1e",
     "configs/vision/runtime/camera_in_base.json": "23c0b00a119b5c78dcbbd7a00b3a9b75828faffef07e5d21a03fe496cfbb75b3",
     "configs/vision/runtime/camera_intrinsics.json": "9bd4426442417c9425f146971464a4946463a3b5704095decc5d2ed7075f0e07",
     "configs/vision/runtime/provenance.json": "2910f5a389b7fcd5960e1043f4046a33bff176eb79e92330c3ebadfc56ab8b5d",
