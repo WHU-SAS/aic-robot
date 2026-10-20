@@ -11,7 +11,7 @@
 | 现有电池 | WHEELTEC E326S，标签 10.8 V、2550 mAh、最大持续放电 6 A；充电上限 12.6 V |
 | 尚未接入 | 八路巡线模块 LineFollower_8CH V1.0、ICM-42688 V1.2 |
 
-机械臂零位、方向和限位见 [关节映射](../../configs/arm/joint_mapping.json)。原始手册和照片在 [hardware/car](../../hardware/car)。轮径先采用采购资料标称65 mm；减速比及每圈计数待核对对应电机型号资料，轮距尚未确定。标称值不记作实测。
+机械臂零位、方向和限位见 [关节映射](../../configs/arm/joint_mapping.json)。原始手册和照片在 [hardware/car](../../hardware/car)。轮径采用采购资料标称65 mm，减速比暂按型号P28为28:1；根据后盖与计数规模推定GMR500ppr，配合当前2倍频为28000计数/轮圈。版本推定、来源及换算统一见 [底盘参数说明](../../device/mspm0/motor_uart/README.md#标称每圈计数与短前进)。这些不是整圈实测值，轮距仍未确定。
 
 ## 现有 PC 抓取
 

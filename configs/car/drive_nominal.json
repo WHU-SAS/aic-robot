@@ -1,0 +1,28 @@
+{
+  "motor_model": "WHEELTEC MG513XP28_12V",
+  "wheel_diameter_mm": 65.0,
+  "gear_ratio": 28.0,
+  "encoder_ppr_motor_shaft": 500,
+  "decoder_edges_per_cycle": 2,
+  "encoder_variant": "GMR",
+  "parameter_basis": "nominal; GMR variant inferred from rear cover and recorded count rates, not confirmed by order or measured revolutions",
+  "left_channel": "A",
+  "right_channel": "B",
+  "forward_raw_sign": {
+    "A": 1,
+    "B": -1
+  },
+  "sources": {
+    "motor_label": "hardware/car/WHEELTEC_MG513XP28_12V电机_型号标签.jpg",
+    "wheel_diameter": "hardware/car/电赛硬件采购计划_第1页.png",
+    "encoder_manual": "https://www.scribd.com/document/1000178757/Wheeltec-直流电机开发手册-2025-10-20",
+    "gear_ratio_primary_build": "https://oshwhub.com/ylc00/simple-pid"
+  },
+  "encoder_variant_evidence": [
+    "Manufacturer manual table3-1: GMR500ppr has plastic rear cover; Hall13ppr is exposed",
+    "Local motor label photo shows a rear cover",
+    "Powered bench observed tens of thousands of counts per second; supports high-resolution variant but does not independently measure PPR"
+  ],
+  "measured_counts_per_wheel_revolution": null,
+  "track_width_mm": null
+}

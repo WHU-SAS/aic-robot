@@ -67,6 +67,7 @@ class InteropTests(unittest.TestCase):
                 # Two runs without reboot: client synchronizes MCU's sequence watermark.
                 board.MODE = 'bench'; board.main(); board.main()
                 board.MODE = 'stop'; board.main()
+                board.MODE = 'forward'; board.main()
                 # One short button press while driving, then release with heartbeats.
                 clock.button_press_at = clock.ms + 5800
                 board.MODE = 'button'; board.main()
@@ -79,6 +80,7 @@ class InteropTests(unittest.TestCase):
             self.assertEqual(printed.count('MOTOR_BENCH_PASS'), 2)
             self.assertIn('MOTOR_STATUS_PASS 20/20', printed)
             self.assertIn('MOTOR_STOP_PASS', printed)
+            self.assertEqual(printed.count('MOTOR_FORWARD_PASS'), 1)
             self.assertEqual(printed.count('MOTOR_BUTTON_PASS'), 1)
             valid = b'R,00000001,STATUS,0,10,0,0,0,0,0,00000000'
             frame = b'@'+valid+(',%04X\n'%board.crc16(valid)).encode()

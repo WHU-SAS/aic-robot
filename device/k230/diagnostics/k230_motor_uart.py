@@ -204,6 +204,28 @@ def run_button(link):
     link.stopped(1)
     print('MOTOR_BUTTON_PASS')
 
+def run_forward_once(link):
+    link.expect('STOP')
+    link.stopped(1)
+    start = link.expect('START')
+    if not start['run']:
+        raise RuntimeError('START not applied')
+    print('MOTOR_FORWARD_BEGIN')
+    started = time.ticks_ms()
+    while time.ticks_diff(time.ticks_ms(), started) < 1000:
+        state = link.expect('HB')
+        if not state['run']:
+            raise RuntimeError('Forward motion stopped unexpectedly: ' + str(state))
+        time.sleep_ms(min(100, max(0, 1000-time.ticks_diff(time.ticks_ms(), started))))
+    link.expect('STOP')
+    link.stopped(1)
+    # Include coast in the final encoder readout; do not reapply drive.
+    stopped_at = time.ticks_ms()
+    while time.ticks_diff(time.ticks_ms(), stopped_at) < 2000:
+        link.stopped(1)
+        time.sleep_ms(100)
+    print('MOTOR_FORWARD_PASS')
+
 def main():
     link = MotorLink()
     failed = False
@@ -211,6 +233,8 @@ def main():
         link.sync()
         if MODE == 'bench':
             run_bench(link)
+        elif MODE == 'forward':
+            run_forward_once(link)
         elif MODE == 'button':
             run_button(link)
         elif MODE == 'stop':
@@ -228,7 +252,7 @@ def main():
         failed = True
         raise
     finally:
-        if MODE in ('bench', 'button') and failed:
+        if MODE in ('bench', 'button', 'forward') and failed:
             try:
                 link.expect('STOP')
             except BaseException as exc:

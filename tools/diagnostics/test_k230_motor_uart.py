@@ -16,17 +16,23 @@ from host.transport.download_calibration import CameraLink, PORT
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', default=PORT)
-    parser.add_argument('--execute', action='store_true', help='Run the approved lifted-wheel bench sequence')
+    parser.add_argument('--execute', action='store_true', help='Run the selected motor test with the declared wheel/ground setup')
     parser.add_argument('--wheels-lifted', action='store_true', help='Confirm both drive wheels are securely suspended')
+    parser.add_argument('--forward-once', action='store_true', help='Single approximately 1-second forward pulse, then STOP')
+    parser.add_argument('--on-ground', action='store_true', help='Confirm cleared ground path, arm ready pose, and observer present')
     parser.add_argument('--button', action='store_true', help='One start then manually press B21; requires --execute --wheels-lifted')
     parser.add_argument('--stop', action='store_true', help='Send STOP and confirm zero output')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
-    if args.execute and (not args.wheels_lifted or args.stop):
-        parser.error('--execute requires --wheels-lifted and cannot be combined with --stop')
+    if args.execute and (args.stop or not (args.wheels_lifted or args.forward_once and args.on_ground)):
+        parser.error('--execute requires --wheels-lifted, or --forward-once --on-ground; cannot combine with --stop')
+    if args.on_ground and (not args.forward_once or not args.execute or args.wheels_lifted):
+        parser.error('--on-ground only applies to --execute --forward-once without --wheels-lifted')
+    if args.forward_once and (not args.execute or args.button):
+        parser.error('--forward-once requires --execute and cannot combine with --button')
     if args.button and not args.execute:
         parser.error('--button requires --execute --wheels-lifted')
-    mode = 'button' if args.button else 'bench' if args.execute else 'stop' if args.stop else 'status'
+    mode = 'forward' if args.forward_once else 'button' if args.button else 'bench' if args.execute else 'stop' if args.stop else 'status'
     out = args.output or ROOT/'data/logs'/datetime.now().strftime('k230_motor_uart_%Y%m%d_%H%M%S_%f')
     out.mkdir(parents=True, exist_ok=True)
     source = (ROOT/'device/k230/diagnostics/k230_motor_uart.py').read_text()
@@ -38,6 +44,9 @@ def main():
               'states': [], 'checks': [],
               'policy': {'max_pwm': 1600, 'period': 8000, 'ramp_ms': 500,
                          'max_run_ms': 5000, 'heartbeat_wait_ms': 200, 'loss_timeout_ms': 1000}}
+    result['setup'] = 'on_ground' if args.on_ground else 'wheels_lifted' if args.wheels_lifted else 'read_only_or_stop'
+    if mode == 'forward':
+        result['policy']['requested_forward_duration_ms'] = 1000
     link, lines = None, []
     start = time.monotonic()
     try:
@@ -53,9 +62,17 @@ def main():
             elif line.startswith('MOTOR_CHECK PASS '):
                 result['checks'].append(line[len('MOTOR_CHECK PASS '):])
         expected = {'bench': 'MOTOR_BENCH_PASS', 'status': 'MOTOR_STATUS_PASS 20/20',
-                    'stop': 'MOTOR_STOP_PASS', 'button': 'MOTOR_BUTTON_PASS'}[mode]
+                    'stop': 'MOTOR_STOP_PASS', 'button': 'MOTOR_BUTTON_PASS',
+                    'forward': 'MOTOR_FORWARD_PASS'}[mode]
         if expected not in lines:
             raise RuntimeError('Board did not complete ' + mode + '; see board_log.txt')
+        if mode == 'forward':
+            from tools.diagnostics.chassis_metrics import displacement
+            config = json.loads((ROOT/'configs/car/drive_nominal.json').read_text())
+            result['nominal_config'] = config
+            initial = next(state for state in result['states'] if state['command'] == 'START')
+            result['nominal_displacement_including_coast'] = displacement(config, initial, result['states'][-1])
+            print('NOMINAL_DISPLACEMENT', json.dumps(result['nominal_displacement_including_coast'], ensure_ascii=False), flush=True)
         result['status'] = 'passed'
         return 0
     except Exception as exc:
