@@ -34,7 +34,7 @@ Windows Keil 编译：
 python device/mspm0/motor_encoder/build.py --toolchain D:/Keil_v5/ARM/ARMCLANG/bin
 ```
 
-生成本目录 `build/motor_demo.hex` / `.axf`。Keil 和 USB / BSL 下载共用 [板端联调步骤](../../../docs/guides/k230-and-mspm0.md)。当前 SWD 故障及其他项目进度见 [项目首页](../../../README.md#当前情况)。
+生成本目录 `build/motor_demo.hex` / `.axf`。Keil 和 USB / BSL 下载共用 [板端联调步骤](../../../docs/guides/k230-and-mspm0.md)。Linux SWD、UART 固件烧录与 GDB 调试已验证；电机固件尚待 Linux 实机验收。其他项目进度见 [项目首页](../../../README.md#当前情况)。
 
 入口 `main.c`，启停逻辑 `demo_control.c/.h`，引脚配置 `ti_msp_dl_config.c/.h`。`reference/empty.syscfg` 尚未重新生成验证；Keil 不自动运行 SysConfig，以当前 C 配置为准。重新生成时复核按键上拉、STBY、定时器启动及 UART 回环。旧模板隔离在 `third_party/reference/motor_template/`，不参与构建。
 

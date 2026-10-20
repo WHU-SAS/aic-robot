@@ -38,6 +38,8 @@
 
 复用现有 C 源码、引脚配置和 TI SDK 的 GCC 启动文件、链接脚本、驱动库；产物在各工程 `build/gcc/`，包括 ELF、HEX、BIN、构建日志与校验记录。两份固件已通过编译、Main Flash 地址和中断向量核对。2026-10-20 已将 UART 固件在 Linux 烧录并逐字节回读通过，收到启动日志；电机固件尚未做 Linux 实机验收。
 
+2026-10-20 已在 UART 固件上实测 GDB 硬件断点与指令单步：命中 `main`，单步 PC 从 `0x28c` 前进到 `0x28e`，删除断点后恢复运行；未改写 Flash。VS Code 图形界面的 F5 操作尚未现场验证。
+
 VS Code 已配置 `Ctrl+Shift+B` 编译任务和 UART / 电机两项 Cortex-Debug 启动项。调试启动会连接并下载固件，等现场就位后再使用。配置模板在 `configs/mspm0/vscode-*.json`；本机 `.vscode/` 不提交。Keil Studio 提供 IDE 工具，现有工程通过上述 Python/GCC 入口构建，未转换为 CMSIS Solution。
 
 本机 USB 权限规则已安装。其他 Linux 电脑需输入 sudo 密码安装一次，再重插 fireDAP：
@@ -47,6 +49,8 @@ sudo ./scripts/install-debug-usb-rules
 ```
 
 本机用户已属于 `plugdev` 和 `dialout`。pyOCD 配置为 `configs/mspm0/pyocd.yaml`（100 kHz，关闭自动解锁，使用页擦除）。2026-10-20 已通过 fireDAP 连接并读取 DP ID `0x6BA02477`、CPUID `0x410CC601` 和 128 KiB Flash / 32 KiB SRAM 容量。随后完成 UART 固件烧录、全 Flash 回读和启动日志检查；只有前 2 KiB 被改写，BCR/BSL 配置未变化。原程序备份与记录保存在本机 `data/logs/mspm0_uart_bringup_*/`。
+
+**调试连接会干扰运行**：当前 TI 设备包的连接序列会操作复位；实测 `attach` 后内核处于暂停状态，不能当作无侵入读取。通信测试前需明确恢复运行；电机运行中不要新连接调试器、打断点或单步。一次保持同一 SWD 会话并明确恢复运行的通信复测为 20/20，接收/应答计数各增加 20、丢弃计数为 0；退出调试器后复测也为 20/20。最初冷上电的首包丢失尚未复现，不能据此认定已修复。
 
 工具下载来源和 SHA256 见 `configs/mspm0/tools-lock.json`，Python 工具版本见 `configs/mspm0/requirements-tools.txt`。现有生成的 C 配置可直接编译，SysConfig 和 CCS 暂不需要安装。
 
