@@ -8,19 +8,15 @@ _bootstrap(include_tools=False)
 import base64,hashlib,json,struct,time
 from pathlib import Path
 from download_calibration import CameraLink,PORT
-HERE=REPO_ROOT/'device/k230'
+from host.transport.board_vision_source import build_capture_script
 
 def capture(output,port=PORT,debug_image=False,debug_roi=False):
     if debug_roi:debug_image=True
     output=Path(output);output.mkdir(parents=True,exist_ok=True)
-    core=(HERE/'vision/blue_face_core.py').read_text()
-    detector=(HERE/'vision/detect_blue_faces.py').read_text().replace('from blue_face_core import extract, median, component_boxes, native_rect_faces\n','')
-    detector=detector.replace('LOCAL_ROI_REMOTE = None','LOCAL_ROI_REMOTE = '+repr('/sdcard/pick_tests/'+output.name+'_cached_roi.jpg'),1)
-    if debug_image:
-        remote='/sdcard/pick_tests/'+output.name+'_board_debug.jpg'
-        detector=detector.replace('DEBUG_IMAGE_REMOTE = None','DEBUG_IMAGE_REMOTE = '+repr(remote),1)
-    if debug_roi:detector=detector.replace('DEBUG_IMAGE_ROI = False','DEBUG_IMAGE_ROI = True',1)
-    script=core+'\n'+detector
+    remote='/sdcard/pick_tests/'+output.name+'_board_debug.jpg' if debug_image else None
+    script=build_capture_script(debug_image_remote=remote,
+        local_roi_remote='/sdcard/pick_tests/'+output.name+'_cached_roi.jpg',
+        debug_image_roi=bool(debug_roi))
     link=CameraLink(port);logs=[];features=None;chunks=bytearray();image_chunks=bytearray()
     expected_hash=None;expected_size=None;image_hash=None;image_size=None
     started=time.monotonic();stage='starting';firmware=None;image_name='frame.jpg'

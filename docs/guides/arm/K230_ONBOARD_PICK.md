@@ -1,8 +1,10 @@
-# 方块抓取流程
+# 第0版方块抓取演示
 
 ```bash
-./scripts/pick-blue --execute --hands-free
+./scripts/demo-v0-pick --execute --hands-free
 ```
+
+该流程依赖PC，代码与专属参数见`demos/v0_blue_pick/`；正式版进度见[视觉模块](../vision.md)。
 
 每轮重新定位，从当前编码规划，无需先回中立。环境、权限和诊断命令见 [Linux 指南](../linux-arm.md)。
 

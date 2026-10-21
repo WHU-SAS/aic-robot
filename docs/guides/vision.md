@@ -1,0 +1,52 @@
+# 视觉模块
+
+正式版目标：K230脱离PC独立运行，当前只识别20mm蓝色方块。
+
+## 当前边界
+
+- 已拆分可复用的单帧识别、多帧匹配和相机生命周期；识别核心保持第0版原样。
+- 第0版完整演示在`demos/v0_blue_pick/`，仍依赖PC完成位姿解算和抓取规划。
+- 板端位姿解算、正式任务入口、视觉与语音的共享资源调度尚未实现。`CameraSession`当前由单次视觉任务独占管理，不与其他媒体任务同时启停。
+- 本轮整理已离线验证，拆分后的模块尚未重新上板验证。
+
+## 代码职责
+
+| 文件 | 职责 |
+| --- | --- |
+| `device/k230/vision/blue_face_core.py` | 蓝色分区、棱线、完整物理面和整块轮廓提取，核心保持原样 |
+| `device/k230/vision/blue_detector.py` | `BlueCubeDetector.detect_frame(img)`单帧检测、多帧稳定匹配；不初始化硬件 |
+| `device/k230/vision/camera.py` | `CameraSession`初始化一次、重复取帧、关闭资源 |
+| `device/k230/vision/detect_blue_faces.py` | 第0版单次采样和特征/诊断图回传适配器 |
+| `host/transport/board_vision_source.py` | PC调试时将板端模块打包到USBDBG；运行参数直接传入函数 |
+| `host/vision/localize_board_faces.py`、`cube_outline_pose.py` | PC位姿参考：多帧几何校验、20mm立方体解算、Camera到Base变换 |
+
+识别链保留：LAB粗筛 → HSV分区 → 物理面/棱线 → 三帧匹配 → 几何与重投影校验。未验证的整块蓝色轮廓不当作一个方形物理面。失败原因和同帧诊断图继续保留。
+
+`aic.blue_faces.v1`是特征数据协议版本，与“第0版可行性演示”的项目阶段分别编号。
+
+## 配置与标定
+
+`configs/vision/blue_cube.json`独立定义相机、20mm蓝色目标、检测区域、颜色粗筛和采样参数，PC视觉不再读取机械臂抓取配置。核心内其余已调好的阈值保持原值。
+
+当前参考配置为1280×960 RGB565、不镜像、不翻转；ROI为`[0,432,1280,528]`；预热30帧，最多采9帧，仍要求三帧匹配。它沿用第0版工作区，不能据此认定已覆盖整车视野。
+
+`configs/vision/runtime/`暂保留第0版内外参配对快照及哈希。改变对焦、相机与底座关系后应复核；其精度不等于正式版验收精度。演示的前伸10mm、下探15mm等参数在`demos/v0_blue_pick/pick.json`，未混入视觉原始坐标。
+
+## 离线验证
+
+```bash
+./scripts/check
+./scripts/vision tools/analysis/replay_onboard_detector.py /路径/运行记录 \
+  --source features --output data/development/vision_replay
+```
+
+默认`--source auto`优先回放保存的`board_features.json`真实多帧记录；可用`--source image`回放单张完整JPEG。单图回放使用PC图像适配，不能证明真实多帧稳定性或固件LAB/矩形检测一致性。
+
+2026-10-21整理前后：73组历史特征输出逐项一致（51组定位、22组拒绝）。原图帧提取也进行了相同离线适配条件下的前后对照。结果和原始样本仅留本机，不提交采集照片或旧PID实验。
+
+## 后续开发顺序
+
+1. 新固件上复核拆分模块的采集与识别行为。
+2. 迁移位姿解算到K230，对照PC参考结果。
+3. 确立正式标定与精度验收数据。
+4. 接入K230正式任务入口，再验证语音、视觉与通信并行；机械臂控制策略由用户确定。

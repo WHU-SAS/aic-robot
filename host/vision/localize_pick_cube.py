@@ -12,10 +12,11 @@ import cv2,numpy as np
 from face_geometry import face_candidates,pose_candidates
 from grasp_face_quality import assess
 from runtime_cube_faces import split_exposed_cube
+from host.vision.config import load_vision_config
 ROOT=REPO_ROOT
 
 def localize(image,output):
- output=Path(output);output.mkdir(parents=True,exist_ok=True);cfg=json.loads((ROOT/'configs/arm/k230_pick_config.json').read_text());ip=ROOT/cfg['intrinsics'];ep=ROOT/cfg['extrinsics'];intr=json.loads(ip.read_text());ext=json.loads(ep.read_text())
+ output=Path(output);output.mkdir(parents=True,exist_ok=True);cfg=load_vision_config()['localization'];ip=ROOT/cfg['intrinsics'];ep=ROOT/cfg['extrinsics'];intr=json.loads(ip.read_text());ext=json.loads(ep.read_text())
  if hashlib.sha256(ip.read_bytes()).hexdigest()!=ext['intrinsics_sha256']:raise RuntimeError('Candidate intrinsics and extrinsics do not match')
  im=cv2.imread(str(image))
  if im is None or im.shape[:2]!=(960,1280):raise RuntimeError('Expected a completed1280x960 K230 frame')

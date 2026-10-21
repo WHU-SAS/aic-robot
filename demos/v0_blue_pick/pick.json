@@ -1,0 +1,38 @@
+{
+  "status": "user_accepted_pick_demo_20261013",
+  "intrinsics": "configs/vision/runtime/camera_intrinsics.json",
+  "extrinsics": "configs/vision/runtime/camera_in_base.json",
+  "table_z_Base_mm": -63.30504067237496,
+  "table_z_source": "median of six action1 FK cube centers minus10mm; provisional table estimate",
+  "source_geometry": "Project1 geometry with local imports, table coordinate adapter and user-authorized nominal20mm gripping-midpoint alignment",
+  "source_execution": "Project1 blue_pick_opencv.py four stages and same durations",
+  "opening_count": 2389,
+  "cube_offset_toward_moving_finger_mm": 0,
+  "extra_closing_counts": 20,
+  "hover_tip_height_mm": 80,
+  "descend_tip_height_mm": 15,
+  "lift_tip_height_mm": 80,
+  "stage_durations_s": {
+    "hover": 6,
+    "descend": 6,
+    "close_minimum_stationary_s": 0.5,
+    "lift": 8
+  },
+  "gripper_stationary_tolerance_counts": 1,
+  "automatic_return_or_torque_release": false,
+  "canonical_calibration_replaced": false,
+  "alignment_reference": "nominal_20mm_contact_midpoint_without_legacy_offset",
+  "alignment_user_authorization": "2026-10-13: use expected gripping two-fingertip midpoint, remove legacy offset, retain descend/grasp/lift flow",
+  "descend_height_user_authorization": "2026-10-13: user changed lowest fingertip descent target from10mm to15mm above the estimated table.",
+  "opening_angle_deg": 30,
+  "opening_user_authorization": "2026-10-13: user requested maximum30-degree pre-grasp opening; ID6 closed zero2048, target2389 (29.9707deg after count quantization)",
+  "forward_extension_mm": 10,
+  "forward_extension_direction": "radial in Base XY from origin toward detected cube",
+  "forward_extension_user_authorization": "2026-10-13: user requested additional10mm forward reach for each pick",
+  "user_acceptance": "2026-10-13: user accepted the30-degree opening,15mm descent and10mm radial forward extension demo.",
+  "inherited_geometry_source_sha256": {
+    "blue_pick_geometry.py": "03faa3d6a318649355cd075a93de2b75a057e518b83d3a6fbc888de5ee1269c1",
+    "blue_pick_settle.py": "a373118a0f842fa0c710a128867350fa9a9600e6971f6713f8c117f57fdfa0a5",
+    "blue_pick_opencv.py": "6401a5da7b317c41eeddfaac9e3234143f481076afd84ecb1888b8519e1e2ea5"
+  }
+}

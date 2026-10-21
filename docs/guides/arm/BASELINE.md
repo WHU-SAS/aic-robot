@@ -13,4 +13,4 @@
 
 以 `configs/arm/user_selected_pid_demo_baseline.json` 和 `motion_defaults.json` 为准。程序只核对已保存参数，调整由用户决定。正常动作与另行回中立使用相同运动配置；抓取结束不自动回中立。
 
-运行内外参由 `configs/arm/k230_pick_config.json` 指定，来源见 `configs/vision/runtime/provenance.json`。快照中的 `intrinsics_file` 和配置中的 `inherited_geometry_source_sha256` 是历史来源记录，不是当前加载路径或当前代码哈希。
+运行内外参由 `configs/vision/blue_cube.json` 指定，来源见 `configs/vision/runtime/provenance.json`。快照中的 `intrinsics_file` 和配置中的 `inherited_geometry_source_sha256` 是历史来源记录，不是当前加载路径或当前代码哈希。

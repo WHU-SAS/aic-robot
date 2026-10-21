@@ -11,11 +11,12 @@ from pathlib import Path
 import cv2,numpy as np
 from face_geometry import pose_candidates,ordered_quad
 from cube_outline_pose import localize_cube_outlines
+from host.vision.config import load_vision_config
 ROOT=REPO_ROOT
 
 def localize(features,output):
     output=Path(output);output.mkdir(parents=True,exist_ok=True)
-    data=json.loads(Path(features).read_text());cfg=json.loads((ROOT/'configs/arm/k230_pick_config.json').read_text())
+    data=json.loads(Path(features).read_text());cfg=load_vision_config()['localization']
     ip=ROOT/cfg['intrinsics'];ep=ROOT/cfg['extrinsics'];intr=json.loads(ip.read_text());ext=json.loads(ep.read_text())
     if hashlib.sha256(ip.read_bytes()).hexdigest()!=ext['intrinsics_sha256']:raise RuntimeError('内外参不匹配')
     if data.get('schema')!='aic.blue_faces.v1' or (data.get('width'),data.get('height'))!=(1280,960) or data.get('hmirror') is not False or data.get('vflip') is not False:

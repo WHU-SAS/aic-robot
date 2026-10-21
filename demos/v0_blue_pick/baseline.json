@@ -1,0 +1,14 @@
+{
+  "stage": "V0 feasibility demo",
+  "git_tag": "vision-v0-20261021",
+  "source_commit": "85ebbbb",
+  "target": "blue20mm cube",
+  "formal_target": "standalone K230",
+  "source_core_sha256": "88333540eb7b6264db4a674b4a377cb934eec8c0547def5783ad06c4d29fa03c",
+  "shared_detector": "device/k230/vision/blue_face_core.py",
+  "demo_entry": "demos/v0_blue_pick/run.py",
+  "demo_parameters": "demos/v0_blue_pick/pick.json",
+  "vision_profile": "configs/vision/blue_cube.json",
+  "calibration_status": "V0 provisional reference; not a final accuracy certificate",
+  "raw_data_committed": false
+}

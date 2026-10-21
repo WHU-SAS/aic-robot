@@ -101,10 +101,10 @@ def main():
     config=Configuration(ROOT)
     for module in [servo_bus,joint_mapping,urdf_fk]:
         if not Path(module.__file__).resolve().is_relative_to(ROOT):raise RuntimeError('Cross-project module import')
-    for base in [ROOT/'host',ROOT/'tools',ROOT/'scripts',ROOT/'device/k230']:
+    for base in [ROOT/'host',ROOT/'tools',ROOT/'scripts',ROOT/'device/k230',ROOT/'demos']:
         for p in base.rglob('*.py'):
             if 'runtime_checks' not in p.parts:ast.parse(p.read_text(),filename=str(p))
-    cfg=json.loads((ROOT/'configs/arm/k230_pick_config.json').read_text())
+    cfg=json.loads((ROOT/'demos/v0_blue_pick/pick.json').read_text())
     ip=ROOT/cfg['intrinsics'];ep=ROOT/cfg['extrinsics'];intr=json.loads(ip.read_text());ext=json.loads(ep.read_text())
     if hashlib.sha256(ip.read_bytes()).hexdigest()!=ext['intrinsics_sha256']:raise RuntimeError('Runtime camera pair hash mismatch')
     T=np.array(ext['T_Base_from_Camera_mm']);inverse=np.array(ext['T_Camera_from_Base_mm'])

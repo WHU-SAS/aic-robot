@@ -16,7 +16,7 @@ class LayoutTests(unittest.TestCase):
     def setUpClass(cls):
         cls.frozen=json.loads((ROOT/'host/tests/fixtures/baseline_geometry.json').read_text())
         cfg=Configuration(ROOT)
-        p=json.loads((ROOT/'configs/arm/k230_pick_config.json').read_text())
+        p=json.loads((ROOT/'demos/v0_blue_pick/pick.json').read_text())
         cls.geometry=PickGeometry(ROOT,cfg.mapping,table_z_m=p['table_z_Base_mm']/1000,
             hover_tip_height_mm=p['hover_tip_height_mm'],descend_tip_height_mm=p['descend_tip_height_mm'],
             lift_tip_height_mm=p['lift_tip_height_mm'],opening_count=p['opening_count'])
@@ -42,15 +42,15 @@ class LayoutTests(unittest.TestCase):
         import scservo_sdk
         self.assertEqual(Path(scservo_sdk.__file__).resolve().parent,ROOT/'third_party/ftservo_python/scservo_sdk')
     def test_board_source_bundle_has_no_host_dependency(self):
-        folder=ROOT/'device/k230/vision'
-        detector=(folder/'detect_blue_faces.py').read_text()
-        marker='from blue_face_core import extract, median, component_boxes, native_rect_faces\n'
-        self.assertIn(marker,detector)
+        from host.transport.board_vision_source import build_capture_script
         import ast
-        code=(folder/'blue_face_core.py').read_text()+'\n'+detector.replace(marker,'')
-        tree=ast.parse(code)
-        imports=[n.module or '' for n in ast.walk(tree) if isinstance(n,ast.ImportFrom)]
-        self.assertFalse(any(n.startswith(('host','scipy','serial')) for n in imports))
+        tree=ast.parse(build_capture_script())
+        imports=[]
+        for node in ast.walk(tree):
+            if isinstance(node,ast.ImportFrom):imports.append(node.module or '')
+            elif isinstance(node,ast.Import):imports.extend(a.name for a in node.names)
+        self.assertFalse(any(n.startswith(('host','scipy','serial','cv2','numpy')) for n in imports))
+        self.assertFalse(any(n in ('blue_face_core','blue_detector','camera') for n in imports))
 
 
     def test_configuration_reference_paths_exist(self):

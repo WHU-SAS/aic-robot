@@ -24,7 +24,7 @@ sudo setfacl -m u:xd:rw \
 
 抓取入口可用 `--camera-port` / `--port` 指定相机 / 舵机端口。
 
-## 日常运行
+## 第0版演示与日常检查
 
 ```bash
 ./scripts/check                            # 离线检查和单元测试
@@ -54,4 +54,4 @@ sudo setfacl -m u:xd:rw \
 
 筛选使用 5×7 ChArUco、DICT_5X5_100，要求 24 个内角点、17 个标记及 3 px 边距；结果写入新建 `selection_时间/accepted/` 和 `selection.json`，原图保留。完整入镜不代表内参质量合格。未挂载 SD 卡时，停止程序并断电后可用读卡器导出。
 
-`recheck_intrinsics.py` 默认与运行内参比较，可用 `--baseline` 指定基准。回放将一张保存图重复使用，只验证提取与定位，不验证真实多帧稳定性。日志和新采集均保存在不提交的 `data/`。
+`recheck_intrinsics.py` 默认与运行内参比较，可用 `--baseline` 指定基准。回放默认优先使用保存的多帧`board_features.json`；只有单图时会使用近似提取并重复该图，不能验证真实多帧稳定性。日志和新采集均保存在不提交的 `data/`。
