@@ -73,7 +73,7 @@ class VoiceDispatchTests(unittest.TestCase):
     def app(self):
         spec=importlib.util.spec_from_file_location('test_board_app',BOARD/'app.py');module=importlib.util.module_from_spec(spec)
         mocks={'time':SimpleNamespace(ticks_ms=lambda:0,ticks_diff=lambda a,b:a-b),'camera':SimpleNamespace(CameraSession=None),'vision':SimpleNamespace(localize=None),
-               'control':SimpleNamespace(run_pick_action=None,run_arm_ready=None)}
+               'control':SimpleNamespace(run_pick_action=None,run_ready_direct=None)}
         with patch.dict(sys.modules,mocks):spec.loader.exec_module(module)
         return module
     def test_control_log_interceptor_preserves_both_event_prefixes(self):
@@ -206,18 +206,18 @@ class ReadyCommandTests(unittest.TestCase):
         self.assertEqual(cfg['ready_control']['registers'],cfg['control']['registers'])
         app=self.app();calls=[]
         with patch.dict(sys.modules,{'control':SimpleNamespace()}),patch.object(app,'log'),\
-             patch.object(app,'run_arm_ready',side_effect=lambda config,action:calls.append((config,action))),\
+             patch.object(app,'run_ready_direct',side_effect=lambda config:calls.append(config)),\
              patch.object(app,'run_once') as pick:
             app.run_ready(cfg)
             pick.assert_not_called()
-        self.assertEqual(calls,[(cfg['ready_control'],'hold'),(cfg['ready_control'],'ready')])
+        self.assertEqual(calls,[cfg['ready_control']])
 
-    def test_ready_hold_failure_does_not_send_ready_goal(self):
+    def test_ready_dispatch_failure_is_not_retried(self):
         app=self.app()
         with patch.dict(sys.modules,{'control':SimpleNamespace()}),patch.object(app,'log'),\
-             patch.object(app,'run_arm_ready',side_effect=RuntimeError('hold failed')) as run:
+             patch.object(app,'run_ready_direct',side_effect=RuntimeError('write failed')) as run:
             with self.assertRaises(RuntimeError):app.run_ready({'ready_control':{'goals':[2048]*6}})
-            run.assert_called_once_with({'goals':[2048]*6},'hold')
+            run.assert_called_once_with({'goals':[2048]*6})
 
     def test_ready_command_bypasses_camera_and_returns_to_listening(self):
         app=self.app();cfg={'pick':{'cube_offset_toward_moving_finger_mm':-45},'voice':{}}
@@ -254,6 +254,53 @@ class ReadyCommandTests(unittest.TestCase):
             log.assert_any_call('voice_ready',{'words':['思达思达','回准备位']})
         self.assertEqual(added,['sida','ready']);self.assertEqual(closed,['stream','audio','engine'])
         self.assertEqual(len(reads),33)
+
+
+
+class DirectReadyTransportTests(unittest.TestCase):
+    def run_direct(self,fail_at=None):
+        writes=[];closed=[]
+        class Pins:
+            UART1_TXD=1;UART1_RXD=2
+            def set_function(self,*args):pass
+        class Port:
+            UART1=1;EIGHTBITS=8;PARITY_NONE=None;STOPBITS_ONE=1
+            def __init__(self,*args,**kwargs):pass
+            def read(self,*args):raise AssertionError('Direct ready must never read servos')
+            def write(self,packet):
+                writes.append(packet)
+                return 0 if len(writes)==fail_at else len(packet)
+            def deinit(self):closed.append(True)
+        fake_time=SimpleNamespace(ticks_ms=lambda:0,ticks_diff=lambda a,b:a-b)
+        ns={}
+        with patch.dict(sys.modules,{'machine':SimpleNamespace(UART=Port,FPIOA=Pins),
+                                    'time':fake_time,'ujson':json}):
+            exec((ROOT/'device/k230/arm/ready_pose.py').read_text(),ns)
+        cfg,_,_=deploy.build_bundle()
+        error=None
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            try:ns['run_ready_direct'](cfg['ready_control'])
+            except RuntimeError as exc:error=exc
+        return cfg,writes,closed,error,output.getvalue()
+
+    def test_exact_final_goals_then_torque_enable_no_reads_or_waits(self):
+        cfg,writes,closed,error,output=self.run_direct()
+        self.assertIsNone(error);self.assertEqual(closed,[True]);self.assertEqual(len(writes),2)
+        packet=writes[0]
+        self.assertEqual(packet[:7],bytes([255,255,254,52,131,41,7]))
+        self.assertEqual(sum(packet[2:])&255,255)
+        for i in range(6):
+            entry=packet[7+i*8:15+i*8];profile=cfg['ready_control']['profiles'][i]
+            self.assertEqual(entry[0],i+1);self.assertEqual(entry[1],profile['acceleration_raw'])
+            self.assertEqual(entry[2]|entry[3]<<8,cfg['ready_control']['goals'][i])
+            self.assertEqual(entry[4:6],b'\x00\x00')
+            self.assertEqual(entry[6]|entry[7]<<8,profile['speed_raw'])
+        self.assertEqual(writes[1],bytes([255,255,254,4,3,40,1,209]))
+        self.assertIn('"servo_reads": 0',output)
+
+    def test_short_goal_write_never_enables_torque_or_sends_recovery(self):
+        _,writes,closed,error,_=self.run_direct(fail_at=1)
+        self.assertIsInstance(error,RuntimeError);self.assertEqual(len(writes),1);self.assertEqual(closed,[True])
 
 
 class DeploymentTests(unittest.TestCase):

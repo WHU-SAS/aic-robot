@@ -6,7 +6,7 @@ import os,gc,json,time
 from camera import CameraSession
 from vision import localize
 from kinematics import Geometry
-from control import run_pick_action,run_arm_ready
+from control import run_pick_action,run_ready_direct
 from voice_commands import registered_commands,resolve_events
 
 
@@ -121,9 +121,8 @@ def run_ready(config):
     arm_control.print=record_arm_event
     ready=config['ready_control']
     log('ready_started',{'goals':ready['goals'],'gripper_opens_deg':30})
-    run_arm_ready(ready,'hold')
-    run_arm_ready(ready,'ready')
-    log('ready_complete_torque_on',{'arrival':'requires observation'})
+    run_ready_direct(ready)
+    log('ready_dispatched',{'arrival':'not_checked','torque_enable':'sent_not_read_back'})
 
 
 def run_forever(root):

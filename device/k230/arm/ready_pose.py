@@ -135,3 +135,25 @@ def run_arm_ready(config,action):
     finally:
         # Never issue recovery goals, torque-OFF, EEPROM or PID writes on failure.
         uart.deinit()
+
+
+def run_ready_direct(config):
+    """User-selected voice-ready dispatch: no servo reads or arrival wait.
+
+    Send the final goals before torque-enable so an OFF servo cannot resume an
+    old target. Already powered servos begin on the first synchronized packet.
+    Packet construction and short-write errors are ordinary transport handling.
+    """
+    goal_packet=sync_frame(config['goals'],config['profiles'])
+    torque_packet=frame(254,3,(40,1))
+    pins=FPIOA();pins.set_function(3,FPIOA.UART1_TXD);pins.set_function(4,FPIOA.UART1_RXD)
+    uart=UART(UART.UART1,baudrate=1000000,bits=UART.EIGHTBITS,parity=UART.PARITY_NONE,stop=UART.STOPBITS_ONE)
+    try:
+        started=time.ticks_ms()
+        if uart.write(goal_packet)!=len(goal_packet):raise RuntimeError('Short ready goal write')
+        if uart.write(torque_packet)!=len(torque_packet):raise RuntimeError('Short ready torque write')
+        print('ARM_EVENT '+ujson.dumps({'event':'ready_direct_sent','goals':config['goals'],
+              'goal_packet_count':1,'servo_reads':0,'readback_verified':False,
+              'dispatch_ms':time.ticks_diff(time.ticks_ms(),started)}))
+    finally:
+        uart.deinit()
