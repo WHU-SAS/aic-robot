@@ -86,7 +86,7 @@ class TrialConfigTests(unittest.TestCase):
         self.assertEqual(ext['intrinsics_sha256'],hashlib.sha256((ROOT/vision['intrinsics']).read_bytes()).hexdigest())
         self.assertEqual(pick['forward_extension_mm'],0)
         self.assertEqual(pick['alignment_reference'],'open_fingertip_midpoint')
-        self.assertEqual(pick['cube_offset_toward_moving_finger_mm'],-30)
+        self.assertEqual(pick['cube_offset_toward_moving_finger_mm'],-50)
         self.assertEqual([pick[k] for k in ('opening_count','descend_tip_height_mm','hover_tip_height_mm','lift_tip_height_mm')],[2389,15,80,80])
         self.assertEqual([config.profiles[i] for i in range(1,7)],
             [{'speed_raw':v,'acceleration_raw':a} for v,a in [(150,5),(600,20),(600,20),(600,20),(150,5),(150,5)]])
@@ -212,19 +212,19 @@ class OpenTipGeometryTests(unittest.TestCase):
         self.assertEqual(self.plan['closing_count'],self.plan['nominal_closing_count']-20)
 
 
-    def test_negative_offset_is_exactly_30mm_toward_fixed_jaw_for_each_heading(self):
+    def test_negative_offset_is_exactly_50mm_toward_fixed_jaw_for_each_heading(self):
         import numpy as np
         from host.arm.pick_validation_geometry import OpenTipPickGeometry
         unused,cfg=app.parameters()
         shifted=OpenTipPickGeometry(ROOT,cfg.mapping,opening_count=2389,
-                                    cube_offset_toward_moving_finger_mm=-30)
+                                    cube_offset_toward_moving_finger_mm=-50)
         for yaw in (-.4,0,.4):
             q=self.g.angles(self.plan['descend']);q[0]=yaw
             mid,points,unused_low,unused_t=self.g.open_reference(q)
             expected=points['wan2'][:2]-points['zhua'][:2]
-            expected=expected/np.linalg.norm(expected)*.030
+            expected=expected/np.linalg.norm(expected)*.050
             actual=shifted.alignment_midpoint(q)-mid
             np.testing.assert_allclose(actual[:2],expected,atol=1e-12)
             self.assertAlmostEqual(actual[2],0)
         report=shifted.report(self.plan['descend'])
-        self.assertEqual(report['cube_offset_toward_moving_finger_mm'],-30)
+        self.assertEqual(report['cube_offset_toward_moving_finger_mm'],-50)
