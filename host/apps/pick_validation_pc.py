@@ -39,7 +39,8 @@ def make_plan(vision,start,pick,config,offset=(0,0,0)):
     geometry=PickGeometry(ROOT,config.mapping,table_z_m=table_z/1000,
         hover_tip_height_mm=pick['hover_tip_height_mm']+offset[2],
         descend_tip_height_mm=pick['descend_tip_height_mm']+offset[2],
-        lift_tip_height_mm=pick['lift_tip_height_mm']+offset[2],opening_count=pick['opening_count'])
+        lift_tip_height_mm=pick['lift_tip_height_mm']+offset[2],opening_count=pick['opening_count'],
+        cube_offset_toward_moving_finger_mm=pick['cube_offset_toward_moving_finger_mm'])
     config.check_counts(dict(enumerate(start,1)))
     plan=geometry.plan([v/1000 for v in xy],start)
     for name in ('hover','descend','close','lift'):

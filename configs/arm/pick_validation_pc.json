@@ -19,5 +19,7 @@
   "arm_transport": "K230 UART1 -> URT-2",
   "automatic_return_or_torque_release": false,
   "alignment_reference": "open_fingertip_midpoint",
-  "alignment_authorization": "User 2026-10-22: align midpoint at 30-degree opening before descending"
+  "alignment_authorization": "User 2026-10-22: align midpoint at 30-degree opening before descending",
+  "cube_offset_toward_moving_finger_mm": -30,
+  "cube_offset_authorization": "User 2026-10-22: from current open-tip midpoint, offset cube 30mm toward FIXED jaw"
 }
