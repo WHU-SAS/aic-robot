@@ -18,8 +18,14 @@
       "keyword_id": "ready",
       "word": "回准备位",
       "action": "ready",
-      "enrollment_file": null,
-      "status": "pending_enrollment"
+      "enrollment_file": "/sdcard/voice/ready_20261022_160740_580981/keyword.json",
+      "status": "user_test_accepted",
+      "validation": {
+        "date": "2026-10-22",
+        "user_report": "录音、测试完毕，没问题",
+        "utterance_count": null,
+        "wake_event_count": null
+      }
     }
   }
 }
