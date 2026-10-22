@@ -40,7 +40,7 @@ class StandaloneVisionCases(unittest.TestCase):
 
 
 class MultiFaceOutlineCases(unittest.TestCase):
-    def scene(self,angle):
+    def scene(self,angle,side_value=160):
         K=np.array([[1200.,0.,640.],[0.,1600.,580.],[0.,0.,1.]])
         D=np.zeros(5);rv=np.array([angle,.02,.01]);t=np.array([-10.,-10.,250.])
         side=np.array([[0.,0.,0.],[20.,0.,0.],[20.,20.,0.],[0.,20.,0.]])
@@ -49,8 +49,38 @@ class MultiFaceOutlineCases(unittest.TestCase):
         tq=cv2.projectPoints(top,rv,t,K,D)[0].reshape(-1,2)
         im=np.full((960,1280,3),(80,140,170),np.uint8)
         cv2.fillConvexPoly(im,np.rint(tq).astype(np.int32),(250,90,15))
-        cv2.fillConvexPoly(im,np.rint(q).astype(np.int32),(160,40,10))
+        cv2.fillConvexPoly(im,np.rint(q).astype(np.int32),(side_value,40,10))
         return cv2.GaussianBlur(im,(3,3),.7),K,D,q
+
+    def test_bright_top_uses_adjacent_complete_side(self):
+        from vision import basic_face
+        from host.vision.runtime_cube_faces import verify_single_face
+        for angle in (.15,.25):
+            im,K,D,q=self.scene(angle,110)
+            top=basic_face(cv2.cvtColor(im,cv2.COLOR_BGR2HSV),K.tolist(),D.tolist())
+            self.assertIsNotNone(top)
+            top['status']='complete_face_candidate'
+            pc=verify_single_face(im,K,D,top)
+            board=localize(im,K.tolist(),D.tolist(),np.eye(4).tolist())
+            for result in (pc,board):
+                self.assertIn('preferred_over_top',result)
+                self.assertLess(np.max(np.linalg.norm(np.array(result['face_quad_px'])-q,axis=1)),3)
+
+    def test_unrelated_or_incomplete_side_does_not_replace_top(self):
+        from vision import basic_face
+        from unittest.mock import patch
+        from host.vision.runtime_cube_faces import verify_single_face
+        im,K,D,q=self.scene(.25,110)
+        top=basic_face(cv2.cvtColor(im,cv2.COLOR_BGR2HSV),K.tolist(),D.tolist())
+        top['status']='complete_face_candidate'
+        side={'status':'complete_face_candidate','poses':top['poses'],
+              'face_quad_px':(q+[200,0]).tolist()}
+        with patch('host.vision.runtime_cube_faces.split_exposed_cube',return_value=side):
+            self.assertEqual(verify_single_face(im,K,D,top),top)
+        with patch('vision.split_face',return_value=None):
+            result=localize(im,K.tolist(),D.tolist(),np.eye(4).tolist())
+        self.assertNotIn('preferred_over_top',result)
+        self.assertEqual(result['face_quad_px'],top['face_quad_px'])
 
     def test_two_planes_can_pass_square_pnp_but_must_be_separated(self):
         from host.vision.grasp_face_quality import assess

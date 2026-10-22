@@ -71,11 +71,19 @@ def split_exposed_cube(im,K,D):
 
 def verify_single_face(im,K,D,candidate):
  """Check interior physical seams even when an outline passed square PnP."""
- from device.k230.pick.face_selection import internal_seam,separated_face_inside
+ from device.k230.pick.face_selection import internal_seam,separated_face_inside,adjacent_side
  if candidate.get('status')!='complete_face_candidate' or not candidate.get('poses'):return candidate
+ separated=None
+ if candidate.get('boundary_method')=='existing_threshold_median':
+  separated=split_exposed_cube(im,K,D)
+  if separated.get('status')=='complete_face_candidate' and separated.get('poses') and adjacent_side(candidate['face_quad_px'],separated['face_quad_px']):
+   separated['preferred_over_top']={'face_quad_px':candidate['face_quad_px'],
+      'reprojection_rms_px':candidate['poses'][0]['face_reprojection_rms_px'],
+      'reason':'Verified adjacent physical side has larger image extent than bright top'}
+   return separated
  evidence=internal_seam(cv2.cvtColor(im,cv2.COLOR_BGR2HSV),candidate['face_quad_px'])
  if evidence is None:return candidate
- separated=split_exposed_cube(im,K,D)
+ if separated is None:separated=split_exposed_cube(im,K,D)
  previous={'boundary_method':candidate.get('boundary_method'),'face_quad_px':candidate['face_quad_px'],
            'reprojection_rms_px':candidate['poses'][0]['face_reprojection_rms_px'],'interior_seam':evidence}
  if separated.get('status')=='complete_face_candidate' and separated.get('poses') and separated_face_inside(candidate['face_quad_px'],separated['face_quad_px']):

@@ -14,7 +14,7 @@ FLOAT=getattr(np,'float',None) or np.float32
 from pose import pose_candidates
 from numeric import norm,dot,solve
 from reflection_faces import detect_reflection_face
-from face_selection import internal_seam,separated_face_inside
+from face_selection import internal_seam,separated_face_inside,adjacent_side
 
 
 def median(values):
@@ -256,8 +256,16 @@ def gradient_side(im,hsv,K,D):
 def localize(im,K,D,T):
     if im.shape[:2]!=(960,1280):raise ValueError('Expected 1280x960 BGR frame')
     hsv=cv2.cvtColor(im,cv2.COLOR_BGR2HSV)
-    result=basic_face(hsv,K,D) or dim_face(hsv,K,D)
-    evidence=internal_seam(hsv,result['face_quad_px']) if result else None
+    result=basic_face(hsv,K,D)
+    if result is not None:
+        side=split_face(hsv,K,D)
+        if side is not None and adjacent_side(result['face_quad_px'],side['face_quad_px']):
+            side['preferred_over_top']={'face_quad_px':result['face_quad_px'],
+                'reprojection_rms_px':result['poses'][0]['face_reprojection_rms_px'],
+                'reason':'Verified adjacent physical side has larger image extent than bright top'}
+            result=side
+    result=result or dim_face(hsv,K,D)
+    evidence=internal_seam(hsv,result['face_quad_px']) if result and 'preferred_over_top' not in result else None
     if evidence is not None:
         whole=result;separated=split_face(hsv,K,D)
         result=separated if separated and separated_face_inside(whole['face_quad_px'],separated['face_quad_px']) else None

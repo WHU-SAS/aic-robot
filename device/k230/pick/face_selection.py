@@ -49,3 +49,22 @@ def separated_face_inside(whole,part):
         d=[line_distance(p,a,b) for a,b in edges]
         if min(d)<-8 or min(abs(v) for v in d)>8:return False
     return True
+
+
+def adjacent_side(top,side):
+    """Associate a shallow top with its larger side using their shared edge.
+
+    The bright top may be inset, so allow modest endpoint displacement. Never
+    substitute a side belonging to a different blue object or a whole outline.
+    Both inputs must already have passed their physical-face quality checks.
+    """
+    def distance(a,b):return math.sqrt(sum((x-y)**2 for x,y in zip(a,b)))
+    def area(q):return abs(sum(a[0]*b[1]-b[0]*a[1] for a,b in zip(q,q[1:]+q[:1])))/2
+    tw=(distance(top[0],top[1])+distance(top[3],top[2]))/2
+    th=(distance(top[0],top[3])+distance(top[1],top[2]))/2
+    sw=distance(side[0],side[1])
+    if tw<1 or th/tw>.65 or not .7<sw/tw<1.45:return False
+    if area(side)<1.5*area(top):return False
+    tolerance=max(10.,.15*tw)
+    if distance(top[3],side[0])>tolerance or distance(top[2],side[1])>tolerance:return False
+    return (side[2][1]+side[3][1])/2>(top[2][1]+top[3][1])/2+th
