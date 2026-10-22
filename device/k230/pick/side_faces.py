@@ -73,14 +73,58 @@ def measure_side(im,hsv,seed,K,D):
             'seam_support':support,'area_px2':area(q),'boundary_method':'independent_side_four_measured_edges'}
 
 
-def detect_sides(im,K,D,anchor):
-    if not anchor or not anchor.get('poses') or not anchor.get('face_quad_px'):return []
+def component_anchor(hsv):
+    """Locate the blue object without repeatedly solving a square pose."""
+    height,width=hsv.shape[:2]
+    mask=cv2.inRange(hsv,(90,120,35),(140,255,255));mask[:int(height*.45),:]=0
+    cs,unused=cv2.findContours(mask,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+    eligible=[c for c in cs if cv2.contourArea(c)>=1000]
+    if not eligible:return None
+    contour=max(eligible,key=cv2.contourArea);x,y,w,h=cv2.boundingRect(contour)
+    if min(w,h)<30:return None
+    hull=cv2.convexHull(contour)
+    outline=cv2.approxPolyDP(hull,.01*cv2.arcLength(hull,True),True)
+    support=cv2.approxPolyDP(contour,.003*cv2.arcLength(contour,True),True)
+    vertices=[[float(x),float(y)] for x,y in outline.reshape((-1,2)).tolist()]
+    return {'face_quad_px':[[float(x),float(y)],[float(x+w-1),float(y)],
+            [float(x+w-1),float(y+h-1)],[float(x),float(y+h-1)]],
+            'component_bbox_px':[x,y,w,h],'component_vertices_px':vertices,
+            'component_contour_px':[[float(x),float(y)] for x,y in support.reshape((-1,2)).tolist()],
+            'unposed_component':True}
+
+
+def inside_polygon(point,polygon):
+    inside=False;x,y=point
+    for a,b in zip(polygon,polygon[1:]+polygon[:1]):
+        if (a[1]>y)!=(b[1]>y):
+            crossing=a[0]+(y-a[1])*(b[0]-a[0])/(b[1]-a[1])
+            if x<crossing:inside=not inside
+    return inside
+
+
+def component_support(q,anchor):
+    # Interior samples must belong to the original connected component, not a
+    # second blue item that happened to fall in the expanded search rectangle.
+    contour=anchor['component_contour_px']
+    for u,v in ((.5,.5),(.25,.25),(.75,.25),(.25,.75),(.75,.75)):
+        p=[(1-v)*((1-u)*q[0][k]+u*q[1][k])+v*((1-u)*q[3][k]+u*q[2][k]) for k in (0,1)]
+        if not inside_polygon(p,contour):return False
+    return True
+
+
+def detect_sides(im,K,D,anchor,hsv=None):
+    unposed=bool(anchor and anchor.get('unposed_component'))
+    if not anchor or not anchor.get('face_quad_px') or not (unposed or anchor.get('poses')):return []
     q0=anchor['face_quad_px'];xs=[p[0] for p in q0];ys=[p[1] for p in q0]
     span=max(max(xs)-min(xs),max(ys)-min(ys));h,w=im.shape[:2]
-    x0=max(0,int(min(xs)-.6*span));x1=min(w,int(max(xs)+.6*span))
-    y0=max(0,int(min(ys)-.4*span));y1=min(h,int(max(ys)+1.6*span))
-    # Work only around the already selected blue object, not other blue items.
-    hsv=cv2.cvtColor(im,cv2.COLOR_BGR2HSV);roi=np.array(hsv[y0:y1,x0:x1],dtype=np.uint8)
+    if unposed:
+        x,y,rw,rh=anchor['component_bbox_px']
+        x0=max(0,x-24);x1=min(w,x+rw+24);y0=max(0,y-24);y1=min(h,y+rh+24)
+    else:
+        x0=max(0,int(min(xs)-.6*span));x1=min(w,int(max(xs)+.6*span))
+        y0=max(0,int(min(ys)-.4*span));y1=min(h,int(max(ys)+1.6*span))
+    if hsv is None:hsv=cv2.cvtColor(im,cv2.COLOR_BGR2HSV)
+    roi=np.array(hsv[y0:y1,x0:x1],dtype=np.uint8)
     broad=cv2.inRange(roi,(90,120,35),(140,255,255))
     hist=cv2.calcHist([roi],[0],broad,[180],[0.,180.]).reshape((-1,)).tolist();modes=[]
     for unused in range(4):
@@ -92,11 +136,22 @@ def detect_sides(im,K,D,anchor):
     for mode in modes:
         for band in (1,2,4):
             ranges.append(((max(90,mode-band),120,35),(min(140,mode+band),255,255)))
-    # Hue can coincide across top/side; bounded value slices propose the dim
-    # side without treating the entire two-side outline as one square.
     for low,high in ((40,120),(80,160),(120,200),(160,240),(200,255)):
         ranges.append(((90,120,low),(140,255,high)))
-    seeds=[q0]
+    # Adapt value slices to the actual blue component so a dim side still
+    # receives a proposal. These windows do not change edge/pose acceptance.
+    values=cv2.calcHist([roi],[2],broad,[256],[0.,256.]).reshape((-1,)).tolist()
+    total=sum(values);cumulative=0;cuts=[]
+    for value,count in enumerate(values):
+        cumulative+=count
+        while len(cuts)<4 and total and cumulative>=total*(len(cuts)+1)/5:cuts.append(value)
+    for low,high in zip([35]+cuts,cuts+[255]):
+        if high-low>=12:ranges.append(((90,120,max(35,low-5)),(140,255,min(255,high+5))))
+    seeds=[] if unposed else [q0];top_hints=[]
+    if unposed and len(anchor['component_vertices_px'])==4:seeds.append(ordered(np.array(anchor['component_vertices_px'],dtype=FLOAT)))
+    try:from .face_selection import shallow_face
+    except ImportError:from face_selection import shallow_face
+    if not unposed and abs(anchor['poses'][0]['inward_face_normal_Camera'][1])>.7:top_hints.append(q0)
     for lo,hi in ranges:
         mask=cv2.inRange(roi,lo,hi)
         mask=cv2.morphologyEx(mask,cv2.MORPH_CLOSE,np.ones((3,3),dtype=np.uint8))
@@ -106,36 +161,50 @@ def detect_sides(im,K,D,anchor):
             hull=cv2.convexHull(c);p=cv2.approxPolyDP(hull,.02*cv2.arcLength(hull,True),True)
             if len(p)!=4:continue
             q=[[x+x0,y+y0] for x,y in ordered(p)]
+            if unposed and not component_support(q,anchor):continue
+            if unposed and shallow_face(q) and not any(corner_distance(q,old)<3 for old in top_hints):top_hints.append(q)
             if any(corner_distance(q,old)<3 for old in seeds):continue
             seeds.append(q)
-    # A top and one side can share the same hue. Use the observed full blue
-    # contour's LOWER vertices to seed each exposed side, not a 20mm template.
-    # All four edges, including the interior vertical edge, are still measured.
-    if abs(anchor['poses'][0]['inward_face_normal_Camera'][1])>.7:
-        cs,unused=cv2.findContours(broad,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+    # Top hints and observed lower contour vertices only propose side search
+    # windows; each output still needs all FOUR measured physical boundaries.
+    cs,unused=cv2.findContours(broad,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+    for hint in top_hints[:4]:
+        hint_span=max(max(v[k] for v in hint)-min(v[k] for v in hint) for k in (0,1))
         for contour in cs:
             if cv2.contourArea(contour)<1000:continue
-            hull=cv2.convexHull(contour)
-            poly=cv2.approxPolyDP(hull,.01*cv2.arcLength(hull,True),True)
+            hull=cv2.convexHull(contour);poly=cv2.approxPolyDP(hull,.01*cv2.arcLength(hull,True),True)
             vertices=[[float(x+x0),float(y+y0)] for x,y in poly.reshape((-1,2)).tolist()]
-            for a,b in zip(q0,q0[1:]+q0[:1]):
+            for a,b in zip(hint,hint[1:]+hint[:1]):
                 if b[0]-a[0]>=-.25*distance(a,b):continue
-                lower=[v for v in vertices if v[1]>max(a[1],b[1])+.3*span]
+                lower=[v for v in vertices if v[1]>max(a[1],b[1])+.3*hint_span]
                 if not lower:continue
                 ends=[min(lower,key=lambda v:abs(v[0]-p[0])) for p in (a,b)]
-                if max(abs(v[0]-p[0]) for v,p in zip(ends,(a,b)))>.25*span:continue
+                if max(abs(v[0]-p[0]) for v,p in zip(ends,(a,b)))>.25*hint_span:continue
                 seed=ordered(np.array([b,a,ends[0],ends[1]],dtype=FLOAT))
-                if not any(corner_distance(seed,old)<3 for old in seeds):seeds.append(seed)
+                if not any(corner_distance(seed,old)<3 for old in seeds):seeds.insert(0,seed)
     sm=cv2.GaussianBlur(im,(3,3),.7);found=[]
     for seed in seeds[:32]:
         try:face=measure_side(sm,hsv,seed,K,D)
         except (ValueError,ZeroDivisionError):continue
-        if corner_distance(face['face_quad_px'],q0)>18 and not shared_edge(q0,face['face_quad_px']):continue
-        existing=next((f for f in found if corner_distance(face['face_quad_px'],f['face_quad_px'])<6),None)
+        q=face['face_quad_px']
+        if unposed:
+            if not component_support(q,anchor):continue
+        elif corner_distance(q,q0)>18 and not shared_edge(q0,q):continue
+        existing=next((f for f in found if corner_distance(q,f['face_quad_px'])<6),None)
         if existing is None:found.append(face)
         elif face['poses'][0]['face_reprojection_rms_px']<existing['poses'][0]['face_reprojection_rms_px']:
             found[found.index(existing)]=face
+    search={'seed_count':len(seeds),'measured_seed_count':min(32,len(seeds)),'usable_sides':len(found),'value_cuts':cuts}
+    for face in found:face['side_search_diagnostics']=search
     return found
+
+
+def fast_sides(im,K,D,hsv):
+    anchor=component_anchor(hsv)
+    if anchor is None:return None
+    result=select_sides(detect_sides(im,K,D,anchor,hsv),K,D)
+    if result is not None:result['vision_path']='direct_component_sides'
+    return result
 
 
 def select_sides(faces,K,D):

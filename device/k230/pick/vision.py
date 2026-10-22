@@ -16,14 +16,14 @@ try:
     from .numeric import norm,dot,solve
     from .reflection_faces import detect_reflection_face
     from .top_boundaries import validate_top_boundary
-    from .side_faces import prefer_sides
+    from .side_faces import prefer_sides,fast_sides
     from .face_selection import internal_seam,separated_face_inside,adjacent_side,independent_adjacent_side,shallow_face
 except ImportError:
     from pose import pose_candidates
     from numeric import norm,dot,solve
     from reflection_faces import detect_reflection_face
     from top_boundaries import validate_top_boundary
-    from side_faces import prefer_sides
+    from side_faces import prefer_sides,fast_sides
     from face_selection import internal_seam,separated_face_inside,adjacent_side,independent_adjacent_side,shallow_face
 
 def median(values):
@@ -265,6 +265,12 @@ def gradient_side(im,hsv,K,D):
 def localize(im,K,D,T):
     if im.shape[:2]!=(960,1280):raise ValueError('Expected 1280x960 BGR frame')
     hsv=cv2.cvtColor(im,cv2.COLOR_BGR2HSV)
+    direct=fast_sides(im,K,D,hsv)
+    if direct is not None:
+        center=direct['poses'][0]['cube_center_Camera_mm']
+        direct['cube_center_Camera_mm']=center
+        direct['cube_center_Base_mm']=[sum(T[i][j]*center[j] for j in range(3))+T[i][3] for i in range(3)]
+        return direct
     result=basic_face(hsv,K,D) or dim_face(hsv,K,D)
     initial=result
     selected=prefer_sides(im,K,D,result)
@@ -305,6 +311,7 @@ def localize(im,K,D,T):
         if result['status']!='complete_face_candidate':raise ValueError(result['reason'])
     if result is None:raise ValueError('No reliable physical blue20mm face')
     result.setdefault('status','complete_face_candidate')
+    result.setdefault('vision_path','legacy_recovery')
     center=result['poses'][0]['cube_center_Camera_mm']
     result['cube_center_Camera_mm']=center
     result['cube_center_Base_mm']=[sum(T[i][j]*center[j] for j in range(3))+T[i][3] for i in range(3)]

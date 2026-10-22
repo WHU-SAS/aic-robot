@@ -92,16 +92,26 @@ def arm_snapshot(config):
 def run_once(config,execute=False):
     vision=config['vision'];intr=config['intrinsics'];K=[list(row) for row in intr['camera_matrix']]
     for j in range(3):K[0][j]*=1280/intr['image_width'];K[1][j]*=960/intr['image_height']
-    session=CameraSession(vision,False)
+    session=CameraSession(vision,False);timing={};perception_started=time.ticks_ms()
     try:
-        session.open();img=session.snapshot()
+        phase=time.ticks_ms();session.open()
+        timing['camera_open_warmup']=time.ticks_diff(time.ticks_ms(),phase)
+        phase=time.ticks_ms();img=session.snapshot()
+        timing['snapshot']=time.ticks_diff(time.ticks_ms(),phase)
         # Preserve RGB565 capture and JPEG95 decoding used by the accepted PC
         # pipeline; only the transfer to the computer has been removed.
-        img.save('/sdcard/aic/pick/last_frame.jpg',quality=95)
-    finally:session.close()
+        phase=time.ticks_ms();img.save('/sdcard/aic/pick/last_frame.jpg',quality=95)
+        timing['jpeg_save']=time.ticks_diff(time.ticks_ms(),phase)
+    finally:
+        phase=time.ticks_ms();session.close()
+        timing['camera_close']=time.ticks_diff(time.ticks_ms(),phase)
     import cv2
-    im=cv2.imread('/sdcard/aic/pick/last_frame.jpg')
-    found=localize(im,K,intr['distortion_coefficients'],config['extrinsics']['T_Base_from_Camera_mm'])
+    phase=time.ticks_ms();im=cv2.imread('/sdcard/aic/pick/last_frame.jpg')
+    timing['jpeg_read']=time.ticks_diff(time.ticks_ms(),phase)
+    phase=time.ticks_ms();found=localize(im,K,intr['distortion_coefficients'],config['extrinsics']['T_Base_from_Camera_mm'])
+    timing['visual_localization']=time.ticks_diff(time.ticks_ms(),phase)
+    timing['capture_and_localize']=time.ticks_diff(time.ticks_ms(),perception_started)
+    found['perception_timing_ms']=timing
     del im;gc.collect();log('localized',found)
     if not execute:return found
     import control as arm_control

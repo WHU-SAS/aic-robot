@@ -87,6 +87,23 @@ class SidePolicyCases(unittest.TestCase):
         duplicate=[[x+2,y] for x,y in a['face_quad_px']]
         self.assertFalse(shared_edge(a['face_quad_px'],duplicate))
 
+    def test_dark_side_direct_path_does_not_run_expensive_legacy_searches(self):
+        for exposure in (.35,.45,.6):
+            im,K,D,truth=self.scene(.7,exposure)
+            with patch('vision.dim_face',side_effect=AssertionError('Repeated dim scan')),patch('vision.split_face',side_effect=AssertionError('Repeated top/side scan')):
+                result=localize(im,K.tolist(),D.tolist(),np.eye(4).tolist())
+            self.assertEqual(result['vision_path'],'direct_component_sides')
+            np.testing.assert_allclose(result['cube_center_Base_mm'],truth,atol=3)
+            self.assertEqual(result['selected_side_count'],2)
+
+    def test_direct_path_rejects_missing_edges_and_a_reflection_strip(self):
+        im,K,D,truth=self.scene();im[:]=(80,140,170)
+        cv2.rectangle(im,(600,750),(700,959),(100,35,5),-1)
+        with self.assertRaises(ValueError):localize(im,K.tolist(),D.tolist(),np.eye(4).tolist())
+        im,K,D,truth=self.scene();im[545:,:]=(150,55,5)
+        from device.k230.pick.side_faces import fast_sides
+        self.assertIsNone(fast_sides(im,K.tolist(),D.tolist(),cv2.cvtColor(im,cv2.COLOR_BGR2HSV)))
+
     def test_localization_uses_sides_before_a_bright_top(self):
         im,K,D,truth=self.scene()
         with patch('vision.validate_top_boundary',side_effect=AssertionError('Side result must not use top fallback')):

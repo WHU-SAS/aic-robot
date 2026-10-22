@@ -84,7 +84,7 @@ class MultiFaceOutlineCases(unittest.TestCase):
             pc=verify_single_face(im,K,D,top)
             board=localize(im,K.tolist(),D.tolist(),np.eye(4).tolist())
             for result in (pc,board):
-                self.assertIn('preferred_over_top',result)
+                self.assertTrue('preferred_over_top' in result or result.get('vision_path')=='direct_component_sides')
                 self.assertLess(np.max(np.linalg.norm(np.array(result['face_quad_px'])-q,axis=1)),3)
 
     def test_unrelated_or_incomplete_side_does_not_replace_top(self):
@@ -98,7 +98,7 @@ class MultiFaceOutlineCases(unittest.TestCase):
               'face_quad_px':(q+[200,0]).tolist()}
         with patch('host.vision.runtime_cube_faces.split_exposed_cube',return_value=side),patch('device.k230.pick.face_selection.independent_adjacent_side',return_value=None):
             self.assertEqual(verify_single_face(im,K,D,top),top)
-        with patch('vision.prefer_sides',return_value=None),patch('vision.split_face',return_value=None),patch('vision.independent_adjacent_side',return_value=None):
+        with patch('vision.fast_sides',return_value=None),patch('vision.prefer_sides',return_value=None),patch('vision.split_face',return_value=None),patch('vision.independent_adjacent_side',return_value=None):
             result=localize(im,K.tolist(),D.tolist(),np.eye(4).tolist())
         self.assertNotIn('preferred_over_top',result)
         self.assertTrue(result['top_boundary_verified'])
@@ -119,7 +119,7 @@ class MultiFaceOutlineCases(unittest.TestCase):
             self.assertLess(np.max(np.linalg.norm(np.array(pc['face_quad_px'])-q,axis=1)),3)
             # Reproduce the failing path: the bright-face selector failed and
             # the dim-face selector accepted the combined top/front outline.
-            with patch('vision.basic_face',return_value=None):
+            with patch('vision.fast_sides',return_value=None),patch('vision.basic_face',return_value=None):
                 board=localize(im,K.tolist(),D.tolist(),np.eye(4).tolist())
             self.assertIn('rejected_multiface_outline',board)
             self.assertLess(np.max(np.linalg.norm(np.array(board['face_quad_px'])-q,axis=1)),3)
@@ -132,7 +132,7 @@ class MultiFaceOutlineCases(unittest.TestCase):
         with patch('host.vision.runtime_cube_faces.split_exposed_cube',return_value={'status':'no_complete_face'}):
             result=verify_single_face(im,K,D,old)
         self.assertEqual(result['status'],'no_complete_face')
-        with patch('vision.prefer_sides',return_value=None),patch('vision.basic_face',return_value=None),patch('vision.split_face',return_value=None),patch('vision.gradient_side',return_value=None),patch('vision.detect_reflection_face',return_value=None):
+        with patch('vision.fast_sides',return_value=None),patch('vision.prefer_sides',return_value=None),patch('vision.basic_face',return_value=None),patch('vision.split_face',return_value=None),patch('vision.gradient_side',return_value=None),patch('vision.detect_reflection_face',return_value=None):
             with self.assertRaisesRegex(ValueError,'No reliable'):
                 localize(im,K.tolist(),D.tolist(),np.eye(4).tolist())
 

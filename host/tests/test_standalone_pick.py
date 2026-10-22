@@ -379,9 +379,11 @@ class DirectPickTests(unittest.TestCase):
              patch.object(app,'CameraSession',Camera),patch.object(app,'Geometry',Model), \
              patch.object(app,'localize',return_value={'cube_center_Base_mm':[240,0,-60]}), \
              patch.object(app,'arm_snapshot',return_value=[{'position':2048} for i in range(6)]), \
-             patch.object(app,'log'),patch.object(app,'run_pick_stage_direct',side_effect=lambda c,s:events.append(s['name'])):
+             patch.object(app,'log') as logs,patch.object(app,'run_pick_stage_direct',side_effect=lambda c,s:events.append(s['name'])):
             app.run_once(cfg,execute=True)
         self.assertEqual(events,['plan','hover','descend','close','lift'])
+        found=next(c.args[1] for c in logs.call_args_list if c.args[0]=='localized')
+        self.assertEqual(set(found['perception_timing_ms']),{'camera_open_warmup','snapshot','jpeg_save','camera_close','jpeg_read','visual_localization','capture_and_localize'})
 
 
 class DeploymentTests(unittest.TestCase):

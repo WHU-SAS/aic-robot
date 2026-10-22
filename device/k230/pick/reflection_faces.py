@@ -57,9 +57,13 @@ def measure_edge(im,a,b):
             if any(not(1<v[0]<width-2 and 1<v[1]<height-2) for v in (upper,lower)):continue
             c=sample(im,upper);d=sample(im,lower)
             # Relative contrast preserves exposure variation; no fixed blue brightness.
-            score=distance(c,d)/max(40.,sum(c+d)/6)
+            # Compare squared relative RGB contrast: same ordering and gate,
+            # without a sqrt, generator and concatenated list per pixel.
+            den=max(40.,(c[0]+c[1]+c[2]+d[0]+d[1]+d[2])/6)
+            dr=c[0]-d[0];dg=c[1]-d[1];db=c[2]-d[2]
+            score=(dr*dr+dg*dg+db*db)/(den*den)
             if best is None or score>best[0]:best=(score,p,j)
-        if best and best[0]>.08:
+        if best and best[0]>.08*.08:
             points.append(best[1]);stations.append(best[2])
     if len(points)<45:raise ValueError('Insufficient edge contrast')
     line=fit(points)
