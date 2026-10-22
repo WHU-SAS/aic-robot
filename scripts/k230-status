@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+aic_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+exec "$aic_root/scripts/host" "$aic_root/host/apps/k230_status.py" "$@"
