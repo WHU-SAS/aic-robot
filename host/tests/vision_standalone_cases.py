@@ -29,6 +29,14 @@ class StandaloneVisionCases(unittest.TestCase):
             self.assertIsNotNone(result)
             self.assertLess(np.max(np.linalg.norm(np.array(result['face_quad_px'])-q,axis=1)),4)
             self.assertLessEqual(result['poses'][0]['face_reprojection_rms_px'],2)
+    def test_shared_runtime_returns_status_for_legacy_face_fallback(self):
+        from unittest.mock import patch
+        im,K,D,q=self.scene()
+        candidate={'face_quad_px':q.tolist(),'poses':[{'cube_center_Camera_mm':[0.,0.,250.]}]}
+        with patch('vision.basic_face',return_value=candidate),patch('vision.prefer_sides',return_value=None),patch('vision.shallow_face',return_value=False),patch('vision.internal_seam',return_value=None):
+            result=localize(im,K.tolist(),D.tolist(),np.eye(4).tolist())
+        self.assertEqual(result['status'],'complete_face_candidate')
+
     def test_no_blue_has_no_target(self):
         im,K,D,q=self.scene();im[:]=90
         with self.assertRaisesRegex(ValueError,'No reliable'):

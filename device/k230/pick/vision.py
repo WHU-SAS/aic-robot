@@ -304,6 +304,7 @@ def localize(im,K,D,T):
         result=validate_top_boundary(im,K,D,result)
         if result['status']!='complete_face_candidate':raise ValueError(result['reason'])
     if result is None:raise ValueError('No reliable physical blue20mm face')
+    result.setdefault('status','complete_face_candidate')
     center=result['poses'][0]['cube_center_Camera_mm']
     result['cube_center_Camera_mm']=center
     result['cube_center_Base_mm']=[sum(T[i][j]*center[j] for j in range(3))+T[i][3] for i in range(3)]
