@@ -63,7 +63,7 @@ class BoardMathTests(unittest.TestCase):
         self.assertEqual(self.config['pick']['stage_durations_s']['lift'],1)
         self.assertFalse(self.manifest['startup_motion'])
         self.assertFalse(self.manifest['pc_runtime_required'])
-        self.assertEqual(self.config['pick']['cube_offset_toward_moving_finger_mm'],-40)
+        self.assertEqual(self.config['pick']['cube_offset_toward_moving_finger_mm'],-42)
         # Control helpers are definitions, not a queued sequence executed on import.
         control=ast.parse(self.files['control.py'].decode())
         for n in control.body:
@@ -96,7 +96,7 @@ class VoiceDispatchTests(unittest.TestCase):
             calls.append('wait')
             if len(calls)>1:raise KeyboardInterrupt()
             return 'pick'
-        with patch.object(app,'load',return_value={'pick':{'cube_offset_toward_moving_finger_mm':-40},'voice':{'wake_word':'思达思达'}}),\
+        with patch.object(app,'load',return_value={'pick':{'cube_offset_toward_moving_finger_mm':-42},'voice':{'wake_word':'思达思达'}}),\
              patch.object(app,'log'),patch.object(app,'wait_for_wake',side_effect=wait),\
              patch.object(app,'run_once',side_effect=lambda cfg,execute:calls.append(('pick',execute))):
             with self.assertRaises(KeyboardInterrupt):app.run_forever('/fake')
@@ -110,7 +110,7 @@ class VoiceDispatchTests(unittest.TestCase):
             if len(calls)>1:raise KeyboardInterrupt()
             return 'pick'
         def pick(cfg,execute):calls.append('failed_pick');raise ValueError('No face')
-        with patch.object(app,'load',return_value={'pick':{'cube_offset_toward_moving_finger_mm':-40},'voice':{'wake_word':'思达思达'}}),\
+        with patch.object(app,'load',return_value={'pick':{'cube_offset_toward_moving_finger_mm':-42},'voice':{'wake_word':'思达思达'}}),\
              patch.object(app,'log'),patch.object(app,'wait_for_wake',side_effect=wait),\
              patch.object(app,'run_once',side_effect=pick),patch.object(sys,'print_exception',lambda e:None,create=True):
             with self.assertRaises(KeyboardInterrupt):app.run_forever('/fake')
@@ -147,7 +147,7 @@ class VoiceDispatchTests(unittest.TestCase):
 
     def test_voice_initialization_failure_is_reported_and_no_motion_runs(self):
         app=self.app()
-        with patch.object(app,'load',return_value={'pick':{'cube_offset_toward_moving_finger_mm':-40},'voice':{}}),\
+        with patch.object(app,'load',return_value={'pick':{'cube_offset_toward_moving_finger_mm':-42},'voice':{}}),\
              patch.object(app,'wait_for_wake',side_effect=RuntimeError('microphone unavailable')),\
              patch.object(app,'run_once') as pick,patch.object(app,'log') as log,\
              patch.object(sys,'print_exception',lambda e:None,create=True):
@@ -223,7 +223,7 @@ class ReadyCommandTests(unittest.TestCase):
             run.assert_called_once_with({'goals':[2048]*6})
 
     def test_ready_command_bypasses_camera_and_returns_to_listening(self):
-        app=self.app();cfg={'pick':{'cube_offset_toward_moving_finger_mm':-40},'voice':{}}
+        app=self.app();cfg={'pick':{'cube_offset_toward_moving_finger_mm':-42},'voice':{}}
         with patch.object(app,'load',return_value=cfg),patch.object(app,'log'),\
              patch.object(app,'wait_for_wake',side_effect=['ready',KeyboardInterrupt()]) as listen,\
              patch.object(app,'run_once') as pick,patch.object(app,'run_ready') as ready:

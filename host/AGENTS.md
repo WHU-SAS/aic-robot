@@ -12,9 +12,9 @@
 - 旧 PID 实验与 `.local_archive/` 不复制、恢复、提交或上传。原始照片/编码、历史分析与日志仅留本地；当前运行标定必须纳入 Git。
 - `scripts/host` 和 `scripts/vision` 分开环境；板端 CanMV 脚本不导入 PC pyserial / SciPy。
 
-- 新外参PC验证用 `./scripts/pick-pc` 和 `configs/arm/pick_validation_pc.json`：候选位于 `configs/vision/trials/`；用户指定额外前伸0mm，以张开30°时两指末端中点为参考，并按用户指定让方块向固定爪侧偏移40mm（配置moving-side offset=-40），保留15mm/80mm及20计数夹紧、静止0.5秒抬升，不覆盖第0版默认配置。
+- 新外参PC验证用 `./scripts/pick-pc` 和 `configs/arm/pick_validation_pc.json`：候选位于 `configs/vision/trials/`；用户指定额外前伸0mm，以张开30°时两指末端中点为参考，并按用户指定让方块向固定爪侧偏移42mm（配置moving-side offset=-42），保留15mm/80mm及20计数夹紧、静止0.5秒抬升，不覆盖第0版默认配置。
 
-- 用户已选“思达思达”触发K230单次独立抓取。`scripts/deploy-pick`只部署和校验，下次启动监听；不在部署过程中发送运动或设置上电自动抓取。语音沿用已有注册及灵敏档，动作使用用户最新指定的累计40mm固定爪侧偏移。
+- 用户已选“思达思达”触发K230单次独立抓取。`scripts/deploy-pick`只部署和校验，下次启动监听；不在部署过程中发送运动或设置上电自动抓取。语音沿用已有注册及灵敏档，动作使用用户最新指定的累计42mm固定爪侧偏移。
 
 - 新增“回准备位”直接语音命令：独立注册ID ready，复用`ready_pose.json`和`device/k230/arm/ready_pose.py`，含夹爪张开30°、到位保持扭矩；不走视觉或启动底盘。`scripts/enroll-ready`只录音/识别，不运动；注册后需重新部署才进入正式监听。
 

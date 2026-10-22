@@ -12,7 +12,7 @@
     "lift": 1
   },
   "gripper_stationary_tolerance_counts": 1,
-  "status": "user_selected_40mm_offset_pending_observation",
+  "status": "user_selected_42mm_offset_pending_observation",
   "vision_config": "configs/vision/trials/fixed_tip_top_20261022.json",
   "forward_extension_mm": 0,
   "forward_extension_authorization": "User 2026-10-22: start with 0mm to observe new calibration error",
@@ -20,8 +20,8 @@
   "automatic_return_or_torque_release": false,
   "alignment_reference": "open_fingertip_midpoint",
   "alignment_authorization": "User 2026-10-22: align midpoint at 30-degree opening before descending",
-  "cube_offset_toward_moving_finger_mm": -40,
-  "cube_offset_authorization": "User 2026-10-22: reduce fixed-jaw offset another 5mm; cumulative 40mm from open-tip midpoint",
+  "cube_offset_toward_moving_finger_mm": -42,
+  "cube_offset_authorization": "User 2026-10-22: cumulative fixed-jaw offset 42mm; approved deployment together with 1-second lift dwell and fast voice resume",
   "accepted_date": "2026-10-22",
-  "acceptance": "Previous 45mm offset accepted; user selected cumulative 40mm for PC and standalone K230; physical result pending observation"
+  "acceptance": "User selected cumulative 42mm for PC and standalone K230; physical result pending observation"
 }
