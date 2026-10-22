@@ -73,7 +73,7 @@ class VoiceDispatchTests(unittest.TestCase):
     def app(self):
         spec=importlib.util.spec_from_file_location('test_board_app',BOARD/'app.py');module=importlib.util.module_from_spec(spec)
         mocks={'time':SimpleNamespace(ticks_ms=lambda:0,ticks_diff=lambda a,b:a-b),'camera':SimpleNamespace(CameraSession=None),'vision':SimpleNamespace(localize=None),
-               'control':SimpleNamespace(run_pick_action=None,run_ready_direct=None)}
+               'control':SimpleNamespace(run_pick_stage_direct=None,run_ready_direct=None)}
         with patch.dict(sys.modules,mocks):spec.loader.exec_module(module)
         return module
     def test_control_log_interceptor_preserves_both_event_prefixes(self):
@@ -302,6 +302,74 @@ class DirectReadyTransportTests(unittest.TestCase):
     def test_short_goal_write_never_enables_torque_or_sends_recovery(self):
         _,writes,closed,error,_=self.run_direct(fail_at=1)
         self.assertIsInstance(error,RuntimeError);self.assertEqual(len(writes),1);self.assertEqual(closed,[True])
+
+
+class DirectPickTests(unittest.TestCase):
+    def run_stage(self,name,positions=(),short_write=False):
+        cfg,files,_=deploy.build_bundle();writes=[];reads=[];closed=[];clock=[0];positions=iter(positions)
+        class Pins:
+            UART1_TXD=1;UART1_RXD=2
+            def set_function(self,*args):pass
+        class Port:
+            UART1=1;EIGHTBITS=8;PARITY_NONE=None;STOPBITS_ONE=1
+            def __init__(self,*args,**kwargs):pass
+            def write(self,p):writes.append(p);return 0 if short_write else len(p)
+            def deinit(self):closed.append(True)
+        def read(uart,i,address,size):
+            self.assertTrue(writes,'No pre-dispatch reads allowed')
+            self.assertEqual((i,address,size),(6,56,2))
+            reads.append(clock[0]);v=next(positions);return bytes((v&255,v>>8))
+        def forbidden(*args,**kwargs):raise AssertionError('Legacy checks/hold must not run')
+        def sleep(ms):clock[0]+=ms
+        ns={}
+        with patch.dict(sys.modules,{'machine':SimpleNamespace(UART=Port,FPIOA=Pins),
+                  'time':SimpleNamespace(ticks_ms=lambda:clock[0],ticks_diff=lambda a,b:a-b,sleep_ms=sleep),'ujson':json}):
+            exec(files['control.py'].decode(),ns)
+        ns.update(read_checked=read,preflight=forbidden,initialize_hold=forbidden,send_sync=forbidden)
+        control=dict(cfg['control']);control['goals']=[2048]*6
+        stage={'name':name,'duration_s':.2,'stationary_s':.5,'tolerance_counts':1}
+        error=None
+        with contextlib.redirect_stdout(io.StringIO()):
+            try:ns['run_pick_stage_direct'](control,stage)
+            except RuntimeError as exc:error=exc
+        return writes,reads,closed,clock[0],error,ns['sync_frame'](control['goals'],control['profiles'])
+
+    def test_nonclose_stages_only_send_one_goal_packet_and_keep_dwell(self):
+        for name in ('hover','descend','lift'):
+            writes,reads,closed,elapsed,error,expected=self.run_stage(name)
+            self.assertEqual(writes,[expected]);self.assertEqual(reads,[])
+            self.assertEqual(closed,[True]);self.assertIsNone(error);self.assertGreaterEqual(elapsed,202)
+
+    def test_close_waits_for_half_second_stillness_after_last_large_change(self):
+        # Initial movement must not count as the stationary half second.
+        values=[2200,2220,2240]+[2241]*11
+        writes,reads,closed,elapsed,error,expected=self.run_stage('close',values)
+        self.assertIsNone(error);self.assertEqual(writes,[expected]);self.assertEqual(closed,[True])
+        self.assertGreaterEqual(elapsed,602);self.assertTrue(reads)
+
+    def test_short_write_does_not_read_or_send_another_target(self):
+        writes,reads,closed,elapsed,error,_=self.run_stage('hover',short_write=True)
+        self.assertIsInstance(error,RuntimeError);self.assertEqual(len(writes),1)
+        self.assertEqual(reads,[]);self.assertEqual(closed,[True])
+
+    def test_plan_is_followed_by_hover_without_hold_action(self):
+        app=VoiceDispatchTests().app();cfg,_,_=deploy.build_bundle();events=[]
+        class Camera:
+            def __init__(self,*args):pass
+            def open(self):pass
+            def snapshot(self):return SimpleNamespace(save=lambda *a,**kw:None)
+            def close(self):pass
+        plan={name:[2048]*6 for name in ('hover','descend','close','lift')}
+        class Model:
+            def __init__(self,*args):pass
+            def plan(self,*args):events.append('plan');return plan
+        with patch.dict(sys.modules,{'cv2':SimpleNamespace(imread=lambda p:object()),'control':SimpleNamespace()}), \
+             patch.object(app,'CameraSession',Camera),patch.object(app,'Geometry',Model), \
+             patch.object(app,'localize',return_value={'cube_center_Base_mm':[240,0,-60]}), \
+             patch.object(app,'arm_snapshot',return_value=[{'position':2048} for i in range(6)]), \
+             patch.object(app,'log'),patch.object(app,'run_pick_stage_direct',side_effect=lambda c,s:events.append(s['name'])):
+            app.run_once(cfg,execute=True)
+        self.assertEqual(events,['plan','hover','descend','close','lift'])
 
 
 class DeploymentTests(unittest.TestCase):

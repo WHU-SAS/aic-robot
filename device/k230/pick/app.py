@@ -6,7 +6,7 @@ import os,gc,json,time
 from camera import CameraSession
 from vision import localize
 from kinematics import Geometry
-from control import run_pick_action,run_ready_direct
+from control import run_pick_stage_direct,run_ready_direct
 from voice_commands import registered_commands,resolve_events
 
 
@@ -74,12 +74,17 @@ def record_arm_event(*args):
 
 
 def arm_snapshot(config):
-    # UART1 is read-only here. Stage runner preflights again before writes.
-    from control import FPIOA,UART,preflight
+    # Only read the six positions needed to select an IK solution.
+    from control import FPIOA,UART,read_checked,signed_position
     pins=FPIOA();pins.set_function(3,FPIOA.UART1_TXD);pins.set_function(4,FPIOA.UART1_RXD)
     uart=UART(UART.UART1,baudrate=1000000,bits=UART.EIGHTBITS,
               parity=UART.PARITY_NONE,stop=UART.STOPBITS_ONE)
-    try:return preflight(uart,config)
+    try:
+        rows=[]
+        for i in range(1,7):
+            raw=read_checked(uart,i,56,2)
+            rows.append({'id':i,'position':signed_position(raw[0],raw[1])})
+        return rows
     finally:uart.deinit()
 
 
@@ -105,14 +110,13 @@ def run_once(config,execute=False):
     table_z=(plane['offset_mm']-n[0]*xy[0]-n[1]*xy[1])/n[2]
     geometry=Geometry(config['model'],config['pick'],table_z)
     plan=geometry.plan([v/1000 for v in xy],start);log('planned',plan)
-    hold=dict(control);hold['goals']=plan['hover'];run_pick_action(hold,'hold');log('torque_on')
     for name in ('hover','descend','close','lift'):
         action=dict(control);action['goals']=plan[name]
         stage={'name':name,'duration_s':config['pick']['stage_durations_s'].get(name,0),
           'stationary_s':config['pick']['stage_durations_s']['close_minimum_stationary_s'],
           'tolerance_counts':config['pick']['gripper_stationary_tolerance_counts']}
-        run_pick_action(action,'stage',stage)
-    log('complete_torque_on',{'actual_grasp_success':'requires observation'})
+        run_pick_stage_direct(action,stage)
+    log('complete_torque_on',{'actual_grasp_success':'requires observation','torque_state':'unchanged_not_checked'})
     return plan
 
 
