@@ -75,9 +75,9 @@ class MultiFaceOutlineCases(unittest.TestCase):
         top['status']='complete_face_candidate'
         side={'status':'complete_face_candidate','poses':top['poses'],
               'face_quad_px':(q+[200,0]).tolist()}
-        with patch('host.vision.runtime_cube_faces.split_exposed_cube',return_value=side):
+        with patch('host.vision.runtime_cube_faces.split_exposed_cube',return_value=side),patch('device.k230.pick.face_selection.independent_adjacent_side',return_value=None):
             self.assertEqual(verify_single_face(im,K,D,top),top)
-        with patch('vision.split_face',return_value=None):
+        with patch('vision.split_face',return_value=None),patch('vision.independent_adjacent_side',return_value=None):
             result=localize(im,K.tolist(),D.tolist(),np.eye(4).tolist())
         self.assertNotIn('preferred_over_top',result)
         self.assertEqual(result['face_quad_px'],top['face_quad_px'])

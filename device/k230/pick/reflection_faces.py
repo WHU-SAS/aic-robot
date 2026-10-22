@@ -78,7 +78,7 @@ def measure_edge(im,a,b):
 def blue(h):return 90<=h[0]<=140 and h[1]>=80 and h[2]>=35
 
 
-def validate_seam(hsv,q):
+def validate_seam(hsv,q,either_polarity=False):
     a,b=q[:2];length=distance(a,b);n=[-(b[1]-a[1])/length,(b[0]-a[0])/length]
     support=0;height,width=hsv.shape[:2]
     for j in range(32):
@@ -86,12 +86,16 @@ def validate_seam(hsv,q):
         inside=[p[k]+5*n[k] for k in (0,1)];outside=[p[k]-5*n[k] for k in (0,1)]
         if any(not(0<v[0]<width-1 and 0<v[1]<height-1) for v in (inside,outside)):continue
         lo=sample(hsv,inside);hi=sample(hsv,outside)
-        if blue(lo) and blue(hi) and lo[2]-hi[2]>max(10,.12*lo[2]):support+=1
-    if support<20:raise ValueError('No distributed darker blue top / brighter side seam')
+        contrast=abs(lo[2]-hi[2]) if either_polarity else lo[2]-hi[2]
+        if blue(lo) and blue(hi) and contrast>max(10,.12*max(lo[2],hi[2])):support+=1
+    if support<20:raise ValueError('No distributed blue top / side contrast')
     return support
 
 
-def detect_reflection_face(im,K,D,pose_solver,roi=None):
+def detect_reflection_face(im,K,D,pose_solver,roi=None,adjacent_top=None):
+    if adjacent_top is not None:
+        try:from .face_selection import adjacent_side
+        except ImportError:from face_selection import adjacent_side
     hsv=cv2.cvtColor(im,cv2.COLOR_BGR2HSV);height,width=hsv.shape[:2]
     x0,y0,rw,rh=roi if roi is not None else (0,int(round(height*.45)),width,height-int(round(height*.45)))
     broad=cv2.inRange(hsv,(90,160,35),(140,255,255));broad[:y0,:]=0;broad[y0+rh:,:]=0;broad[:,:x0]=0;broad[:,x0+rw:]=0
@@ -115,6 +119,7 @@ def detect_reflection_face(im,K,D,pose_solver,roi=None):
                     hull=cv2.convexHull(c);p=cv2.approxPolyDP(hull,.02*cv2.arcLength(hull,True),True)
                     if len(p)!=4:continue
                     q=ordered(p)
+                    if adjacent_top is not None and not adjacent_side(adjacent_top,q):continue
                     if any(max(distance(a,b) for a,b in zip(q,old[1]))<1 for old in proposals):continue
                     proposals.append((area,q))
     proposals.sort(key=lambda p:p[0],reverse=True)
@@ -130,7 +135,8 @@ def detect_reflection_face(im,K,D,pose_solver,roi=None):
             if any(not(x0+3<p[0]<x0+rw-3 and y0+3<p[1]<y0+rh-3) for p in q):continue
             qa=np.array(q,dtype=FLOAT)
             if not cv2.isContourConvex(qa) or abs(cv2.contourArea(qa))<1000:continue
-            support=validate_seam(hsv,q)
+            if adjacent_top is not None and not adjacent_side(adjacent_top,q):continue
+            support=validate_seam(hsv,q,either_polarity=adjacent_top is not None)
             poses=pose_solver(q,K,D)
             if not poses or poses[0]['face_reprojection_rms_px']>2:continue
             found.append({'face_quad_px':q,'poses':poses,'physical_edges':[v[1] for v in edges],'seam_support':support})
@@ -140,5 +146,5 @@ def detect_reflection_face(im,K,D,pose_solver,roi=None):
     # has already passed the alternating-station check on all four edges.
     for f in found:f['near_support']=sum(max(distance(a,b) for a,b in zip(f['face_quad_px'],g['face_quad_px']))<3 for g in found)
     found.sort(key=lambda f:(-f['near_support'],f['poses'][0]['face_reprojection_rms_px']))
-    result=found[0];result.update(status='complete_face_candidate',boundary_method='colour_slice_four_measured_edges',selection_uses_fk=False,selection_uses_extrinsics=False)
+    result=found[0];result.update(status='complete_face_candidate',boundary_method='colour_slice_four_measured_edges' if adjacent_top is None else 'adjacent_side_four_measured_edges_refined_pose',selection_uses_fk=False,selection_uses_extrinsics=False)
     return result

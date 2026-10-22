@@ -68,3 +68,23 @@ def adjacent_side(top,side):
     tolerance=max(10.,.15*tw)
     if distance(top[3],side[0])>tolerance or distance(top[2],side[1])>tolerance:return False
     return (side[2][1]+side[3][1])/2>(top[2][1]+top[3][1])/2+th
+
+
+def independent_adjacent_side(im,K,D,top):
+    """Separate side colours, measure four real edges and refine rigid pose."""
+    try:
+        from .reflection_faces import detect_reflection_face
+        from .pose import pose_candidates
+    except ImportError:
+        from reflection_faces import detect_reflection_face
+        from pose import pose_candidates
+    return detect_reflection_face(im,K,D,
+        lambda q,k,d:pose_candidates(q,k,d,refine=True),adjacent_top=top)
+
+
+def shallow_face(q):
+    """Image-shape eligibility only; not a claim that the face is horizontal."""
+    def length(a,b):return math.sqrt(sum((x-y)**2 for x,y in zip(a,b)))
+    width=(length(q[0],q[1])+length(q[3],q[2]))/2
+    height=(length(q[0],q[3])+length(q[1],q[2]))/2
+    return width>1 and height/width<=.65

@@ -53,6 +53,47 @@ class ReflectionFaceCases(unittest.TestCase):
                 np.testing.assert_allclose(board['face_quad_px'],r['face_quad_px'],atol=1e-5)
                 np.testing.assert_allclose(board['poses'][0]['cube_center_Camera_mm'],r['poses'][0]['cube_center_Camera_mm'],atol=.1)
 
+    def test_guided_three_faces_bright_top_and_dark_side(self):
+        from device.k230.pick.face_selection import independent_adjacent_side
+        for scale,shift in [(1.,0),(.7,-25),(1.,25)]:
+            im,K,D,q=self.scene(1,shift,True)
+            r=np.array([.4,-.3,.02]);t=np.array([-10.+shift,-10.,250.])
+            top3=np.array([[0.,0.,20.],[20.,0.,20.],[20.,0.,0.],[0.,0.,0.]])
+            top=cv2.projectPoints(top3,r,t,K,D)[0].reshape(-1,2)+300
+            q=q+300;canvas=np.full((960,1280,3),(80,140,170),np.uint8)
+            canvas[300:780,300:940]=im
+            cv2.fillConvexPoly(canvas,np.rint(top).astype(np.int32),(245,99,0))
+            cv2.fillConvexPoly(canvas,np.rint(q).astype(np.int32),(145,36,1))
+            canvas=np.clip(cv2.GaussianBlur(canvas,(3,3),.7)*scale,0,255).astype(np.uint8)
+            K[0,2]+=300;K[1,2]+=300
+            result=independent_adjacent_side(canvas,K.tolist(),D.tolist(),top.tolist())
+            self.assertIsNotNone(result)
+            self.assertLess(np.max(np.linalg.norm(np.array(result['face_quad_px'])-q,axis=1)),3)
+            self.assertLessEqual(result['poses'][0]['face_reprojection_rms_px'],2)
+            self.assertTrue(all(e['support']>=45 for e in result['physical_edges']))
+            # The same face cannot be associated with an unrelated top.
+            self.assertIsNone(independent_adjacent_side(canvas,K.tolist(),D.tolist(),(top+[250,0]).tolist()))
+            # Losing the bottom edge must not be repaired using the known size.
+            canvas[int(q[:2,1].max())+10:,int(q[:,0].min())-5:int(q[:,0].max())+5]=(145,36,1)
+            self.assertIsNone(independent_adjacent_side(canvas,K.tolist(),D.tolist(),top.tolist()))
+
+    def test_refined_portable_pose_matches_opencv_lm(self):
+        # Non-square image noise exercises refinement; no recorded user image.
+        from device.k230.pick.pose import pose_candidates as solve
+        im,K,D,q=self.scene(two_faces=True)
+        q=q+np.array([[2.,-1.],[-1.,2.],[1.,-2.],[-2.,1.]])
+        original=solve(q.tolist(),K.tolist(),D.tolist())
+        refined=solve(q.tolist(),K.tolist(),D.tolist(),refine=True)
+        self.assertLess(refined[0]['face_reprojection_rms_px'],original[0]['face_reprojection_rms_px'])
+        obj=np.array([[0.,0.,0.],[20.,0.,0.],[20.,20.,0.],[0.,20.,0.]])
+        seeds=cv2.solvePnPGeneric(obj,q,K,D,flags=cv2.SOLVEPNP_IPPE)
+        errors=[]
+        for rv,tv in zip(seeds[1],seeds[2]):
+            rv,tv=cv2.solvePnPRefineLM(obj,q,K,D,rv,tv)
+            pix=cv2.projectPoints(obj,rv,tv,K,D)[0].reshape(-1,2)
+            errors.append(float(np.sqrt(np.mean(np.sum((pix-q)**2,axis=1)))))
+        self.assertAlmostEqual(refined[0]['face_reprojection_rms_px'],min(errors),places=4)
+
     def test_reflection_alone_is_not_completed_into_a_cube(self):
         im,K,D,_=self.scene();im[:]=(80,140,170)
         im[300:,270:380]=(135,100,45)

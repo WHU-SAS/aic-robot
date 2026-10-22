@@ -6,7 +6,10 @@ Both proper rotations receive a linear least-squares translation, then are
 ranked using the same distorted pixel reprojection error as the PC reference.
 """
 import math
-from numeric import dot,cross,norm,unit,transpose,matmul,matvec,solve,least_squares,rotation
+try:
+    from .numeric import dot,cross,norm,unit,transpose,matmul,matvec,solve,least_squares,rotation
+except ImportError:
+    from numeric import dot,cross,norm,unit,transpose,matmul,matvec,solve,least_squares,rotation
 
 OBJECT=[[-10.,-10.,0.],[10.,-10.,0.],[10.,10.,0.],[-10.,10.,0.]]
 
@@ -33,7 +36,7 @@ def project(point,K,D):
     return [u*K[0][0]+K[0][2],v*K[1][1]+K[1][2]]
 
 
-def pose_candidates(quad,K,D):
+def pose_candidates(quad,K,D,refine=False):
     rays=[undistort(p,K,D) for p in quad];a=[];b=[]
     for obj,(u,v) in zip(OBJECT,rays):
         x,y=obj[:2]
@@ -62,6 +65,7 @@ def pose_candidates(quad,K,D):
             rp=matvec(R,obj)
             a.extend([[1.,0.,-u],[0.,1.,-v]]);b.extend([u*rp[2]-rp[0],v*rp[2]-rp[1]])
         t=least_squares(a,b)
+        if refine:R,t=refine_transform(R,t,quad,K,D)
         predicted=[]
         try:
             for obj in OBJECT:
@@ -74,3 +78,47 @@ def pose_candidates(quad,K,D):
         result.append({'face_reprojection_rms_px':rms,'cube_center_Camera_mm':center,
                        'cube_center_pixel':project(center,K,D),'inward_face_normal_Camera':inward})
     return sorted(result,key=lambda v:v['face_reprojection_rms_px'])
+
+
+def refine_transform(R,t,quad,K,D):
+    """Bounded LM refinement of a planar seed against the SAME measured corners.
+
+    Optimizes six rigid-pose parameters, never changes the measured quadrilateral
+    or the acceptance limit. Both planar solutions are refined independently.
+    """
+    def residuals(rot,tr):
+        values=[]
+        for obj,target in zip(OBJECT,quad):
+            rp=matvec(rot,obj);p=project([rp[i]+tr[i] for i in range(3)],K,D)
+            values.extend([p[k]-target[k] for k in (0,1)])
+        return values
+    def step(rot,tr,d):
+        angle=norm(d[:3])
+        updated=matmul(rotation([v/angle for v in d[:3]],angle),rot) if angle>1e-12 else rot
+        return updated,[tr[i]+d[i+3] for i in range(3)]
+    error=residuals(R,t);cost=dot(error,error);damping=.001
+    for unused in range(20):
+        columns=[]
+        for j in range(6):
+            # Central differences with resolvable steps also work with the
+            # board's float32 arithmetic; tiny one-sided steps lose precision.
+            h=.001 if j<3 else .01;delta=[0.]*6;delta[j]=h
+            rr,tt=step(R,t,delta);plus=residuals(rr,tt)
+            delta[j]=-h;rr,tt=step(R,t,delta);minus=residuals(rr,tt)
+            columns.append([(v-w)/(2*h) for v,w in zip(plus,minus)])
+        normal=[[dot(a,b) for b in columns] for a in columns]
+        for j in range(6):normal[j][j]+=damping*max(normal[j][j],1e-6)
+        try:delta=solve(normal,[-dot(a,error) for a in columns])
+        except ValueError:break
+        scale=max(1.,norm(delta[:3])/.2,norm(delta[3:])/30.)
+        delta=[v/scale for v in delta];rr,tt=step(R,t,delta)
+        try:new_error=residuals(rr,tt);new_cost=dot(new_error,new_error)
+        except ValueError:damping*=10;continue
+        if new_cost<cost:
+            improvement=cost-new_cost;R,t,error,cost=rr,tt,new_error,new_cost
+            damping=max(1e-9,damping*.3)
+            if improvement<1e-8:break
+        else:
+            damping*=10
+            if damping>1e8:break
+    return R,t
