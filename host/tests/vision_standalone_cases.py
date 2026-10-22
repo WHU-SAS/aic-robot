@@ -52,6 +52,19 @@ class MultiFaceOutlineCases(unittest.TestCase):
         cv2.fillConvexPoly(im,np.rint(q).astype(np.int32),(side_value,40,10))
         return cv2.GaussianBlur(im,(3,3),.7),K,D,q
 
+    def test_trimmed_top_corner_matches_overlapping_shared_edge(self):
+        from device.k230.pick.face_selection import adjacent_side
+        top=[[15.,0.],[125.,0.],[120.,35.],[25.,35.]]
+        side=[[0.,40.],[130.,40.],[130.,200.],[0.,200.]]
+        self.assertTrue(adjacent_side(top,side))
+        # Collinear edges on another object lack enough shared interval.
+        self.assertFalse(adjacent_side(top,[[x+100,y] for x,y in side]))
+        # A nearby parallel edge without normal proximity is not shared.
+        self.assertFalse(adjacent_side(top,[[x,y+25] for x,y in side]))
+        # One endpoint crossing a seam cannot validate a rotated object.
+        wrong=[[0.,10.],[130.,80.],[130.,220.],[0.,180.]]
+        self.assertFalse(adjacent_side(top,wrong))
+
     def test_bright_top_uses_adjacent_complete_side(self):
         from vision import basic_face
         from host.vision.runtime_cube_faces import verify_single_face

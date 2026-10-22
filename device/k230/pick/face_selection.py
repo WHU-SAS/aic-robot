@@ -54,8 +54,9 @@ def separated_face_inside(whole,part):
 def adjacent_side(top,side):
     """Associate a shallow top with its larger side using their shared edge.
 
-    The bright top may be inset, so allow modest endpoint displacement. Never
-    substitute a side belonging to a different blue object or a whole outline.
+    Thresholds can trim a top corner ALONG the seam without changing the seam.
+    Match supporting line direction, normal gap and overlapping edge intervals,
+    rather than requiring its trimmed endpoint to coincide with a side corner.
     Both inputs must already have passed their physical-face quality checks.
     """
     def distance(a,b):return math.sqrt(sum((x-y)**2 for x,y in zip(a,b)))
@@ -65,8 +66,17 @@ def adjacent_side(top,side):
     sw=distance(side[0],side[1])
     if tw<1 or th/tw>.65 or not .7<sw/tw<1.45:return False
     if area(side)<1.5*area(top):return False
-    tolerance=max(10.,.15*tw)
-    if distance(top[3],side[0])>tolerance or distance(top[2],side[1])>tolerance:return False
+    a,b=side[:2];length=distance(a,b)
+    u=[(b[k]-a[k])/length for k in (0,1)];n=[-u[1],u[0]]
+    t0,t1=top[3],top[2];edge_length=distance(t0,t1)
+    if edge_length<1:return False
+    direction=sum((t1[k]-t0[k])*u[k] for k in (0,1))/edge_length
+    if direction<.94:return False
+    offsets=[[t[k]-a[k] for k in (0,1)] for t in (t0,t1)]
+    if max(abs(sum(v[k]*n[k] for k in (0,1))) for v in offsets)>max(8.,.08*tw):return False
+    along=[sum(v[k]*u[k] for k in (0,1)) for v in offsets]
+    overlap=max(0.,min(length,max(along))-max(0.,min(along)))
+    if overlap<.75*min(length,edge_length):return False
     return (side[2][1]+side[3][1])/2>(top[2][1]+top[3][1])/2+th
 
 
