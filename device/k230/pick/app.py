@@ -55,7 +55,7 @@ def wait_for_wake(config):
 
 def record_arm_event(*args):
     message=' '.join(str(v) for v in args)
-    if message.startswith(('PICK_EVENT ','ARM_EVENT ')):
+    if message.startswith('PICK_EVENT ') or message.startswith('ARM_EVENT '):
         log('arm_feedback',json.loads(message.split(' ',1)[1]))
     else:print(message)
 

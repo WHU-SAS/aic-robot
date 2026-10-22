@@ -49,6 +49,11 @@ class BoardMathTests(unittest.TestCase):
         for name,source in self.files.items():
             if not name.endswith('.py'):continue
             tree=ast.parse(source.decode())
+            for node in ast.walk(tree):
+                if (isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute)
+                    and node.func.attr in ('startswith','endswith') and node.args
+                    and isinstance(node.args[0],ast.Tuple)):
+                    self.fail(name+': MicroPython does not support tuple prefixes')
             imports=[]
             for n in ast.walk(tree):
                 if isinstance(n,ast.Import):imports.extend(a.name for a in n.names)
@@ -70,6 +75,17 @@ class VoiceDispatchTests(unittest.TestCase):
                'control':SimpleNamespace(run_pick_action=None)}
         with patch.dict(sys.modules,mocks):spec.loader.exec_module(module)
         return module
+    def test_control_log_interceptor_preserves_both_event_prefixes(self):
+        app=self.app()
+        with patch.object(app,'log') as log:
+            app.record_arm_event('ARM_EVENT {"event":"preflight_verified","rows":[]}')
+            log.assert_called_with('arm_feedback',{'event':'preflight_verified','rows':[]})
+            app.record_arm_event('PICK_EVENT {"event":"stage_started","name":"hover"}')
+            log.assert_called_with('arm_feedback',{'event':'stage_started','name':'hover'})
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            app.record_arm_event('PICK_ACTION_PASS','read')
+        self.assertEqual(output.getvalue(),'PICK_ACTION_PASS read\n')
+
     def test_startup_waits_for_wake_before_one_pick(self):
         app=self.app();calls=[]
         def wait(cfg):
