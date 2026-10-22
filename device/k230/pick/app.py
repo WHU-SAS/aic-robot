@@ -122,7 +122,7 @@ def run_ready(config):
     ready=config['ready_control']
     log('ready_started',{'goals':ready['goals'],'gripper_opens_deg':30})
     run_ready_direct(ready)
-    log('ready_dispatched',{'arrival':'not_checked','torque_enable':'sent_not_read_back'})
+    log('ready_dispatched',{'arrival':'not_checked','torque_state':'unchanged_not_read'})
 
 
 def run_forever(root):

@@ -271,7 +271,8 @@ class DirectReadyTransportTests(unittest.TestCase):
                 writes.append(packet)
                 return 0 if len(writes)==fail_at else len(packet)
             def deinit(self):closed.append(True)
-        fake_time=SimpleNamespace(ticks_ms=lambda:0,ticks_diff=lambda a,b:a-b)
+        fake_time=SimpleNamespace(ticks_ms=lambda:0,ticks_diff=lambda a,b:a-b,
+                                  sleep_ms=lambda n:self.assertEqual(n,2))
         ns={}
         with patch.dict(sys.modules,{'machine':SimpleNamespace(UART=Port,FPIOA=Pins),
                                     'time':fake_time,'ujson':json}):
@@ -283,9 +284,9 @@ class DirectReadyTransportTests(unittest.TestCase):
             except RuntimeError as exc:error=exc
         return cfg,writes,closed,error,output.getvalue()
 
-    def test_exact_final_goals_then_torque_enable_no_reads_or_waits(self):
+    def test_exact_final_goals_without_torque_writes_or_servo_reads(self):
         cfg,writes,closed,error,output=self.run_direct()
-        self.assertIsNone(error);self.assertEqual(closed,[True]);self.assertEqual(len(writes),2)
+        self.assertIsNone(error);self.assertEqual(closed,[True]);self.assertEqual(len(writes),1)
         packet=writes[0]
         self.assertEqual(packet[:7],bytes([255,255,254,52,131,41,7]))
         self.assertEqual(sum(packet[2:])&255,255)
@@ -295,7 +296,7 @@ class DirectReadyTransportTests(unittest.TestCase):
             self.assertEqual(entry[2]|entry[3]<<8,cfg['ready_control']['goals'][i])
             self.assertEqual(entry[4:6],b'\x00\x00')
             self.assertEqual(entry[6]|entry[7]<<8,profile['speed_raw'])
-        self.assertEqual(writes[1],bytes([255,255,254,4,3,40,1,209]))
+        self.assertIn('"torque_writes": 0',output)
         self.assertIn('"servo_reads": 0',output)
 
     def test_short_goal_write_never_enables_torque_or_sends_recovery(self):

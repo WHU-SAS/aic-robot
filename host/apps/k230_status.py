@@ -69,7 +69,7 @@ class StatusDisplay:
                   'voice_listening':'语音监听中：音频采集与识别循环正在运行',
                   'wake':'已识别唤醒词：正在准备拍照识别',
                   'ready_started':'直接发送准备位：夹爪张开30°，沿用已保存的速度和加速度',
-                  'ready_dispatched':'准备位目标及开启扭矩指令已发送，未复读或等待到位',
+                  'ready_dispatched':'准备位目标已发送，未改扭矩、未复读或等待到位',
                   'ready_complete_torque_on':'准备位目标已发送并完成反馈读取，保持扭矩；实际到位需观察',
                   'planned':'四阶段规划完成，准备执行',
                   'torque_on':'机械臂扭矩保持已开启',
