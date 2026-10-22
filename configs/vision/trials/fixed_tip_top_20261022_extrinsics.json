@@ -1,0 +1,116 @@
+{
+  "T_Base_from_Camera_mm": [
+    [
+      0.10091757012086844,
+      -0.20222531577772032,
+      0.974125538983298,
+      57.82638745169044
+    ],
+    [
+      -0.9947801236236781,
+      -0.005645252477334924,
+      0.10188540998458169,
+      4.862305598126817
+    ],
+    [
+      -0.015104624595093624,
+      -0.9793227521011999,
+      -0.20173942979192955,
+      17.052225570719138
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "T_Camera_from_Base_mm": [
+    [
+      0.10091757012086867,
+      -0.9947801236236787,
+      -0.015104624595093857,
+      -0.741206080735217
+    ],
+    [
+      -0.20222531577772038,
+      -0.005645252477335111,
+      -0.9793227521012001,
+      28.421040880793413
+    ],
+    [
+      0.9741255389832979,
+      0.10188540998458147,
+      -0.2017394297919295,
+      -53.385452579850195
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "intrinsics_sha256": "9bd4426442417c9425f146971464a4946463a3b5704095decc5d2ed7075f0e07",
+  "source_training_groups": [
+    1,
+    2,
+    4,
+    6,
+    7,
+    8,
+    9,
+    11,
+    13,
+    14,
+    15,
+    16
+  ],
+  "independent_validation_groups": [
+    3,
+    5,
+    10,
+    12
+  ],
+  "reference_definition": {
+    "fixed_jaw_link": "wan2",
+    "local_point_m": [
+      -0.00021270876859489363,
+      0.012270562537014484,
+      0.10777757316827774
+    ],
+    "method": "mean of maximum local-Z STL vertices, same V0 fixed-top proxy",
+    "physical_point_surveyed": false,
+    "contact_region_variation_accepted_by_user": true,
+    "center_offset_mm": [
+      -0.5309526224121212,
+      -0.2172739893520243,
+      -9.983530504100477
+    ],
+    "table_up_normal_Base": [
+      0.05309526224121212,
+      0.02172739893520243,
+      0.9983530504100477
+    ],
+    "normal_source": "SVD of training-only modeled contact positions, not surveyed",
+    "table_plane_equation": "normal dot Base_mm = offset_mm",
+    "table_plane_offset_mm": -53.41470013284543,
+    "plane_contact_rms_mm": 2.0112608376128676,
+    "plane_contact_max_abs_mm": 3.5814555561137595,
+    "normal_tilt_from_BaseZ_deg": 3.288799566710661,
+    "plane_singular_values_mm": [
+      142.37661060433135,
+      97.04684623555899,
+      6.967211916038049
+    ]
+  },
+  "status": "formal_pc_field_validation_candidate",
+  "source_analysis": "data/k230/extrinsics/formal_fixed_tip_top_20261022/analysis_robust_final_20261022",
+  "canonical_default_replaced": false,
+  "validation_metrics": {
+    "count": 4,
+    "rms_xy_mm": 3.5135249916943425,
+    "rms_xyz_mm": 4.3811898394089805,
+    "max_xyz_mm": 5.551448560751003
+  }
+}

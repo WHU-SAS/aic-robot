@@ -1,0 +1,21 @@
+{
+  "opening_count": 2389,
+  "opening_angle_deg": 30,
+  "extra_closing_counts": 20,
+  "hover_tip_height_mm": 80,
+  "descend_tip_height_mm": 15,
+  "lift_tip_height_mm": 80,
+  "stage_durations_s": {
+    "hover": 6,
+    "descend": 6,
+    "close_minimum_stationary_s": 0.5,
+    "lift": 8
+  },
+  "gripper_stationary_tolerance_counts": 1,
+  "status": "user_requested_formal_pc_flow_validation",
+  "vision_config": "configs/vision/trials/fixed_tip_top_20261022.json",
+  "forward_extension_mm": 0,
+  "forward_extension_authorization": "User 2026-10-22: start with 0mm to observe new calibration error",
+  "arm_transport": "K230 UART1 -> URT-2",
+  "automatic_return_or_torque_release": false
+}

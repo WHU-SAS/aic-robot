@@ -11,3 +11,5 @@
 - 采集只拍照、读编码，不驱动机械臂；真机动作须有用户明确要求。
 - 旧 PID 实验与 `.local_archive/` 不复制、恢复、提交或上传。原始照片/编码、历史分析与日志仅留本地；当前运行标定必须纳入 Git。
 - `scripts/host` 和 `scripts/vision` 分开环境；板端 CanMV 脚本不导入 PC pyserial / SciPy。
+
+- 新外参PC验证用 `./scripts/pick-pc` 和 `configs/arm/pick_validation_pc.json`：候选位于 `configs/vision/trials/`；用户指定额外前伸0mm，保留30°/15mm/80mm及20计数夹紧、静止0.5秒抬升，不覆盖第0版默认配置。

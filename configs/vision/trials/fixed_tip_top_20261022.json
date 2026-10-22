@@ -1,0 +1,56 @@
+{
+  "schema": "aic.blue_cube_config.v1",
+  "status": "formal_pc_field_validation_candidate",
+  "object": {
+    "color": "blue",
+    "edge_mm": 20
+  },
+  "camera": {
+    "width": 1280,
+    "height": 960,
+    "hmirror": false,
+    "vflip": false
+  },
+  "sampling": {
+    "warmup_frames": 30,
+    "warmup_delay_ms": 30,
+    "frame_limit": 9
+  },
+  "detector": {
+    "roi": [
+      0,
+      432,
+      1280,
+      528
+    ],
+    "lab_thresholds": [
+      [
+        0,
+        100,
+        -20,
+        127,
+        -128,
+        -8
+      ]
+    ],
+    "pixels_threshold": 1000,
+    "area_threshold": 6000,
+    "max_blobs": 4,
+    "max_components": 4
+  },
+  "localization": {
+    "intrinsics": "configs/vision/runtime/camera_intrinsics.json",
+    "extrinsics": "configs/vision/trials/fixed_tip_top_20261022_extrinsics.json",
+    "table_z_Base_mm": -53.502816574664365,
+    "table_z_status": "local height evaluated from training-contact plane at target XY",
+    "table_plane_Base_mm": {
+      "normal": [
+        0.05309526224121212,
+        0.02172739893520243,
+        0.9983530504100477
+      ],
+      "offset_mm": -53.41470013284543,
+      "equation": "normal dot Base_mm = offset_mm"
+    }
+  }
+}
