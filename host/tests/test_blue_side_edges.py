@@ -15,6 +15,11 @@ class VisionEnvironmentTests(unittest.TestCase):
             'host.tests.vision_reflection_cases'],cwd=ROOT,text=True,capture_output=True)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
 
+    def test_side_selection_regressions(self):
+        result=subprocess.run([str(ROOT/'scripts/vision'),'-m','unittest',
+            'host.tests.vision_side_policy_cases'],cwd=ROOT,text=True,capture_output=True)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
     def test_top_boundary_regressions(self):
         result=subprocess.run([str(ROOT/'scripts/vision'),'-m','unittest',
             'host.tests.vision_top_boundary_cases'],cwd=ROOT,text=True,capture_output=True)

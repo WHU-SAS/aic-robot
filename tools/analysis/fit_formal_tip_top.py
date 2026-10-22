@@ -76,37 +76,11 @@ def evaluate(transform,camera,base,groups):
 
 
 def image_pose(image,K,D,group):
-    from face_geometry import face_candidates,pose_candidates
-    from grasp_face_quality import assess
-    from runtime_cube_faces import split_exposed_cube,verify_single_face
-    value=face_candidates(image,group)
-    value['boundary_method']='existing_threshold_median'
-    valid=False
-    if value['status']=='complete_face_candidate':
-        poses=pose_candidates(np.array(value['face_quad_px']),K,D)
-        valid=bool(poses and poses[0]['face_reprojection_rms_px']<=2 and np.array(value['face_quad_px'])[:,1].min()>=432)
-        if valid:value['poses']=poses
-    if not valid:
-        value=assess(image,K,D)
-        value['boundary_method']='dim_blue_line_refinement'
-    value=verify_single_face(image,K,D,value)
-    if (value['status']!='complete_face_candidate' or not value.get('poses')) and 'rejected_multiface_outline' not in value:
-        previous=value
-        split=split_exposed_cube(image,K,D)
-        if split['status']=='complete_face_candidate' and split.get('poses'):
-            value=split
-            value['previous_attempt']=previous
-        else:value['split_attempt']=split
-    if value['status']!='complete_face_candidate' or not value.get('poses'):
-        from host.vision.blue_side_edges import detect_blue_side
-        supported=detect_blue_side(image,K,D)
-        if supported['status']=='complete_face_candidate':
-            supported['previous_attempt']=value;value=supported
-        else:value['gradient_side_attempt']=supported
-    from device.k230.pick.face_selection import shallow_face
-    from device.k230.pick.top_boundaries import validate_top_boundary
-    if value['status']=='complete_face_candidate' and value.get('poses') and shallow_face(value['face_quad_px']):
-        value=validate_top_boundary(image,K,D,value)
+    # Replay exactly the board image pipeline; identity is used only to leave
+    # camera coordinates untouched before the external calibration fit.
+    from device.k230.pick.vision import localize as runtime_localize
+    try:value=runtime_localize(image,K.tolist(),D.tolist(),np.eye(4).tolist())
+    except ValueError as exc:value={'status':'no_complete_face','reason':str(exc)}
     if value.get('poses') and len(value['poses'])>1:
         value['pose_ambiguity_mm']=float(np.linalg.norm(np.array(value['poses'][0]['cube_center_Camera_mm'])-value['poses'][1]['cube_center_Camera_mm']))
     return value

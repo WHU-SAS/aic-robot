@@ -27,7 +27,10 @@ def measure(im,hsv,a,b,radius,background_required):
             c=sample(im,inside);d=sample(im,outside)
             score=distance(c,d)/max(50.,sum(c+d)/6)
             if score<.12:continue
-            if blue(hout) and abs(hin[0]-hout[0])<3 and abs(hin[2]-hout[2])<35:continue
+            # Same-colour faces can differ by <35 brightness levels in shade.
+            # Use relative brightness, alongside the measured RGB contrast.
+            value_jump=abs(hin[2]-hout[2])/max(25.,hin[2],hout[2])
+            if blue(hout) and abs(hin[0]-hout[0])<3 and value_jump<.12:continue
             if best is None or score>best[0]:best=(score,p,j)
         if best:points.append(best[1]);stations.append(j)
     if len(points)<45:raise ValueError('Top edge lacks distributed colour/gradient support')
@@ -48,10 +51,14 @@ def validate_top_boundary(im,K,D,candidate):
         hsv=cv2.cvtColor(im,cv2.COLOR_BGR2HSV);sm=cv2.GaussianBlur(im,(3,3),.7)
         width=(distance(seed[0],seed[1])+distance(seed[3],seed[2]))/2
         radius=int(min(24,max(8,round(width*.18))))
-        # A cyclic corner order must not change which silhouette edge needs
-        # blue-to-background support: use the highest edge in the image.
-        back=min(range(4),key=lambda i:(seed[i][1]+seed[(i+1)%4][1])/2)
-        edges=[measure(sm,hsv,a,b,radius,i==back) for i,(a,b) in enumerate(zip(seed,seed[1:]+seed[:1]))]
+        # A diamond has TWO upper silhouette edges. For positive corner
+        # winding, edges pointing right have an upward exterior normal.
+        # Near-vertical lateral edges are excluded; always retain the highest
+        # edge requirement as well. Cyclic corner order changes none of this.
+        back={min(range(4),key=lambda i:(seed[i][1]+seed[(i+1)%4][1])/2)}
+        for i,(a,b) in enumerate(zip(seed,seed[1:]+seed[:1])):
+            if b[0]-a[0]>.25*distance(a,b):back.add(i)
+        edges=[measure(sm,hsv,a,b,radius,i in back) for i,(a,b) in enumerate(zip(seed,seed[1:]+seed[:1]))]
         q=[intersect(edges[i-1][0],edges[i][0]) for i in range(4)]
         for half in (0,1):
             check=[intersect(edges[i-1][2][half],edges[i][2][half]) for i in range(4)]

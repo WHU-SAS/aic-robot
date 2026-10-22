@@ -9,9 +9,6 @@ _bootstrap(include_tools=False)
 import argparse,hashlib,json,sys
 from pathlib import Path
 import cv2,numpy as np
-from face_geometry import face_candidates,pose_candidates
-from grasp_face_quality import assess
-from runtime_cube_faces import split_exposed_cube,verify_single_face
 from host.vision.config import load_vision_config,table_height_at
 ROOT=REPO_ROOT
 
@@ -21,33 +18,17 @@ def localize(image,output,vision_config=None):
  im=cv2.imread(str(image))
  if im is None or im.shape[:2]!=(960,1280):raise RuntimeError('Expected a completed1280x960 K230 frame')
  K=np.array(intr['camera_matrix'],float);K[0]*=1280/intr['image_width'];K[1]*=960/intr['image_height'];D=np.array(intr['distortion_coefficients'],float)
- v=face_candidates(im,0);v['boundary_method']='existing_threshold_median';ok=False
- if v['status']=='complete_face_candidate':
-  ps=pose_candidates(np.array(v['face_quad_px']),K,D);ok=bool(ps and ps[0]['face_reprojection_rms_px']<=2 and np.array(v['face_quad_px'])[:,1].min()>=432)
-  if ok:v['poses']=ps
- if not ok:v=assess(im,K,D);v['boundary_method']='dim_blue_line_refinement'
- v=verify_single_face(im,K,D,v)
- if (v['status']!='complete_face_candidate' or not v.get('poses')) and 'rejected_multiface_outline' not in v:
-  initial=v;separated=split_exposed_cube(im,K,D)
-  if separated['status']=='complete_face_candidate' and separated.get('poses'):
-   v=separated;v['previous_whole_outline_diagnostic']={'status':initial['status'],'reason':initial.get('reason'),'face_quad_px':initial.get('face_quad_px'),'face_rms_px':initial['poses'][0]['face_reprojection_rms_px'] if initial.get('poses') else None}
-  else:v['exposed_cube_separation_diagnostic']=separated
- if v['status']!='complete_face_candidate' or not v.get('poses'):
-  from host.vision.blue_side_edges import detect_blue_side
-  supported=detect_blue_side(im,K,D)
-  if supported['status']=='complete_face_candidate':
-   supported['previous_attempt']=v;v=supported
-  else:v['gradient_side_attempt']=supported
- from device.k230.pick.face_selection import shallow_face
- from device.k230.pick.top_boundaries import validate_top_boundary
- if v['status']=='complete_face_candidate' and v.get('poses') and shallow_face(v['face_quad_px']):
-  v=validate_top_boundary(im,K,D,v)
+ from device.k230.pick.vision import localize as runtime_localize
+ try:v=runtime_localize(im,K.tolist(),D.tolist(),ext['T_Base_from_Camera_mm'])
+ except ValueError as exc:v={'status':'no_complete_face','reason':str(exc)}
  if v['status']!='complete_face_candidate' or not v.get('poses'):
   (output/'vision_candidates.json').write_text(json.dumps(v,ensure_ascii=False,indent=2)+'\n');raise RuntimeError('未识别到完整可靠的蓝色20mm方块面：'+str(v.get('reason',v['status'])))
  T=np.array(ext['T_Base_from_Camera_mm']);cent=np.array(v['poses'][0]['cube_center_Camera_mm']);base=T[:3,:3]@cent+T[:3,3]
- cv2.polylines(im,[np.rint(v['face_quad_px']).astype(np.int32)],True,(0,255,0),3);cv2.drawMarker(im,tuple(np.rint(v['poses'][0]['cube_center_pixel']).astype(int)),(0,255,255),cv2.MARKER_CROSS,20,2);cv2.imwrite(str(output/'camera_detected.jpg'),im)
+ for index,face in enumerate(v.get('side_faces') or [v]):
+  cv2.polylines(im,[np.rint(face['face_quad_px']).astype(np.int32)],True,((0,255,0) if index==0 else (255,255,0)),3)
+ cv2.drawMarker(im,tuple(np.rint(v['poses'][0]['cube_center_pixel']).astype(int)),(0,255,255),cv2.MARKER_CROSS,20,2);cv2.imwrite(str(output/'camera_detected.jpg'),im)
  table_z=table_height_at(cfg,base[:2])
- result={'status':'localized','method':'existing K230 OpenCV blue face +20mm IPPE; lowest image reprojection candidate','cube_center_Base_mm':base.tolist(),'cube_center_Camera_mm':cent.tolist(),'table_z_Base_mm':table_z,'cube_center_z_above_assumed_table_mm':float(base[2]-table_z),'vision':v,'intrinsics':str(ip),'extrinsics':str(ep),'motion_performed':False,'xy_compensation_applied':False}
+ result={'status':'localized','method':'shared PC/K230 measured sides; larger side or mean of similar-area side centers; verified top fallback','cube_center_Base_mm':base.tolist(),'cube_center_Camera_mm':cent.tolist(),'table_z_Base_mm':table_z,'cube_center_z_above_assumed_table_mm':float(base[2]-table_z),'vision':v,'intrinsics':str(ip),'extrinsics':str(ep),'motion_performed':False,'xy_compensation_applied':False}
  if cfg.get('table_plane_Base_mm') is not None:result['table_plane_Base_mm']=cfg['table_plane_Base_mm']
  (output/'vision_record.json').write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n');return result
 

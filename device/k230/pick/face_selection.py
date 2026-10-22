@@ -97,4 +97,10 @@ def shallow_face(q):
     def length(a,b):return math.sqrt(sum((x-y)**2 for x,y in zip(a,b)))
     width=(length(q[0],q[1])+length(q[3],q[2]))/2
     height=(length(q[0],q[3])+length(q[1],q[2]))/2
-    return width>1 and height/width<=.65
+    # A tabletop-yaw rotation makes a shallow top look like a diamond: its
+    # adjacent edges can have equal lengths while its vertical projection is
+    # still short. Retain the old eligibility and also inspect image extents;
+    # neither test proves that the proposal has four physical boundaries.
+    extent_x=max(p[0] for p in q)-min(p[0] for p in q)
+    extent_y=max(p[1] for p in q)-min(p[1] for p in q)
+    return (width>1 and height/width<=.65) or (extent_x>1 and extent_y/extent_x<=.65)

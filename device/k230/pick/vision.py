@@ -11,12 +11,20 @@ try:
 except ImportError:
     import numpy as np
 FLOAT=getattr(np,'float',None) or np.float32
-from pose import pose_candidates
-from numeric import norm,dot,solve
-from reflection_faces import detect_reflection_face
-from top_boundaries import validate_top_boundary
-from face_selection import internal_seam,separated_face_inside,adjacent_side,independent_adjacent_side,shallow_face
-
+try:
+    from .pose import pose_candidates
+    from .numeric import norm,dot,solve
+    from .reflection_faces import detect_reflection_face
+    from .top_boundaries import validate_top_boundary
+    from .side_faces import prefer_sides
+    from .face_selection import internal_seam,separated_face_inside,adjacent_side,independent_adjacent_side,shallow_face
+except ImportError:
+    from pose import pose_candidates
+    from numeric import norm,dot,solve
+    from reflection_faces import detect_reflection_face
+    from top_boundaries import validate_top_boundary
+    from side_faces import prefer_sides
+    from face_selection import internal_seam,separated_face_inside,adjacent_side,independent_adjacent_side,shallow_face
 
 def median(values):
     v=sorted(values);n=len(v)
@@ -258,6 +266,13 @@ def localize(im,K,D,T):
     if im.shape[:2]!=(960,1280):raise ValueError('Expected 1280x960 BGR frame')
     hsv=cv2.cvtColor(im,cv2.COLOR_BGR2HSV)
     result=basic_face(hsv,K,D) or dim_face(hsv,K,D)
+    initial=result
+    selected=prefer_sides(im,K,D,result)
+    if selected is not None:
+        center=selected['poses'][0]['cube_center_Camera_mm']
+        selected['cube_center_Camera_mm']=center
+        selected['cube_center_Base_mm']=[sum(T[i][j]*center[j] for j in range(3))+T[i][3] for i in range(3)]
+        return selected
     if result is not None and shallow_face(result['face_quad_px']):
         side=split_face(hsv,K,D)
         if side is None or not adjacent_side(result['face_quad_px'],side['face_quad_px']):
@@ -279,7 +294,13 @@ def localize(im,K,D,T):
     elif result is None:
         result=split_face(hsv,K,D)
     result=result or gradient_side(im,hsv,K,D) or detect_reflection_face(im,K,D,pose_candidates)
-    if result is not None and shallow_face(result['face_quad_px']):
+    if result is not initial:
+        selected=prefer_sides(im,K,D,result)
+        if selected is not None:
+            for key in ('rejected_multiface_outline','preferred_over_top'):
+                if key in result:selected.setdefault(key,result[key])
+            result=selected
+    if result is not None and 'side_selection' not in result and shallow_face(result['face_quad_px']):
         result=validate_top_boundary(im,K,D,result)
         if result['status']!='complete_face_candidate':raise ValueError(result['reason'])
     if result is None:raise ValueError('No reliable physical blue20mm face')

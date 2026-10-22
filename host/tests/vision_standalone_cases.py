@@ -90,7 +90,7 @@ class MultiFaceOutlineCases(unittest.TestCase):
               'face_quad_px':(q+[200,0]).tolist()}
         with patch('host.vision.runtime_cube_faces.split_exposed_cube',return_value=side),patch('device.k230.pick.face_selection.independent_adjacent_side',return_value=None):
             self.assertEqual(verify_single_face(im,K,D,top),top)
-        with patch('vision.split_face',return_value=None),patch('vision.independent_adjacent_side',return_value=None):
+        with patch('vision.prefer_sides',return_value=None),patch('vision.split_face',return_value=None),patch('vision.independent_adjacent_side',return_value=None):
             result=localize(im,K.tolist(),D.tolist(),np.eye(4).tolist())
         self.assertNotIn('preferred_over_top',result)
         self.assertTrue(result['top_boundary_verified'])
@@ -124,7 +124,7 @@ class MultiFaceOutlineCases(unittest.TestCase):
         with patch('host.vision.runtime_cube_faces.split_exposed_cube',return_value={'status':'no_complete_face'}):
             result=verify_single_face(im,K,D,old)
         self.assertEqual(result['status'],'no_complete_face')
-        with patch('vision.basic_face',return_value=None),patch('vision.split_face',return_value=None),patch('vision.gradient_side',return_value=None),patch('vision.detect_reflection_face',return_value=None):
+        with patch('vision.prefer_sides',return_value=None),patch('vision.basic_face',return_value=None),patch('vision.split_face',return_value=None),patch('vision.gradient_side',return_value=None),patch('vision.detect_reflection_face',return_value=None):
             with self.assertRaisesRegex(ValueError,'No reliable'):
                 localize(im,K.tolist(),D.tolist(),np.eye(4).tolist())
 
