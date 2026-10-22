@@ -60,6 +60,7 @@ class BoardMathTests(unittest.TestCase):
                 if isinstance(n,ast.Import):imports.extend(a.name for a in n.names)
                 if isinstance(n,ast.ImportFrom):imports.append(n.module or '')
             self.assertFalse(any(i.startswith(('host','scipy','serial','pathlib')) for i in imports),name)
+        self.assertEqual(self.config['pick']['stage_durations_s']['lift'],1)
         self.assertFalse(self.manifest['startup_motion'])
         self.assertFalse(self.manifest['pc_runtime_required'])
         self.assertEqual(self.config['pick']['cube_offset_toward_moving_finger_mm'],-40)
@@ -89,8 +90,9 @@ class VoiceDispatchTests(unittest.TestCase):
 
     def test_startup_waits_for_wake_before_one_pick(self):
         app=self.app();calls=[]
-        def wait(cfg):
+        def wait(cfg,warmup_chunks):
             self.assertEqual(cfg,{'wake_word':'思达思达'})
+            self.assertEqual(warmup_chunks,32 if not calls else 0)
             calls.append('wait')
             if len(calls)>1:raise KeyboardInterrupt()
             return 'pick'
@@ -101,8 +103,9 @@ class VoiceDispatchTests(unittest.TestCase):
         self.assertEqual(calls,['wait',('pick',True),'wait'])
     def test_failure_does_not_automatically_retry_pick(self):
         app=self.app();calls=[]
-        def wait(cfg):
+        def wait(cfg,warmup_chunks):
             self.assertEqual(cfg,{'wake_word':'思达思达'})
+            self.assertEqual(warmup_chunks,32 if not calls else 0)
             calls.append('wait')
             if len(calls)>1:raise KeyboardInterrupt()
             return 'pick'
@@ -228,11 +231,20 @@ class ReadyCommandTests(unittest.TestCase):
             ready.assert_called_once_with(cfg);pick.assert_not_called();self.assertEqual(listen.call_count,2)
 
     def test_both_keywords_loaded_and_actual_tuple_selects_ready(self):
-        app=self.app();added=[];closed=[];reads=[]
+        self.check_dual_listener(32)
+
+    def test_resumed_listener_resets_engine_and_processes_first_audio_chunk(self):
+        self.check_dual_listener(0)
+
+    def check_dual_listener(self,warmup_chunks):
+        app=self.app();added=[];closed=[];reads=[];resets=[]
         class Engine:
             def add_keyword(self,r):added.append(r['kw_id'])
-            def reset(self):pass
-            def push(self,pcm):return [('ready',-.7,-2.,0,10)]
+            def reset(self):resets.append(True)
+            def push(self,pcm):
+                self_check=resets==[True]
+                if not self_check:raise AssertionError('Recognition state must reset before processing audio')
+                return [('ready',-.7,-2.,0,10)]
             def deinit(self):closed.append('engine')
         class Audio:
             def open(self,**kw):return Stream()
@@ -250,10 +262,10 @@ class ReadyCommandTests(unittest.TestCase):
             with patch.dict(sys.modules,{'wake_word':SimpleNamespace(engine=lambda s:Engine(),CHUNK=2560),
                     'media':SimpleNamespace(),'media.pyaudio':SimpleNamespace(PyAudio=Audio,paInt16=0)}),\
                  patch.object(app.os,'exitpoint',lambda:None,create=True),patch.object(app,'log') as log:
-                self.assertEqual(app.wait_for_wake(config),'ready')
+                self.assertEqual(app.wait_for_wake(config,warmup_chunks=warmup_chunks),'ready')
             log.assert_any_call('voice_ready',{'words':['思达思达','回准备位']})
         self.assertEqual(added,['sida','ready']);self.assertEqual(closed,['stream','audio','engine'])
-        self.assertEqual(len(reads),33)
+        self.assertEqual(len(reads),warmup_chunks+1)
 
 
 

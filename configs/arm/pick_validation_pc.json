@@ -9,7 +9,7 @@
     "hover": 6,
     "descend": 6,
     "close_minimum_stationary_s": 0.5,
-    "lift": 8
+    "lift": 1
   },
   "gripper_stationary_tolerance_counts": 1,
   "status": "user_selected_40mm_offset_pending_observation",

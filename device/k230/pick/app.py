@@ -22,7 +22,7 @@ def log(event,details=None,persist=True):
     except OSError as exc:print('LOG_ERROR '+str(exc))
 
 
-def wait_for_wake(config):
+def wait_for_wake(config,warmup_chunks=32):
     # Release audio stream and KWS before camera/media initialization. A fresh
     # engine after each pick discards buffered audio and repeated wake events.
     from wake_word import engine,CHUNK
@@ -42,7 +42,8 @@ def wait_for_wake(config):
         audio=PyAudio();stream=audio.open(format=paInt16,channels=1,rate=16000,
              input=True,frames_per_buffer=CHUNK)
         stream.volume(vol=volume)
-        for unused in range(32):os.exitpoint();stream.read()
+        # Full microphone warmup only on boot; resume has no discard delay.
+        for unused in range(warmup_chunks):os.exitpoint();stream.read()
         eng.reset();log('voice_ready',{'words':[c['word'] for c in commands]})
         last_status=time.ticks_ms();chunks=0
         while True:
@@ -132,12 +133,14 @@ def run_ready(config):
 def run_forever(root):
     config=load(root)
     log('startup_waiting_for_wake',{'fixed_jaw_offset_mm':-config['pick']['cube_offset_toward_moving_finger_mm']})
+    warmup_chunks=32
     while True:
-        try:action=wait_for_wake(config['voice'])
+        try:action=wait_for_wake(config['voice'],warmup_chunks=warmup_chunks)
         except Exception as exc:
             import sys
             sys.print_exception(exc);log('voice_failed',str(exc))
             raise
+        warmup_chunks=0
         try:
             if action=='pick':run_once(config,execute=True)
             elif action=='ready':run_ready(config)
