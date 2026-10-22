@@ -17,5 +17,7 @@
   "forward_extension_mm": 0,
   "forward_extension_authorization": "User 2026-10-22: start with 0mm to observe new calibration error",
   "arm_transport": "K230 UART1 -> URT-2",
-  "automatic_return_or_torque_release": false
+  "automatic_return_or_torque_release": false,
+  "alignment_reference": "open_fingertip_midpoint",
+  "alignment_authorization": "User 2026-10-22: align midpoint at 30-degree opening before descending"
 }

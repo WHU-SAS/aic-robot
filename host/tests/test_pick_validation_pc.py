@@ -85,6 +85,7 @@ class TrialConfigTests(unittest.TestCase):
         ext=json.loads((ROOT/vision['extrinsics']).read_text())
         self.assertEqual(ext['intrinsics_sha256'],hashlib.sha256((ROOT/vision['intrinsics']).read_bytes()).hexdigest())
         self.assertEqual(pick['forward_extension_mm'],0)
+        self.assertEqual(pick['alignment_reference'],'open_fingertip_midpoint')
         self.assertEqual([pick[k] for k in ('opening_count','descend_tip_height_mm','hover_tip_height_mm','lift_tip_height_mm')],[2389,15,80,80])
         self.assertEqual([config.profiles[i] for i in range(1,7)],
             [{'speed_raw':v,'acceleration_raw':a} for v,a in [(150,5),(600,20),(600,20),(600,20),(150,5),(150,5)]])
@@ -174,3 +175,37 @@ class FlowTests(unittest.TestCase):
         self.assertEqual((code,calls),(0,[]))
         self.assertFalse(record['motion_performed'])
         self.assertFalse(record['torque_enable_attempted'])
+
+
+class OpenTipGeometryTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import numpy as np
+        from host.arm.pick_validation_geometry import OpenTipPickGeometry
+        pick,cfg=app.parameters()
+        cls.g=OpenTipPickGeometry(ROOT,cfg.mapping,table_z_m=-.0688,
+            hover_tip_height_mm=80,descend_tip_height_mm=15,lift_tip_height_mm=80,
+            opening_count=pick['opening_count'])
+        cls.start=[2048]*6
+        cls.target=np.array([.271462,.041016])
+        cls.plan=cls.g.plan(cls.target,cls.start)
+
+    def test_descending_open_tips_straddle_target(self):
+        import numpy as np
+        q=self.g.angles(self.plan['descend'])
+        midpoint,points,lows,unused=self.g.metrics(q)
+        self.assertLess(np.linalg.norm(midpoint[:2]-self.target),.002)
+        a=points['wan2'][:2]-self.target;b=points['zhua'][:2]-self.target
+        self.assertLess(np.dot(a,b),0)
+        self.assertGreater(np.linalg.norm(a),.027)
+        self.assertAlmostEqual(min(lows.values())-self.g.table_z_m,.015,delta=.002)
+        self.assertEqual(self.plan['alignment_reference'],'open_fingertip_midpoint')
+
+    def test_alignment_reference_stays_open_when_reporting_closed_feedback(self):
+        import numpy as np
+        q=self.g.angles(self.plan['descend']);closed=q.copy()
+        closed[5]=self.g.mapping.count_to_radians(6,self.plan['close'][5])
+        np.testing.assert_allclose(self.g.alignment_midpoint(q),self.g.alignment_midpoint(closed))
+        self.assertEqual(self.plan['descend'][5],2389)
+        self.assertEqual(self.plan['close'][:5],self.plan['descend'][:5])
+        self.assertEqual(self.plan['closing_count'],self.plan['nominal_closing_count']-20)

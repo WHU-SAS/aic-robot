@@ -14,7 +14,7 @@ import subprocess
 import time
 from zoneinfo import ZoneInfo
 from host.arm.task_controller import Configuration
-from host.arm.blue_pick_geometry import PickGeometry
+from host.arm.pick_validation_geometry import OpenTipPickGeometry as PickGeometry
 from host.transport.download_calibration import PORT
 from host.transport.capture_pick_frame import capture
 from host.transport.k230_pick_stage import payload,run_action
@@ -27,6 +27,8 @@ def parameters():
     pick=json.loads(TRIAL.read_text())
     if pick['extra_closing_counts']!=20 or pick['forward_extension_mm']!=0:
         raise ValueError('Validation profile changed; review the selected trial')
+    if pick.get('alignment_reference')!='open_fingertip_midpoint':
+        raise ValueError('Expected user-selected open-fingertip alignment')
     return pick,Configuration(ROOT)
 
 
