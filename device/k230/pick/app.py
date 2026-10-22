@@ -12,9 +12,10 @@ from control import run_pick_action
 def load(root):
     with open(root+'/config.json') as f:return json.load(f)
 
-def log(event,details=None):
+def log(event,details=None,persist=True):
     record={'event':event,'ticks_ms':time.ticks_ms(),'details':details}
     print('AIC_PICK '+json.dumps(record))
+    if not persist:return
     try:
         with open('/sdcard/aic/pick/events.jsonl','a') as f:f.write(json.dumps(record)+'\n')
     except OSError as exc:print('LOG_ERROR '+str(exc))
@@ -34,10 +35,15 @@ def wait_for_wake(config):
         stream.volume(vol=keyword.get('mic_volume',100))
         for unused in range(32):os.exitpoint();stream.read()
         eng.reset();log('voice_ready',{'word':config['wake_word']})
+        last_status=time.ticks_ms();chunks=0
         while True:
             os.exitpoint();pcm=stream.read()
             if len(pcm)!=CHUNK*2:raise RuntimeError('Incomplete detection audio chunk')
-            events=eng.push(pcm)
+            events=eng.push(pcm);chunks+=1
+            now=time.ticks_ms()
+            if time.ticks_diff(now,last_status)>=5000:
+                log('voice_listening',{'chunks_read':chunks,'audio_ms':chunks*CHUNK*1000//16000},persist=False)
+                last_status=now
             if events:
                 event=events[0];log('wake',event);return event
     finally:
@@ -101,7 +107,11 @@ def run_forever(root):
     config=load(root)
     log('startup_waiting_for_wake',{'fixed_jaw_offset_mm':-config['pick']['cube_offset_toward_moving_finger_mm']})
     while True:
-        wait_for_wake(config)
+        try:wait_for_wake(config['voice'])
+        except Exception as exc:
+            import sys
+            sys.print_exception(exc);log('voice_failed',str(exc))
+            raise
         try:run_once(config,execute=True)
         except Exception as exc:
             # Do not dispatch any remaining stages, reverse goals or torque-off.

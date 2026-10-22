@@ -103,7 +103,22 @@ with open(%r,'rb') as f:
   h.update(b);size+=len(b)
 actual=binascii.hexlify(h.digest()).decode()
 if actual!=%r or size!=%d:raise RuntimeError('SD write hash mismatch')
-os.rename(%r,%r)
+source=%r;target=%r
+try:os.rename(source,target)
+except OSError as exc:
+ if exc.args[0]!=17:raise
+ # CanMV FAT refuses rename over an existing file. Keep the old version until
+ # the verified replacement is installed, and restore it if that rename fails.
+ backup=target+'.replace_previous'
+ try:os.stat(backup)
+ except OSError:pass
+ else:raise RuntimeError('Unresolved replacement backup: '+backup)
+ os.rename(target,backup)
+ try:os.rename(source,target)
+ except BaseException:
+  os.rename(backup,target)
+  raise
+ os.remove(backup)
 print('FILE_OK '+actual)
 """%(path+'.partial',digest(data),len(data),path+'.partial',path)
     if 'FILE_OK '+digest(data) not in execute(link,source):raise RuntimeError('SD verification failed: '+path)

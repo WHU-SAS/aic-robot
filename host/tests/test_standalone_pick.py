@@ -3,6 +3,8 @@ import ast
 import contextlib
 import importlib.util
 import io
+import hashlib
+import os
 import math
 from pathlib import Path
 import sys
@@ -64,16 +66,17 @@ class BoardMathTests(unittest.TestCase):
 class VoiceDispatchTests(unittest.TestCase):
     def app(self):
         spec=importlib.util.spec_from_file_location('test_board_app',BOARD/'app.py');module=importlib.util.module_from_spec(spec)
-        mocks={'camera':SimpleNamespace(CameraSession=None),'vision':SimpleNamespace(localize=None),
+        mocks={'time':SimpleNamespace(ticks_ms=lambda:0,ticks_diff=lambda a,b:a-b),'camera':SimpleNamespace(CameraSession=None),'vision':SimpleNamespace(localize=None),
                'control':SimpleNamespace(run_pick_action=None)}
         with patch.dict(sys.modules,mocks):spec.loader.exec_module(module)
         return module
     def test_startup_waits_for_wake_before_one_pick(self):
         app=self.app();calls=[]
         def wait(cfg):
+            self.assertEqual(cfg,{'wake_word':'思达思达'})
             calls.append('wait')
             if len(calls)>1:raise KeyboardInterrupt()
-        with patch.object(app,'load',return_value={'pick':{'cube_offset_toward_moving_finger_mm':-45},'voice':{}}),\
+        with patch.object(app,'load',return_value={'pick':{'cube_offset_toward_moving_finger_mm':-45},'voice':{'wake_word':'思达思达'}}),\
              patch.object(app,'log'),patch.object(app,'wait_for_wake',side_effect=wait),\
              patch.object(app,'run_once',side_effect=lambda cfg,execute:calls.append(('pick',execute))):
             with self.assertRaises(KeyboardInterrupt):app.run_forever('/fake')
@@ -81,14 +84,53 @@ class VoiceDispatchTests(unittest.TestCase):
     def test_failure_does_not_automatically_retry_pick(self):
         app=self.app();calls=[]
         def wait(cfg):
+            self.assertEqual(cfg,{'wake_word':'思达思达'})
             calls.append('wait')
             if len(calls)>1:raise KeyboardInterrupt()
         def pick(cfg,execute):calls.append('failed_pick');raise ValueError('No face')
-        with patch.object(app,'load',return_value={'pick':{'cube_offset_toward_moving_finger_mm':-45},'voice':{}}),\
+        with patch.object(app,'load',return_value={'pick':{'cube_offset_toward_moving_finger_mm':-45},'voice':{'wake_word':'思达思达'}}),\
              patch.object(app,'log'),patch.object(app,'wait_for_wake',side_effect=wait),\
              patch.object(app,'run_once',side_effect=pick),patch.object(sys,'print_exception',lambda e:None,create=True):
             with self.assertRaises(KeyboardInterrupt):app.run_forever('/fake')
         self.assertEqual(calls,['wait','failed_pick','wait'])
+    def test_real_startup_resolves_nested_voice_config_before_readiness(self):
+        app=self.app();calls=[]
+        class Engine:
+            def add_keyword(self,r):calls.append('keyword')
+            def reset(self):calls.append('reset')
+            def deinit(self):calls.append('engine_closed')
+        class Audio:
+            def open(self,**kw):return Stream()
+            def terminate(self):calls.append('audio_closed')
+        class Stream:
+            def volume(self,**kw):pass
+            def read(self):calls.append('read');return bytes(5120)
+            def stop_stream(self):pass
+            def close(self):calls.append('stream_closed')
+        class StopAtReady(BaseException):pass
+        def log(event,*args,**kwargs):
+            calls.append(event)
+            if event=='voice_ready':raise StopAtReady()
+        cfg,unused,manifest=deploy.build_bundle()
+        with patch.dict(sys.modules,{'wake_word':SimpleNamespace(engine=lambda s:Engine(),CHUNK=2560),
+                                     'media':SimpleNamespace(),'media.pyaudio':SimpleNamespace(PyAudio=Audio,paInt16=0)}),\
+             patch.object(app.os,'exitpoint',lambda:None,create=True),\
+             patch.object(app,'load',return_value=cfg),patch.object(app,'log',side_effect=log),\
+             patch('builtins.open',return_value=io.StringIO('{}')),patch.object(app,'run_once') as pick:
+            with self.assertRaises(StopAtReady):app.run_forever('/fake')
+            pick.assert_not_called()
+        self.assertIn('voice_ready',calls);self.assertEqual(calls.count('read'),32)
+        self.assertEqual(calls[-3:],['stream_closed','audio_closed','engine_closed'])
+
+    def test_voice_initialization_failure_is_reported_and_no_motion_runs(self):
+        app=self.app()
+        with patch.object(app,'load',return_value={'pick':{'cube_offset_toward_moving_finger_mm':-45},'voice':{}}),\
+             patch.object(app,'wait_for_wake',side_effect=RuntimeError('microphone unavailable')),\
+             patch.object(app,'run_once') as pick,patch.object(app,'log') as log,\
+             patch.object(sys,'print_exception',lambda e:None,create=True):
+            with self.assertRaisesRegex(RuntimeError,'microphone unavailable'):app.run_forever('/fake')
+            pick.assert_not_called();log.assert_any_call('voice_failed','microphone unavailable')
+
     def test_audio_resources_close_before_wake_returns(self):
         app=self.app();calls=[]
         class Engine:
@@ -108,13 +150,45 @@ class VoiceDispatchTests(unittest.TestCase):
             file=Path(folder)/'keyword.json';file.write_text('{}')
             with patch.dict(sys.modules,{'wake_word':SimpleNamespace(engine=lambda s:Engine(),CHUNK=2560),
                                          'media':SimpleNamespace(),'media.pyaudio':SimpleNamespace(PyAudio=Audio,paInt16=0)}),\
-                 patch.object(app.os,'exitpoint',lambda:None,create=True),patch.object(app,'log'):
+                 patch.object(app.os,'exitpoint',lambda:None,create=True),patch.object(app,'log') as log,\
+                 patch.object(app.time,'ticks_ms',side_effect=[0,5000]):
                 event=app.wait_for_wake({'enrollment_file':str(file),'detection_sensitivity':'sensitive','wake_word':'思达思达'})
         self.assertEqual(event,{'label':'sida'})
+        log.assert_any_call('voice_listening',{'chunks_read':1,'audio_ms':160},persist=False)
         self.assertEqual(calls,['stream_stopped','stream_closed','audio_closed','engine_closed'])
 
 
 class DeploymentTests(unittest.TestCase):
+    def fat_execute(self,fail_replacement=False):
+        original_rename=os.rename;calls=[]
+        def rename(source,target):
+            if str(source).endswith('.partial'):
+                calls.append((source,target))
+                if Path(target).exists():raise FileExistsError(17,'FAT target exists')
+                if fail_replacement:raise OSError(5,'write failed')
+            original_rename(source,target)
+        fake_os=SimpleNamespace(rename=rename,remove=os.remove,stat=os.stat)
+        def execute(link,source,timeout=60):
+            output=io.StringIO()
+            with patch.dict(sys.modules,{'os':fake_os,'uhashlib':hashlib}),contextlib.redirect_stdout(output):
+                exec(source,{})
+            return output.getvalue().splitlines()
+        return execute
+    def test_fat_replacement_keeps_verified_new_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'current.json';path.write_bytes(b'old')
+            with patch.object(deploy,'execute',side_effect=self.fat_execute()):
+                deploy.write_file(None,str(path),b'new')
+            self.assertEqual(path.read_bytes(),b'new')
+            self.assertFalse(Path(str(path)+'.replace_previous').exists())
+    def test_fat_replacement_failure_restores_original(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'current.json';path.write_bytes(b'old')
+            with patch.object(deploy,'execute',side_effect=self.fat_execute(True)):
+                with self.assertRaises(OSError):deploy.write_file(None,str(path),b'new')
+            self.assertEqual(path.read_bytes(),b'old')
+            self.assertFalse(Path(str(path)+'.replace_previous').exists())
+
     def test_verification_failure_never_activates_startup(self):
         writes=[]
         with tempfile.TemporaryDirectory() as folder:

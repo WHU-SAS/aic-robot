@@ -66,6 +66,7 @@ class StatusDisplay:
     def application(self,event,details):
         messages={'startup_waiting_for_wake':'程序启动，正在初始化语音',
                   'voice_ready':'监听就绪：现在可以说“思达思达”',
+                  'voice_listening':'语音监听中：音频采集与识别循环正在运行',
                   'wake':'已识别唤醒词：正在准备拍照识别',
                   'planned':'四阶段规划完成，准备执行',
                   'torque_on':'机械臂扭矩保持已开启',
@@ -76,6 +77,8 @@ class StatusDisplay:
             if isinstance(center,list) and len(center)==3:
                 text+='：方块Base坐标(mm) ['+', '.join(f'{v:.2f}' for v in center)+']'
             self.state(text)
+        elif event=='voice_failed':
+            self.state('语音监听失败，当前不能唤醒：'+str(details))
         elif event=='pick_failed_no_extra_motion':
             self.state('本轮失败，未继续后续动作：'+str(details))
         elif event in messages:self.state(messages[event])

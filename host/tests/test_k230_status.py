@@ -40,6 +40,8 @@ class DisplayTests(unittest.TestCase):
         self.assertIn('No reliable',self.lines[-1])
         self.display.feed(b'Traceback (most recent call last):\nValueError: failed\n')
         self.assertIn('ValueError',self.lines[-1])
+        self.feed('voice_failed','microphone unavailable')
+        self.assertIn('当前不能唤醒',self.lines[-1])
     def test_malformed_event_does_not_hide_following_event(self):
         self.display.feed(b'AIC_PICK {broken\n')
         self.assertIn('解析失败',self.lines[-1])
@@ -50,6 +52,8 @@ class DisplayTests(unittest.TestCase):
         self.assertNotIn('监听就绪',self.lines[-1])
         self.feed('voice_ready');self.clock.sleep(30);self.display.heartbeat()
         self.assertIn('最近事件',self.lines[-1]);self.assertIn('30秒前',self.lines[-1])
+        self.feed('voice_listening',{'chunks_read':32,'audio_ms':5120})
+        self.assertIn('音频采集与识别循环正在运行',self.lines[-1])
     def test_localized_and_completed_do_not_claim_physical_grasp_success(self):
         self.feed('localized',{'cube_center_Base_mm':[100,20,-50]})
         self.assertIn('[100.00, 20.00, -50.00]',self.lines[-1])
