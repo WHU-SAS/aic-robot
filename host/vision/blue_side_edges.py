@@ -153,4 +153,12 @@ def detect_blue_side(image,K,D,roi=None):
             return result
         except (ValueError,cv2.error,np.linalg.LinAlgError) as exc:
             attempts.append({'bbox_px':list(bbox),'reason':str(exc)})
+    # Broad masks can connect the cube to a blue table reflection. Colour
+    # slices are only seeds; the shared fallback measures all four real edges.
+    from device.k230.pick.reflection_faces import detect_reflection_face
+    supported=detect_reflection_face(image,K,D,
+        lambda q,k,d:pose_candidates(np.asarray(q),k,d),roi)
+    if supported is not None:
+        supported['attempts']=attempts
+        return supported
     return {'status':'no_complete_face','reason':'No independently supported side face','attempts':attempts}

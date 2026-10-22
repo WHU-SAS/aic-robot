@@ -13,6 +13,7 @@ except ImportError:
 FLOAT=getattr(np,'float',None) or np.float32
 from pose import pose_candidates
 from numeric import norm,dot,solve
+from reflection_faces import detect_reflection_face
 
 
 def median(values):
@@ -254,7 +255,7 @@ def gradient_side(im,hsv,K,D):
 def localize(im,K,D,T):
     if im.shape[:2]!=(960,1280):raise ValueError('Expected 1280x960 BGR frame')
     hsv=cv2.cvtColor(im,cv2.COLOR_BGR2HSV)
-    result=basic_face(hsv,K,D) or dim_face(hsv,K,D) or split_face(hsv,K,D) or gradient_side(im,hsv,K,D)
+    result=basic_face(hsv,K,D) or dim_face(hsv,K,D) or split_face(hsv,K,D) or gradient_side(im,hsv,K,D) or detect_reflection_face(im,K,D,pose_candidates)
     if result is None:raise ValueError('No reliable physical blue20mm face')
     center=result['poses'][0]['cube_center_Camera_mm']
     result['cube_center_Camera_mm']=center
