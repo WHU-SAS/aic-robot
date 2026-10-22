@@ -1,4 +1,4 @@
-"""Standalone voice -> camera -> pose -> IK -> four arm stages.
+"""Standalone voice commands: pick or the existing ready pose.
 No motion at boot: an accepted wake event is required for each run. No chassis
 commands, PID writes, automatic return, release or queued extra pick actions.
 """
@@ -6,7 +6,8 @@ import os,gc,json,time
 from camera import CameraSession
 from vision import localize
 from kinematics import Geometry
-from control import run_pick_action
+from control import run_pick_action,run_arm_ready
+from voice_commands import registered_commands,resolve_events
 
 
 def load(root):
@@ -28,13 +29,21 @@ def wait_for_wake(config):
     from media.pyaudio import PyAudio,paInt16
     eng=audio=stream=None
     try:
-        with open(config['enrollment_file']) as f:keyword=json.load(f)
-        eng=engine(config['detection_sensitivity']);eng.add_keyword(keyword)
+        commands=registered_commands(config)
+        eng=engine(config['detection_sensitivity']);volume=None
+        for command in commands:
+            with open(command['enrollment_file']) as f:keyword=json.load(f)
+            if keyword['kw_id']!=command['keyword_id']:
+                raise ValueError('Keyword ID does not match binding')
+            eng.add_keyword(keyword)
+            v=keyword.get('mic_volume',100)
+            if volume is not None and v!=volume:raise ValueError('Keyword microphone volumes differ')
+            volume=v
         audio=PyAudio();stream=audio.open(format=paInt16,channels=1,rate=16000,
              input=True,frames_per_buffer=CHUNK)
-        stream.volume(vol=keyword.get('mic_volume',100))
+        stream.volume(vol=volume)
         for unused in range(32):os.exitpoint();stream.read()
-        eng.reset();log('voice_ready',{'word':config['wake_word']})
+        eng.reset();log('voice_ready',{'words':[c['word'] for c in commands]})
         last_status=time.ticks_ms();chunks=0
         while True:
             os.exitpoint();pcm=stream.read()
@@ -45,7 +54,11 @@ def wait_for_wake(config):
                 log('voice_listening',{'chunks_read':chunks,'audio_ms':chunks*CHUNK*1000//16000},persist=False)
                 last_status=now
             if events:
-                event=events[0];log('wake',event);return event
+                command=resolve_events(events,commands)
+                if command is None:
+                    log('voice_command_ignored',events);continue
+                log('wake',{'word':command['word'],'action':command['action'],'events':events})
+                return command['action']
     finally:
         if stream is not None:stream.stop_stream();stream.close()
         if audio is not None:audio.terminate()
@@ -103,18 +116,31 @@ def run_once(config,execute=False):
     return plan
 
 
+def run_ready(config):
+    import control as arm_control
+    arm_control.print=record_arm_event
+    ready=config['ready_control']
+    log('ready_started',{'goals':ready['goals'],'gripper_opens_deg':30})
+    run_arm_ready(ready,'hold')
+    run_arm_ready(ready,'ready')
+    log('ready_complete_torque_on',{'arrival':'requires observation'})
+
+
 def run_forever(root):
     config=load(root)
     log('startup_waiting_for_wake',{'fixed_jaw_offset_mm':-config['pick']['cube_offset_toward_moving_finger_mm']})
     while True:
-        try:wait_for_wake(config['voice'])
+        try:action=wait_for_wake(config['voice'])
         except Exception as exc:
             import sys
             sys.print_exception(exc);log('voice_failed',str(exc))
             raise
-        try:run_once(config,execute=True)
+        try:
+            if action=='pick':run_once(config,execute=True)
+            elif action=='ready':run_ready(config)
+            else:log('voice_command_ignored',action)
         except Exception as exc:
             # Do not dispatch any remaining stages, reverse goals or torque-off.
             import sys
-            sys.print_exception(exc);log('pick_failed_no_extra_motion',str(exc))
+            sys.print_exception(exc);log('ready_failed_no_extra_motion' if action=='ready' else 'pick_failed_no_extra_motion',str(exc))
         gc.collect()

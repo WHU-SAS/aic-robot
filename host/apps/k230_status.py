@@ -68,10 +68,16 @@ class StatusDisplay:
                   'voice_ready':'监听就绪：现在可以说“思达思达”',
                   'voice_listening':'语音监听中：音频采集与识别循环正在运行',
                   'wake':'已识别唤醒词：正在准备拍照识别',
+                  'ready_started':'执行回准备位：夹爪张开30°，沿用已保存的速度和加速度',
+                  'ready_complete_torque_on':'准备位目标已发送并完成反馈读取，保持扭矩；实际到位需观察',
                   'planned':'四阶段规划完成，准备执行',
                   'torque_on':'机械臂扭矩保持已开启',
                   'complete_torque_on':'本轮流程完成，保持抬升姿态和扭矩；实际夹取结果需观察'}
-        if event=='localized':
+        if event=='voice_ready' and isinstance(details,dict) and details.get('words'):
+            self.state('监听就绪：'+ '、'.join('“'+word+'”' for word in details['words']))
+        elif event=='wake' and isinstance(details,dict) and details.get('action')=='ready':
+            self.state('已识别“回准备位”：准备执行准备位动作')
+        elif event=='localized':
             center=details.get('cube_center_Base_mm') if isinstance(details,dict) else None
             text='识别成功'
             if isinstance(center,list) and len(center)==3:
@@ -79,17 +85,18 @@ class StatusDisplay:
             self.state(text)
         elif event=='voice_failed':
             self.state('语音监听失败，当前不能唤醒：'+str(details))
-        elif event=='pick_failed_no_extra_motion':
+        elif event in ('pick_failed_no_extra_motion','ready_failed_no_extra_motion'):
             self.state('本轮失败，未继续后续动作：'+str(details))
         elif event in messages:self.state(messages[event])
         else:self.state('事件 '+str(event)+'：'+json.dumps(details,ensure_ascii=False))
     def arm(self,event):
         name=STAGES.get(event.get('name'),event.get('name',''))
         kind=event.get('event')
+        if kind=='ready_feedback':name='回准备位'
         if kind=='stage_started':self.state('执行阶段：'+name)
         elif kind=='stage_complete':self.state('阶段完成：'+name)
         elif kind=='gripper_settled':self.state('夹爪已满足连续0.5秒静止条件，准备抬升')
-        elif kind=='stage_feedback':
+        elif kind in ('stage_feedback','ready_feedback'):
             now=self.clock()
             if self.feedback_period<=0 or now-self.last_feedback<self.feedback_period:return
             self.last_feedback=now;rows=event.get('rows',[])

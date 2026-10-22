@@ -25,6 +25,16 @@ class DisplayTests(unittest.TestCase):
         self.assertEqual(len(self.lines),1)
         self.assertIn('监听就绪',self.lines[0]);self.assertNotIn('\ufffd',self.lines[0])
         self.feed('wake',{'label':'sida'});self.assertIn('已识别唤醒词',self.lines[-1])
+    def test_ready_voice_status_does_not_announce_pick_or_confirm_arrival(self):
+        self.feed('voice_ready',{'words':['思达思达','回准备位']})
+        self.assertIn('回准备位',self.lines[-1]);self.assertIn('思达思达',self.lines[-1])
+        self.feed('wake',{'word':'回准备位','action':'ready'})
+        self.assertIn('准备位动作',self.lines[-1]);self.assertNotIn('拍照',self.lines[-1])
+        self.feed('ready_complete_torque_on')
+        self.assertIn('实际到位需观察',self.lines[-1])
+        self.feed('ready_failed_no_extra_motion','hold failed')
+        self.assertIn('hold failed',self.lines[-1])
+
     def test_nested_arm_events_and_feedback_throttle(self):
         self.feed('arm_feedback',{'event':'stage_started','name':'descend'})
         self.assertIn('下探',self.lines[-1])

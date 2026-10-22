@@ -103,7 +103,7 @@ def capture_take(folder, number):
         gc.collect()
 
 
-def finalize(folder):
+def finalize(folder, keyword_id='sida', label='思达思达'):
     eng = engine()
     try:
         eng.enroll_begin()
@@ -125,9 +125,9 @@ def finalize(folder):
                 break
             if time.ticks_diff(time.ticks_ms(), began) > 120000:
                 raise RuntimeError('Enrollment computation timed out')
-        rec = eng.enroll_result('sida')
+        rec = eng.enroll_result(keyword_id)
         eng.enroll_end()
-        rec['label'] = '思达思达'
+        rec['label'] = label
         rec['mic_volume'] = 100
         eng.add_keyword(rec)
         path = folder + '/keyword.json'

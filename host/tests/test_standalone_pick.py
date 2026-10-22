@@ -6,6 +6,7 @@ import io
 import hashlib
 import os
 import math
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -72,7 +73,7 @@ class VoiceDispatchTests(unittest.TestCase):
     def app(self):
         spec=importlib.util.spec_from_file_location('test_board_app',BOARD/'app.py');module=importlib.util.module_from_spec(spec)
         mocks={'time':SimpleNamespace(ticks_ms=lambda:0,ticks_diff=lambda a,b:a-b),'camera':SimpleNamespace(CameraSession=None),'vision':SimpleNamespace(localize=None),
-               'control':SimpleNamespace(run_pick_action=None)}
+               'control':SimpleNamespace(run_pick_action=None,run_arm_ready=None)}
         with patch.dict(sys.modules,mocks):spec.loader.exec_module(module)
         return module
     def test_control_log_interceptor_preserves_both_event_prefixes(self):
@@ -92,6 +93,7 @@ class VoiceDispatchTests(unittest.TestCase):
             self.assertEqual(cfg,{'wake_word':'思达思达'})
             calls.append('wait')
             if len(calls)>1:raise KeyboardInterrupt()
+            return 'pick'
         with patch.object(app,'load',return_value={'pick':{'cube_offset_toward_moving_finger_mm':-45},'voice':{'wake_word':'思达思达'}}),\
              patch.object(app,'log'),patch.object(app,'wait_for_wake',side_effect=wait),\
              patch.object(app,'run_once',side_effect=lambda cfg,execute:calls.append(('pick',execute))):
@@ -103,6 +105,7 @@ class VoiceDispatchTests(unittest.TestCase):
             self.assertEqual(cfg,{'wake_word':'思达思达'})
             calls.append('wait')
             if len(calls)>1:raise KeyboardInterrupt()
+            return 'pick'
         def pick(cfg,execute):calls.append('failed_pick');raise ValueError('No face')
         with patch.object(app,'load',return_value={'pick':{'cube_offset_toward_moving_finger_mm':-45},'voice':{'wake_word':'思达思达'}}),\
              patch.object(app,'log'),patch.object(app,'wait_for_wake',side_effect=wait),\
@@ -128,11 +131,12 @@ class VoiceDispatchTests(unittest.TestCase):
             calls.append(event)
             if event=='voice_ready':raise StopAtReady()
         cfg,unused,manifest=deploy.build_bundle()
+        cfg['voice']['commands']['ready']['enrollment_file']=None
         with patch.dict(sys.modules,{'wake_word':SimpleNamespace(engine=lambda s:Engine(),CHUNK=2560),
                                      'media':SimpleNamespace(),'media.pyaudio':SimpleNamespace(PyAudio=Audio,paInt16=0)}),\
              patch.object(app.os,'exitpoint',lambda:None,create=True),\
              patch.object(app,'load',return_value=cfg),patch.object(app,'log',side_effect=log),\
-             patch('builtins.open',return_value=io.StringIO('{}')),patch.object(app,'run_once') as pick:
+             patch('builtins.open',return_value=io.StringIO('{"kw_id":"sida"}')),patch.object(app,'run_once') as pick:
             with self.assertRaises(StopAtReady):app.run_forever('/fake')
             pick.assert_not_called()
         self.assertIn('voice_ready',calls);self.assertEqual(calls.count('read'),32)
@@ -152,7 +156,7 @@ class VoiceDispatchTests(unittest.TestCase):
         class Engine:
             def add_keyword(self,r):pass
             def reset(self):pass
-            def push(self,pcm):return [{'label':'sida'}]
+            def push(self,pcm):return [('sida',-.7,-1.9,3040.,3800.)]
             def deinit(self):calls.append('engine_closed')
         class Audio:
             def open(self,**kw):return Stream()
@@ -163,15 +167,93 @@ class VoiceDispatchTests(unittest.TestCase):
             def stop_stream(self):calls.append('stream_stopped')
             def close(self):calls.append('stream_closed')
         with tempfile.TemporaryDirectory() as folder:
-            file=Path(folder)/'keyword.json';file.write_text('{}')
+            file=Path(folder)/'keyword.json';file.write_text('{"kw_id":"sida"}')
             with patch.dict(sys.modules,{'wake_word':SimpleNamespace(engine=lambda s:Engine(),CHUNK=2560),
                                          'media':SimpleNamespace(),'media.pyaudio':SimpleNamespace(PyAudio=Audio,paInt16=0)}),\
                  patch.object(app.os,'exitpoint',lambda:None,create=True),patch.object(app,'log') as log,\
                  patch.object(app.time,'ticks_ms',side_effect=[0,5000]):
                 event=app.wait_for_wake({'enrollment_file':str(file),'detection_sensitivity':'sensitive','wake_word':'思达思达'})
-        self.assertEqual(event,{'label':'sida'})
+        self.assertEqual(event,'pick')
         log.assert_any_call('voice_listening',{'chunks_read':1,'audio_ms':160},persist=False)
         self.assertEqual(calls,['stream_stopped','stream_closed','audio_closed','engine_closed'])
+
+
+class ReadyCommandTests(unittest.TestCase):
+    app=VoiceDispatchTests.app
+    def test_unregistered_ready_keeps_original_keyword(self):
+        from voice_commands import registered_commands
+        cfg,_,_=deploy.build_bundle()
+        cfg['voice']['commands']['ready']['enrollment_file']=None
+        self.assertEqual([c['action'] for c in registered_commands(cfg['voice'])],['pick'])
+
+    def test_distinct_ids_route_and_ambiguous_events_do_not_move(self):
+        from voice_commands import registered_commands,resolve_events
+        cfg,_,_=deploy.build_bundle()
+        cfg['voice']['commands']['ready']['enrollment_file']='/fake/ready.json'
+        commands=registered_commands(cfg['voice'])
+        self.assertEqual(resolve_events([('ready',-.7,-2.,0,10)],commands)['action'],'ready')
+        self.assertEqual(resolve_events([('sida',-.7,-2.,0,10)],commands)['action'],'pick')
+        for events in ([('other',)], [('sida',),('ready',)], [{'label':'ready'}], []):
+            self.assertIsNone(resolve_events(events,commands))
+        cfg['voice']['commands']['ready']['keyword_id']='sida'
+        with self.assertRaisesRegex(ValueError,'duplicate'):registered_commands(cfg['voice'])
+
+    def test_ready_uses_existing_goals_and_profiles(self):
+        from tools.diagnostics.k230_arm_ready import config_payload
+        cfg,_,_=deploy.build_bundle()
+        self.assertEqual(cfg['ready_control'],config_payload())
+        self.assertEqual(cfg['ready_control']['profiles'],cfg['control']['profiles'])
+        self.assertEqual(cfg['ready_control']['registers'],cfg['control']['registers'])
+        app=self.app();calls=[]
+        with patch.dict(sys.modules,{'control':SimpleNamespace()}),patch.object(app,'log'),\
+             patch.object(app,'run_arm_ready',side_effect=lambda config,action:calls.append((config,action))),\
+             patch.object(app,'run_once') as pick:
+            app.run_ready(cfg)
+            pick.assert_not_called()
+        self.assertEqual(calls,[(cfg['ready_control'],'hold'),(cfg['ready_control'],'ready')])
+
+    def test_ready_hold_failure_does_not_send_ready_goal(self):
+        app=self.app()
+        with patch.dict(sys.modules,{'control':SimpleNamespace()}),patch.object(app,'log'),\
+             patch.object(app,'run_arm_ready',side_effect=RuntimeError('hold failed')) as run:
+            with self.assertRaises(RuntimeError):app.run_ready({'ready_control':{'goals':[2048]*6}})
+            run.assert_called_once_with({'goals':[2048]*6},'hold')
+
+    def test_ready_command_bypasses_camera_and_returns_to_listening(self):
+        app=self.app();cfg={'pick':{'cube_offset_toward_moving_finger_mm':-45},'voice':{}}
+        with patch.object(app,'load',return_value=cfg),patch.object(app,'log'),\
+             patch.object(app,'wait_for_wake',side_effect=['ready',KeyboardInterrupt()]) as listen,\
+             patch.object(app,'run_once') as pick,patch.object(app,'run_ready') as ready:
+            with self.assertRaises(KeyboardInterrupt):app.run_forever('/fake')
+            ready.assert_called_once_with(cfg);pick.assert_not_called();self.assertEqual(listen.call_count,2)
+
+    def test_both_keywords_loaded_and_actual_tuple_selects_ready(self):
+        app=self.app();added=[];closed=[];reads=[]
+        class Engine:
+            def add_keyword(self,r):added.append(r['kw_id'])
+            def reset(self):pass
+            def push(self,pcm):return [('ready',-.7,-2.,0,10)]
+            def deinit(self):closed.append('engine')
+        class Audio:
+            def open(self,**kw):return Stream()
+            def terminate(self):closed.append('audio')
+        class Stream:
+            def volume(self,**kw):pass
+            def read(self):reads.append(1);return bytes(5120)
+            def stop_stream(self):pass
+            def close(self):closed.append('stream')
+        with tempfile.TemporaryDirectory() as folder:
+            a=Path(folder)/'sida.json';b=Path(folder)/'ready.json'
+            a.write_text('{"kw_id":"sida"}');b.write_text('{"kw_id":"ready"}')
+            config={'wake_word':'思达思达','enrollment_file':str(a),'detection_sensitivity':'sensitive',
+                    'commands':{'ready':{'keyword_id':'ready','word':'回准备位','action':'ready','enrollment_file':str(b)}}}
+            with patch.dict(sys.modules,{'wake_word':SimpleNamespace(engine=lambda s:Engine(),CHUNK=2560),
+                    'media':SimpleNamespace(),'media.pyaudio':SimpleNamespace(PyAudio=Audio,paInt16=0)}),\
+                 patch.object(app.os,'exitpoint',lambda:None,create=True),patch.object(app,'log') as log:
+                self.assertEqual(app.wait_for_wake(config),'ready')
+            log.assert_any_call('voice_ready',{'words':['思达思达','回准备位']})
+        self.assertEqual(added,['sida','ready']);self.assertEqual(closed,['stream','audio','engine'])
+        self.assertEqual(len(reads),33)
 
 
 class DeploymentTests(unittest.TestCase):

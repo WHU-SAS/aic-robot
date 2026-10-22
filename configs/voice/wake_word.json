@@ -11,5 +11,15 @@
     "positive_wake_events": 11,
     "near_phrase_test_wake_events": 6,
     "near_phrase_false_wakes_accepted": true
+  },
+  "keyword_id": "sida",
+  "commands": {
+    "ready": {
+      "keyword_id": "ready",
+      "word": "回准备位",
+      "action": "ready",
+      "enrollment_file": null,
+      "status": "pending_enrollment"
+    }
   }
 }

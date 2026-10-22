@@ -9,6 +9,8 @@ import argparse,ast,base64,hashlib,json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from host.apps.pick_validation_pc import parameters
+from tools.diagnostics.k230_arm_ready import config_payload as ready_payload
+from device.k230.pick.voice_commands import registered_commands
 from host.arm.blue_pick_geometry import PickGeometry
 from host.transport.k230_pick_stage import payload
 from host.transport.download_calibration import CameraLink,PORT
@@ -45,8 +47,9 @@ def build_bundle():
                              'hull':vertices[ConvexHull(vertices).vertices].tolist()}
     voice=json.loads((ROOT/'configs/voice/wake_word.json').read_text())
     if not voice.get('enrollment_file'):raise ValueError('No accepted wake word registration')
+    commands=registered_commands(voice)
     control=payload(config,[2048]*6)
-    cfg={'pick':pick,'vision':vision,'intrinsics':intr,'extrinsics':ext,'model':model,'control':control,'voice':voice}
+    cfg={'pick':pick,'vision':vision,'intrinsics':intr,'extrinsics':ext,'model':model,'control':control,'voice':voice,'ready_control':ready_payload()}
     files={p.name:p.read_bytes() for p in (ROOT/'device/k230/pick').glob('*.py')}
     files['camera.py']=(ROOT/'device/k230/vision/camera.py').read_bytes()
     files['wake_word.py']=(ROOT/'device/k230/audio/wake_word.py').read_bytes()
@@ -56,7 +59,7 @@ def build_bundle():
     settle='\n'.join(text.splitlines()[node.lineno-1:node.end_lineno])
     files['control.py']='\n'.join([read,ready,settle,(ROOT/'device/k230/arm/pick_stage.py').read_text()]).encode()
     files['config.json']=encoded(cfg)
-    manifest={'schema':'aic.standalone_pick.v1','trigger':'思达思达','startup_motion':False,
+    manifest={'schema':'aic.standalone_pick.v1','trigger':'思达思达','voice_commands':[{'word':c['word'],'action':c['action']} for c in commands],'startup_motion':False,
               'pc_runtime_required':False,'cube_offset_toward_moving_finger_mm':pick['cube_offset_toward_moving_finger_mm'],
               'files':{name:{'bytes':len(data),'sha256':digest(data)} for name,data in sorted(files.items())}}
     release=digest(encoded(manifest))[:16];manifest['release_id']=release
@@ -128,7 +131,7 @@ def verify(link,remote,manifest,config):
     # Imports/pose/IK and saved registration checks only: no camera/UART init.
     source="""import os,sys,json,binascii,uhashlib
 sys.path.insert(0,%r)
-for name in ['app','pose','numeric','kinematics','vision','camera','wake_word','control']:
+for name in ['app','pose','numeric','kinematics','vision','camera','wake_word','control','voice_commands']:
  if name in sys.modules:del sys.modules[name]
 with open(%r+'/manifest.json') as f:m=json.load(f)
 for name,item in m['files'].items():
@@ -144,7 +147,17 @@ from pose import pose_candidates
 from kinematics import Geometry
 from vision import localize
 cfg=load(%r)
-os.stat(cfg['voice']['enrollment_file'])
+from voice_commands import registered_commands
+from wake_word import engine
+keywords=[]
+for command in registered_commands(cfg['voice']):
+ with open(command['enrollment_file']) as f:keyword=json.load(f)
+ if keyword['kw_id']!=command['keyword_id']:raise ValueError('Keyword ID mismatch')
+ keywords.append(keyword)
+eng=engine(cfg['voice']['detection_sensitivity'])
+try:
+ for keyword in keywords:eng.add_keyword(keyword)
+finally:eng.deinit()
 os.stat('/sdcard/examples/31-OPEN-KWS/model/kws.kmodel')
 print('RELEASE_VERIFIED '+m['release_id'])
 """%(remote,remote,remote,remote)
