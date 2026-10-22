@@ -32,6 +32,12 @@ def localize(image,output):
    v=separated;v['previous_whole_outline_diagnostic']={'status':initial['status'],'reason':initial.get('reason'),'face_quad_px':initial.get('face_quad_px'),'face_rms_px':initial['poses'][0]['face_reprojection_rms_px'] if initial.get('poses') else None}
   else:v['exposed_cube_separation_diagnostic']=separated
  if v['status']!='complete_face_candidate' or not v.get('poses'):
+  from host.vision.blue_side_edges import detect_blue_side
+  supported=detect_blue_side(im,K,D)
+  if supported['status']=='complete_face_candidate':
+   supported['previous_attempt']=v;v=supported
+  else:v['gradient_side_attempt']=supported
+ if v['status']!='complete_face_candidate' or not v.get('poses'):
   (output/'vision_candidates.json').write_text(json.dumps(v,ensure_ascii=False,indent=2)+'\n');raise RuntimeError('未识别到完整可靠的蓝色20mm方块面：'+str(v.get('reason',v['status'])))
  T=np.array(ext['T_Base_from_Camera_mm']);cent=np.array(v['poses'][0]['cube_center_Camera_mm']);base=T[:3,:3]@cent+T[:3,3]
  cv2.polylines(im,[np.rint(v['face_quad_px']).astype(np.int32)],True,(0,255,0),3);cv2.drawMarker(im,tuple(np.rint(v['poses'][0]['cube_center_pixel']).astype(int)),(0,255,255),cv2.MARKER_CROSS,20,2);cv2.imwrite(str(output/'camera_detected.jpg'),im)
