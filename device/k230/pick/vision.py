@@ -14,6 +14,7 @@ FLOAT=getattr(np,'float',None) or np.float32
 from pose import pose_candidates
 from numeric import norm,dot,solve
 from reflection_faces import detect_reflection_face
+from top_boundaries import validate_top_boundary
 from face_selection import internal_seam,separated_face_inside,adjacent_side,independent_adjacent_side,shallow_face
 
 
@@ -278,6 +279,9 @@ def localize(im,K,D,T):
     elif result is None:
         result=split_face(hsv,K,D)
     result=result or gradient_side(im,hsv,K,D) or detect_reflection_face(im,K,D,pose_candidates)
+    if result is not None and shallow_face(result['face_quad_px']):
+        result=validate_top_boundary(im,K,D,result)
+        if result['status']!='complete_face_candidate':raise ValueError(result['reason'])
     if result is None:raise ValueError('No reliable physical blue20mm face')
     center=result['poses'][0]['cube_center_Camera_mm']
     result['cube_center_Camera_mm']=center

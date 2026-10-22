@@ -94,6 +94,14 @@ class ReflectionFaceCases(unittest.TestCase):
             errors.append(float(np.sqrt(np.mean(np.sum((pix-q)**2,axis=1)))))
         self.assertAlmostEqual(refined[0]['face_reprojection_rms_px'],min(errors),places=4)
 
+    def test_fit_line_accepts_canmv_tuple_and_desktop_array(self):
+        from unittest.mock import patch
+        from device.k230.pick.reflection_faces import fit
+        points=[[0.,2.],[1.,2.],[2.,2.],[3.,2.]]
+        expected=fit(points)
+        with patch('device.k230.pick.reflection_faces.cv2.fitLine',return_value=(1.,0.,1.5,2.)):
+            np.testing.assert_allclose(fit(points),expected,atol=1e-5)
+
     def test_reflection_alone_is_not_completed_into_a_cube(self):
         im,K,D,_=self.scene();im[:]=(80,140,170)
         im[300:,270:380]=(135,100,45)

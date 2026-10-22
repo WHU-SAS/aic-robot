@@ -93,7 +93,8 @@ class MultiFaceOutlineCases(unittest.TestCase):
         with patch('vision.split_face',return_value=None),patch('vision.independent_adjacent_side',return_value=None):
             result=localize(im,K.tolist(),D.tolist(),np.eye(4).tolist())
         self.assertNotIn('preferred_over_top',result)
-        self.assertEqual(result['face_quad_px'],top['face_quad_px'])
+        self.assertTrue(result['top_boundary_verified'])
+        self.assertEqual(result['threshold_proposal']['face_quad_px'],top['face_quad_px'])
 
     def test_two_planes_can_pass_square_pnp_but_must_be_separated(self):
         from host.vision.grasp_face_quality import assess

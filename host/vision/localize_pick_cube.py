@@ -38,6 +38,10 @@ def localize(image,output,vision_config=None):
   if supported['status']=='complete_face_candidate':
    supported['previous_attempt']=v;v=supported
   else:v['gradient_side_attempt']=supported
+ from device.k230.pick.face_selection import shallow_face
+ from device.k230.pick.top_boundaries import validate_top_boundary
+ if v['status']=='complete_face_candidate' and v.get('poses') and shallow_face(v['face_quad_px']):
+  v=validate_top_boundary(im,K,D,v)
  if v['status']!='complete_face_candidate' or not v.get('poses'):
   (output/'vision_candidates.json').write_text(json.dumps(v,ensure_ascii=False,indent=2)+'\n');raise RuntimeError('未识别到完整可靠的蓝色20mm方块面：'+str(v.get('reason',v['status'])))
  T=np.array(ext['T_Base_from_Camera_mm']);cent=np.array(v['poses'][0]['cube_center_Camera_mm']);base=T[:3,:3]@cent+T[:3,3]

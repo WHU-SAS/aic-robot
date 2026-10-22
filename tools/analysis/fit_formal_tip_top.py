@@ -103,6 +103,10 @@ def image_pose(image,K,D,group):
         if supported['status']=='complete_face_candidate':
             supported['previous_attempt']=value;value=supported
         else:value['gradient_side_attempt']=supported
+    from device.k230.pick.face_selection import shallow_face
+    from device.k230.pick.top_boundaries import validate_top_boundary
+    if value['status']=='complete_face_candidate' and value.get('poses') and shallow_face(value['face_quad_px']):
+        value=validate_top_boundary(image,K,D,value)
     if value.get('poses') and len(value['poses'])>1:
         value['pose_ambiguity_mm']=float(np.linalg.norm(np.array(value['poses'][0]['cube_center_Camera_mm'])-value['poses'][1]['cube_center_Camera_mm']))
     return value

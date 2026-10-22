@@ -24,7 +24,10 @@ def ordered(contour):
 
 
 def fit(points):
-    vx,vy,x,y=[float(v) for v in cv2.fitLine(np.array(points,dtype=FLOAT),cv2.DIST_HUBER,0,.01,.01).reshape((-1,)).tolist()]
+    values=cv2.fitLine(np.array(points,dtype=FLOAT),cv2.DIST_HUBER,0,.01,.01)
+    # CanMV returns a tuple; desktop OpenCV returns a 4x1 ndarray.
+    if hasattr(values,'reshape'):values=values.reshape((-1,)).tolist()
+    vx,vy,x,y=[float(v) for v in values]
     return [-vy,vx,vy*x-vx*y]
 
 
