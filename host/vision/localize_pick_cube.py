@@ -11,7 +11,7 @@ from pathlib import Path
 import cv2,numpy as np
 from face_geometry import face_candidates,pose_candidates
 from grasp_face_quality import assess
-from runtime_cube_faces import split_exposed_cube
+from runtime_cube_faces import split_exposed_cube,verify_single_face
 from host.vision.config import load_vision_config,table_height_at
 ROOT=REPO_ROOT
 
@@ -26,7 +26,8 @@ def localize(image,output,vision_config=None):
   ps=pose_candidates(np.array(v['face_quad_px']),K,D);ok=bool(ps and ps[0]['face_reprojection_rms_px']<=2 and np.array(v['face_quad_px'])[:,1].min()>=432)
   if ok:v['poses']=ps
  if not ok:v=assess(im,K,D);v['boundary_method']='dim_blue_line_refinement'
- if v['status']!='complete_face_candidate' or not v.get('poses'):
+ v=verify_single_face(im,K,D,v)
+ if (v['status']!='complete_face_candidate' or not v.get('poses')) and 'rejected_multiface_outline' not in v:
   initial=v;separated=split_exposed_cube(im,K,D)
   if separated['status']=='complete_face_candidate' and separated.get('poses'):
    v=separated;v['previous_whole_outline_diagnostic']={'status':initial['status'],'reason':initial.get('reason'),'face_quad_px':initial.get('face_quad_px'),'face_rms_px':initial['poses'][0]['face_reprojection_rms_px'] if initial.get('poses') else None}

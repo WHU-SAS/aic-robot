@@ -14,6 +14,7 @@ FLOAT=getattr(np,'float',None) or np.float32
 from pose import pose_candidates
 from numeric import norm,dot,solve
 from reflection_faces import detect_reflection_face
+from face_selection import internal_seam,separated_face_inside
 
 
 def median(values):
@@ -255,7 +256,18 @@ def gradient_side(im,hsv,K,D):
 def localize(im,K,D,T):
     if im.shape[:2]!=(960,1280):raise ValueError('Expected 1280x960 BGR frame')
     hsv=cv2.cvtColor(im,cv2.COLOR_BGR2HSV)
-    result=basic_face(hsv,K,D) or dim_face(hsv,K,D) or split_face(hsv,K,D) or gradient_side(im,hsv,K,D) or detect_reflection_face(im,K,D,pose_candidates)
+    result=basic_face(hsv,K,D) or dim_face(hsv,K,D)
+    evidence=internal_seam(hsv,result['face_quad_px']) if result else None
+    if evidence is not None:
+        whole=result;separated=split_face(hsv,K,D)
+        result=separated if separated and separated_face_inside(whole['face_quad_px'],separated['face_quad_px']) else None
+        if result is not None:
+            result['rejected_multiface_outline']={'boundary_method':whole['boundary_method'],
+                'face_quad_px':whole['face_quad_px'],'reprojection_rms_px':whole['poses'][0]['face_reprojection_rms_px'],
+                'interior_seam':evidence}
+    elif result is None:
+        result=split_face(hsv,K,D)
+    result=result or gradient_side(im,hsv,K,D) or detect_reflection_face(im,K,D,pose_candidates)
     if result is None:raise ValueError('No reliable physical blue20mm face')
     center=result['poses'][0]['cube_center_Camera_mm']
     result['cube_center_Camera_mm']=center

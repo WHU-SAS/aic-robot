@@ -78,7 +78,7 @@ def evaluate(transform,camera,base,groups):
 def image_pose(image,K,D,group):
     from face_geometry import face_candidates,pose_candidates
     from grasp_face_quality import assess
-    from runtime_cube_faces import split_exposed_cube
+    from runtime_cube_faces import split_exposed_cube,verify_single_face
     value=face_candidates(image,group)
     value['boundary_method']='existing_threshold_median'
     valid=False
@@ -89,7 +89,8 @@ def image_pose(image,K,D,group):
     if not valid:
         value=assess(image,K,D)
         value['boundary_method']='dim_blue_line_refinement'
-    if value['status']!='complete_face_candidate' or not value.get('poses'):
+    value=verify_single_face(image,K,D,value)
+    if (value['status']!='complete_face_candidate' or not value.get('poses')) and 'rejected_multiface_outline' not in value:
         previous=value
         split=split_exposed_cube(image,K,D)
         if split['status']=='complete_face_candidate' and split.get('poses'):

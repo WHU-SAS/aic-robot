@@ -67,3 +67,19 @@ def split_exposed_cube(im,K,D):
  'boundary_method':'exposed_cube_top_side_seam_then_side_edges','face_quad_px':best['q'],'poses':best['poses'],'near_support':int(support),'candidate_count':len(found),
  'seam_line_px':{'channel':selected['label'],'score':selected['score'],'slope':slope,'intercept':intercept,'column_support':len(edges),'median_deviation_px':deviation,'hue_jump':hue_jump,'value_jump':value_jump},
  'bbox_px':[x,y,w,h],'candidates':[{'S':f['S'],'V':f['V'],'quad_px':f['q'],'reprojection_rms_px':f['rms']} for f in found]}
+
+
+def verify_single_face(im,K,D,candidate):
+ """Check interior physical seams even when an outline passed square PnP."""
+ from device.k230.pick.face_selection import internal_seam,separated_face_inside
+ if candidate.get('status')!='complete_face_candidate' or not candidate.get('poses'):return candidate
+ evidence=internal_seam(cv2.cvtColor(im,cv2.COLOR_BGR2HSV),candidate['face_quad_px'])
+ if evidence is None:return candidate
+ separated=split_exposed_cube(im,K,D)
+ previous={'boundary_method':candidate.get('boundary_method'),'face_quad_px':candidate['face_quad_px'],
+           'reprojection_rms_px':candidate['poses'][0]['face_reprojection_rms_px'],'interior_seam':evidence}
+ if separated.get('status')=='complete_face_candidate' and separated.get('poses') and separated_face_inside(candidate['face_quad_px'],separated['face_quad_px']):
+  separated['rejected_multiface_outline']=previous
+  return separated
+ return {'status':'no_complete_face','reason':'Interior blue seam requires a verified individual physical face',
+         'rejected_multiface_outline':previous,'separation_attempt':separated}
