@@ -55,9 +55,10 @@ def side_pose(poses):
     return [p for p in poses if abs(p['inward_face_normal_Camera'][1])<=.6 and p['face_reprojection_rms_px']<=2]
 
 
-def measure_side(im,hsv,seed,K,D):
+def measure_side(im,hsv,seed,K,D,diagnostic=None):
     edges=[measure_edge(im,a,b) for a,b in zip(seed,seed[1:]+seed[:1])]
     q=[intersect(edges[i-1][0],edges[i][0]) for i in range(4)]
+    if diagnostic is not None:diagnostic.update(face_quad_px=q,physical_edges=[e[1] for e in edges])
     for half in (0,1):
         check=[intersect(edges[i-1][2][half],edges[i][2][half]) for i in range(4)]
         if max(distance(a,b) for a,b in zip(q,check))>3:raise ValueError('Side interleaved corners disagree')
@@ -68,8 +69,10 @@ def measure_side(im,hsv,seed,K,D):
     if internal_seam(hsv,q) is not None:raise ValueError('Side proposal contains another face')
     # Identify its upper edge independently of ordered()'s starting corner.
     back=min(range(4),key=lambda i:(q[i][1]+q[(i+1)%4][1])/2)
-    support=validate_seam(hsv,q[back:]+q[:back],either_polarity=True)
-    ps=side_pose(pose_candidates(q,K,D,refine=True))
+    support=validate_seam(hsv,q[back:]+q[:back],either_polarity=True,image=im)
+    poses=pose_candidates(q,K,D,refine=True)
+    if diagnostic is not None:diagnostic['pose_reprojection_rms_px']=[p['face_reprojection_rms_px'] for p in poses]
+    ps=side_pose(poses)
     if not ps:raise ValueError('No accurate vertical-side pose')
     return {'face_quad_px':q,'poses':ps,'physical_edges':[e[1] for e in edges],
             'seam_support':support,'area_px2':area(q),'boundary_method':'independent_side_four_measured_edges'}
@@ -114,7 +117,7 @@ def component_support(q,anchor):
     return True
 
 
-def detect_sides(im,K,D,anchor,hsv=None):
+def detect_sides(im,K,D,anchor,hsv=None,diagnostics=None):
     unposed=bool(anchor and anchor.get('unposed_component'))
     if not anchor or not anchor.get('face_quad_px') or not (unposed or anchor.get('poses')):return []
     q0=anchor['face_quad_px'];xs=[p[0] for p in q0];ys=[p[1] for p in q0]
@@ -170,7 +173,7 @@ def detect_sides(im,K,D,anchor,hsv=None):
     # Top hints and observed lower contour vertices only propose side search
     # windows; each output still needs all FOUR measured physical boundaries.
     cs,unused=cv2.findContours(broad,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
-    for hint in top_hints[:4]:
+    for hint in sorted(top_hints,key=lambda q:-area(q))[:8]:
         hint_span=max(max(v[k] for v in hint)-min(v[k] for v in hint) for k in (0,1))
         for contour in cs:
             if cv2.contourArea(contour)<1000:continue
@@ -186,8 +189,13 @@ def detect_sides(im,K,D,anchor,hsv=None):
                 if not any(corner_distance(seed,old)<3 for old in seeds):seeds.insert(0,seed)
     sm=cv2.GaussianBlur(im,(3,3),.7);found=[]
     for seed in seeds[:32]:
-        try:face=measure_side(sm,hsv,seed,K,D)
-        except (ValueError,ZeroDivisionError):continue
+        detail={'seed_quad_px':seed} if diagnostics is not None else None
+        if detail is not None:diagnostics.setdefault('attempts',[]).append(detail)
+        try:face=measure_side(sm,hsv,seed,K,D,detail)
+        except (ValueError,ZeroDivisionError) as exc:
+            if detail is not None:detail['rejection']=str(exc)
+            continue
+        if detail is not None:detail['measured_side_passed']=True
         q=face['face_quad_px']
         if unposed:
             if not component_support(q,anchor):continue
@@ -197,14 +205,15 @@ def detect_sides(im,K,D,anchor,hsv=None):
         elif face['poses'][0]['face_reprojection_rms_px']<existing['poses'][0]['face_reprojection_rms_px']:
             found[found.index(existing)]=face
     search={'seed_count':len(seeds),'measured_seed_count':min(32,len(seeds)),'usable_sides':len(found),'value_cuts':cuts}
+    if diagnostics is not None:diagnostics.update(search)
     for face in found:face['side_search_diagnostics']=search
     return found
 
 
-def fast_sides(im,K,D,hsv,table=None):
+def fast_sides(im,K,D,hsv,table=None,diagnostics=None):
     anchor=component_anchor(hsv)
     if anchor is None:return None
-    result=select_sides(detect_sides(im,K,D,anchor,hsv),K,D,table)
+    result=select_sides(detect_sides(im,K,D,anchor,hsv,diagnostics),K,D,table)
     if result is not None:result['vision_path']='direct_component_sides'
     return result
 
@@ -253,8 +262,8 @@ def select_sides(faces,K,D,table=None):
     return result
 
 
-def prefer_sides(im,K,D,anchor,table=None):
-    result=select_sides(detect_sides(im,K,D,anchor),K,D,table)
+def prefer_sides(im,K,D,anchor,table=None,diagnostics=None):
+    result=select_sides(detect_sides(im,K,D,anchor,diagnostics=diagnostics),K,D,table)
     if result is not None and internal_seam(cv2.cvtColor(im,cv2.COLOR_BGR2HSV),anchor['face_quad_px']) is not None:
         result['rejected_multiface_outline']={'face_quad_px':anchor['face_quad_px'],
             'reason':'Measured an individual side instead of the merged outline'}

@@ -11,7 +11,7 @@ from vision import basic_face,localize
 
 
 class SidePolicyCases(unittest.TestCase):
-    def scene(self,yaw=.7,exposure=1.):
+    def scene(self,yaw=.7,exposure=1.,equal_value=False):
         K=np.array([[1200.,0.,640.],[0.,1600.,580.],[0.,0.,1.]])
         D=np.zeros(5);rv=np.array([.4,yaw,.02]);tv=np.array([-10.,-10.,250.])
         front=np.array([[0.,0.,0.],[20.,0.,0.],[20.,20.,0.],[0.,20.,0.]])
@@ -19,7 +19,9 @@ class SidePolicyCases(unittest.TestCase):
         top=np.array([[0.,0.,20.],[20.,0.,20.],[20.,0.,0.],[0.,0.,0.]])
         project=lambda p:cv2.projectPoints(p,rv,tv,K,D)[0].reshape(-1,2)
         im=np.full((960,1280,3),(80,140,170),np.uint8)
-        for face,color in [(top,(245,99,0)),(right,(145,36,1)),(front,(180,120,10))]:
+        colours=[(top,(235,90,0) if equal_value else (245,99,0)),
+                 (right,(145,36,1)),(front,(235,155,5) if equal_value else (180,120,10))]
+        for face,color in colours:
             cv2.fillConvexPoly(im,np.rint(project(face)).astype(np.int32),color)
         im=np.clip(cv2.GaussianBlur(im,(3,3),.7)*exposure,0,255).astype(np.uint8)
         truth=cv2.Rodrigues(rv)[0]@np.array([10.,10.,10.])+tv
@@ -110,6 +112,59 @@ class SidePolicyCases(unittest.TestCase):
             result=localize(im,K.tolist(),D.tolist(),np.eye(4).tolist())
         self.assertEqual(result['side_selection'],'mean_of_similar_area_sides')
         np.testing.assert_allclose(result['cube_center_Base_mm'],truth,atol=3)
+
+
+    def test_equal_brightness_top_side_seam_uses_colour_without_relaxing_pose(self):
+        for yaw in (.4,.7,.95):
+            im,K,D,truth=self.scene(yaw,equal_value=True)
+            result=localize(im,K.tolist(),D.tolist(),np.eye(4).tolist())
+            self.assertEqual(result['vision_path'],'direct_component_sides')
+            self.assertIn('side_selection',result)
+            self.assertLessEqual(result['poses'][0]['face_reprojection_rms_px'],2.)
+            self.assertLess(np.linalg.norm(np.array(result['cube_center_Base_mm'])-truth),2.)
+
+    def test_chromatic_seam_needs_distributed_coherent_support(self):
+        from device.k230.pick.reflection_faces import validate_seam
+        q=[[20.,80.],[160.,80.],[160.,160.],[20.,160.]]
+        im=np.full((180,180,3),(235,90,0),np.uint8);im[80:]=(235,155,5)
+        hsv=cv2.cvtColor(im,cv2.COLOR_BGR2HSV)
+        with self.assertRaises(ValueError):validate_seam(hsv,q,True)
+        self.assertGreaterEqual(validate_seam(hsv,q,True,image=im),20)
+        # A local highlight or same-colour texture cannot stand in for a seam.
+        im[:]=(235,90,0);im[80:,80:100]=(235,155,5)
+        with self.assertRaises(ValueError):validate_seam(cv2.cvtColor(im,cv2.COLOR_BGR2HSV),q,True,image=im)
+        im[:]=(235,90,0)
+        with self.assertRaises(ValueError):validate_seam(cv2.cvtColor(im,cv2.COLOR_BGR2HSV),q,True,image=im)
+        # Half the edge changes colour one way, half the other: no consensus.
+        im[:80,90:]=(235,155,5);im[80:,:90]=(235,155,5)
+        with self.assertRaises(ValueError):validate_seam(cv2.cvtColor(im,cv2.COLOR_BGR2HSV),q,True,image=im)
+
+    def test_original_near_left_frames_preserve_pose_gate(self):
+        import json
+        from device.k230.pick.side_faces import fast_sides
+        paths=[ROOT/('data/logs/pick_pc_20261023_'+stamp+'/frame.jpg')
+               for stamp in ('221345_914729','221948_154453','222333_294066')]
+        if not all(p.exists() for p in paths):self.skipTest('Original camera frames are local-only evidence')
+        intr=json.loads((ROOT/'configs/vision/runtime/camera_intrinsics.json').read_text())
+        ext=json.loads((ROOT/'configs/vision/trials/fixed_tip_top_20261022_extrinsics.json').read_text())
+        cfg=json.loads((ROOT/'configs/vision/trials/fixed_tip_top_20261022.json').read_text())
+        K=intr['camera_matrix'];D=intr['distortion_coefficients']
+        for index,path in enumerate(paths):
+            im=cv2.imread(str(path));details={}
+            fast_sides(im,K,D,cv2.cvtColor(im,cv2.COLOR_BGR2HSV),diagnostics=details)
+            result=localize(im,K,D,ext['T_Base_from_Camera_mm'],cfg['localization']['table_plane_Base_mm'])
+            self.assertLessEqual(result['poses'][0]['face_reprojection_rms_px'],2.)
+            if index==0:
+                # Still inconsistent as a measured square; do not conceal it
+                # with a relaxed limit or force the largest candidate through.
+                self.assertNotIn('side_selection',result)
+                rejected=[d for d in details['attempts'] if d.get('rejection')=='No accurate vertical-side pose'
+                          and d.get('pose_reprojection_rms_px',[0])[0]>2.]
+                self.assertTrue(rejected)
+            else:
+                self.assertEqual(result['vision_path'],'direct_component_sides')
+                self.assertGreater(result['side_faces'][0]['area_px2'],30000)
+                self.assertTrue(all(edge['support']>=45 for edge in result['physical_edges']))
 
 
 class TablePoseCases(unittest.TestCase):

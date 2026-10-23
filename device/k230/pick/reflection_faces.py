@@ -50,7 +50,7 @@ def measure_edge(im,a,b):
     radius=min(12,max(5,int(round(length*.06))))
     points=[];stations=[];height,width=im.shape[:2]
     for j in range(64):
-        t=.15+.7*j/63;mid=[a[k]+(b[k]-a[k])*t for k in (0,1)];best=None
+        t=.15+.7*j/63;mid=[a[k]+(b[k]-a[k])*t for k in (0,1)];best=None;responses={}
         for offset in range(-radius,radius+1):
             p=[mid[k]+offset*n[k] for k in (0,1)]
             upper=[p[k]+2*n[k] for k in (0,1)];lower=[p[k]-2*n[k] for k in (0,1)]
@@ -62,9 +62,16 @@ def measure_edge(im,a,b):
             den=max(40.,(c[0]+c[1]+c[2]+d[0]+d[1]+d[2])/6)
             dr=c[0]-d[0];dg=c[1]-d[1];db=c[2]-d[2]
             score=(dr*dr+dg*dg+db*db)/(den*den)
-            if best is None or score>best[0]:best=(score,p,j)
+            responses[offset]=score
+            if best is None or score>best[0]:best=(score,p,j,offset)
         if best and best[0]>.08*.08:
-            points.append(best[1]);stations.append(best[2])
+            peak=best[3];before=responses.get(peak-1);after=responses.get(peak+1);sub=0.
+            # Locate the observed gradient peak between pixels. Do not move
+            # corners to fit a square or use pose error to choose this shift.
+            if before is not None and after is not None:
+                curvature=before-2*best[0]+after
+                if curvature<0:sub=max(-.5,min(.5,.5*(before-after)/curvature))
+            points.append([best[1][k]+sub*n[k] for k in (0,1)]);stations.append(best[2])
     if len(points)<45:raise ValueError('Insufficient edge contrast')
     line=fit(points)
     inliers=[(p,j) for p,j in zip(points,stations) if residual(p,line)<=3]
@@ -85,18 +92,32 @@ def measure_edge(im,a,b):
 def blue(h):return 90<=h[0]<=140 and h[1]>=80 and h[2]>=35
 
 
-def validate_seam(hsv,q,either_polarity=False):
+def validate_seam(hsv,q,either_polarity=False,image=None):
     a,b=q[:2];length=distance(a,b);n=[-(b[1]-a[1])/length,(b[0]-a[0])/length]
-    support=0;height,width=hsv.shape[:2]
+    support=0;colour_votes=[];height,width=hsv.shape[:2]
     for j in range(32):
         t=.2+.6*j/31;p=[a[k]+t*(b[k]-a[k]) for k in (0,1)]
         inside=[p[k]+5*n[k] for k in (0,1)];outside=[p[k]-5*n[k] for k in (0,1)]
         if any(not(0<v[0]<width-1 and 0<v[1]<height-1) for v in (inside,outside)):continue
         lo=sample(hsv,inside);hi=sample(hsv,outside)
         contrast=abs(lo[2]-hi[2]) if either_polarity else lo[2]-hi[2]
-        if blue(lo) and blue(hi) and contrast>max(10,.12*max(lo[2],hi[2])):support+=1
-    if support<20:raise ValueError('No distributed blue top / side contrast')
-    return support
+        if blue(lo) and blue(hi):
+            if contrast>max(10,.12*max(lo[2],hi[2])):support+=1
+            if image is not None and either_polarity:
+                c=sample(image,inside);d=sample(image,outside)
+                delta=[x-y for x,y in zip(c,d)]
+                den=max(40.,sum(c+d)/6)
+                # Bright top/side faces can have equal V but distinct colour.
+                # Use the existing top-boundary RGB contrast level, retaining
+                # blue on BOTH sides and distributed, same-direction support.
+                if sum(v*v for v in delta)>(.12*den)**2:colour_votes.append(delta)
+    if support>=20:return support
+    if len(colour_votes)>=20:
+        total=[sum(v[k] for v in colour_votes) for k in range(3)]
+        channel=max(range(3),key=lambda k:abs(total[k]))
+        coherent=sum(v[channel]*total[channel]>0 for v in colour_votes)
+        if coherent>=20:return coherent
+    raise ValueError('No distributed blue top / side contrast')
 
 
 def detect_reflection_face(im,K,D,pose_solver,roi=None,adjacent_top=None):
