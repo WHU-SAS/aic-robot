@@ -78,25 +78,12 @@ class StatusDisplay:
             self.state('监听就绪：'+ '、'.join('“'+word+'”' for word in details['words']))
         elif event=='wake' and isinstance(details,dict) and details.get('action')=='ready':
             self.state('已识别“回准备位”：准备执行准备位动作')
-        elif event=='planning_started':
-            self.state('已听到指令并完成识别，正在规划（上限%.1f秒）'%(details['limit_ms']/1000))
-        elif event=='planning_timeout_no_motion':
-            self.state('规划搜索超时（%.1f秒），未发送动作，将恢复语音监听；尚未证明该位置无解'%(details['elapsed_ms']/1000))
         elif event=='localized':
             center=details.get('cube_center_Base_mm') if isinstance(details,dict) else None
             text='识别成功'
             if isinstance(center,list) and len(center)==3:
                 text+='：方块Base坐标(mm) ['+', '.join(f'{v:.2f}' for v in center)+']'
             self.state(text)
-        elif event=='planned' and isinstance(details,dict):
-            wrist=details.get('wrist_alignment',{})
-            if wrist.get('status')=='aligned':
-                self.state('规划完成：方块方向 %.1f°（90°等价），5号目标 %.1f° / 编码%d，转动%+.1f°' % (wrist['cube_yaw_table_deg'],wrist['servo5_angle_deg'],wrist['servo5_goal'],wrist['servo5_change_deg']))
-                tilts=details.get('stage_tilts_deg')
-                if tilts:
-                    self.emit('腕部倾角：悬停 %.1f° / 下探 %.1f° / 抬升 %.1f°；5号保持同一目标' % (tilts['hover'],tilts['descend'],tilts['lift']))
-            elif wrist.get('alignment_failure'):self.state('规划完成：旋转姿态无法兼顾方向和高度，5号保持原角度、按原方式抓取')
-            else:self.state('规划完成：本轮无可靠侧面方向，5号保持原角度')
         elif event=='voice_failed':
             self.state('语音监听失败，当前不能唤醒：'+str(details))
         elif event in ('pick_failed_no_extra_motion','ready_failed_no_extra_motion'):

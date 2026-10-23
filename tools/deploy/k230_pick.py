@@ -45,32 +45,6 @@ def build_bundle():
     for link,vertices in geometry.vertices.items():
         model['points'][link]={'tip':geometry.tip[link].tolist(),'distal':geometry.distal[link].tolist(),
                              'hull':vertices[ConvexHull(vertices).vertices].tolist()}
-    # Conservative 2mm slices of each finger's convex hull, expressed in its
-    # own link frame. Clip hull edges as well as vertices so no material between
-    # slices can disappear. Separate fingers never bridge the jaw opening.
-    for item in model['points'].values():
-        verts=np.asarray(item['hull']);hull=ConvexHull(verts)
-        mn=verts.min(axis=0);mx=verts.max(axis=0)
-        item['collision_bounds']={'center':((mn+mx)/2).tolist(),'half':((mx-mn)/2+1e-9).tolist()}
-        edges=sorted({tuple(sorted((int(face[i]),int(face[(i+1)%3]))))
-                      for face in hull.simplices for i in range(3)})
-        neighbors=[set() for _ in verts]
-        for a,b in edges:neighbors[a].add(b);neighbors[b].add(a)
-        item['collision_neighbors']=[sorted(v) for v in neighbors]
-        axis=int(np.argmax(np.ptp(verts,axis=0)));low=float(verts[:,axis].min());high=float(verts[:,axis].max())
-        count=max(1,int(np.ceil((high-low)/.002)));boxes=[]
-        edge_a=verts[[e[0] for e in edges]];edge_b=verts[[e[1] for e in edges]]
-        for k in range(count):
-            lo=low+(high-low)*k/count;hi=low+(high-low)*(k+1)/count
-            parts=[verts[(verts[:,axis]>=lo-1e-12)&(verts[:,axis]<=hi+1e-12)]]
-            for boundary in (lo,hi):
-                da=edge_b[:,axis]-edge_a[:,axis];mask=(np.abs(da)>1e-12)
-                t=np.zeros(len(da));t[mask]=(boundary-edge_a[mask,axis])/da[mask]
-                mask &= (t>=0)&(t<=1)
-                parts.append(edge_a[mask]+t[mask,None]*(edge_b[mask]-edge_a[mask]))
-            points=np.concatenate(parts);mn=points.min(axis=0);mx=points.max(axis=0)
-            boxes.append({'center':((mn+mx)/2).tolist(),'half':((mx-mn)/2+1e-9).tolist()})
-        item['collision_boxes']=boxes
     voice=json.loads((ROOT/'configs/voice/wake_word.json').read_text())
     if not voice.get('enrollment_file'):raise ValueError('No accepted wake word registration')
     commands=registered_commands(voice)
@@ -157,7 +131,7 @@ def verify(link,remote,manifest,config):
     # Imports/pose/IK and saved registration checks only: no camera/UART init.
     source="""import os,sys,json,binascii,uhashlib
 sys.path.insert(0,%r)
-for name in ['app','pose','numeric','kinematics','vision','reflection_faces','face_selection','side_faces','cube_orientation','wrist_alignment','finger_collision','planning','table_pose','top_boundaries','camera','wake_word','control','voice_commands']:
+for name in ['app','pose','numeric','kinematics','vision','reflection_faces','face_selection','side_faces','table_pose','top_boundaries','camera','wake_word','control','voice_commands']:
  if name in sys.modules:del sys.modules[name]
 with open(%r+'/manifest.json') as f:m=json.load(f)
 for name,item in m['files'].items():

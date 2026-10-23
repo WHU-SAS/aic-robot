@@ -79,18 +79,16 @@ def run_pick_stage_direct(config,stage):
         started=time.ticks_ms()
         if name in ('hover','descend'):
             tolerance=policy[name+'_tolerance_counts'];last_report=started
-            checked_ids=[1,2,3,4,5] if name=='descend' else [1,2,3,4,5,6]
             while True:
                 result=read_pick_positions(uart,config['goals'])
-                if all(abs(result['errors_actual_minus_goal'][i-1])<=tolerance for i in checked_ids):
-                    result.update({'tolerance_counts':tolerance,'checked_servo_ids':checked_ids,'source':'arrival_gate'})
+                if all(abs(error)<=tolerance for error in result['errors_actual_minus_goal']):
+                    result.update({'tolerance_counts':tolerance,'source':'arrival_gate'})
                     print('PICK_EVENT '+ujson.dumps({'event':'position_gate_passed','name':name,'details':result}))
                     break
                 now=time.ticks_ms()
                 if time.ticks_diff(now,last_report)>=1000:
                     print('PICK_EVENT '+ujson.dumps({'event':'position_gate_waiting','name':name,
-                          'tolerance_counts':tolerance,'checked_servo_ids':checked_ids,
-                          'errors_actual_minus_goal':result['errors_actual_minus_goal']}))
+                          'tolerance_counts':tolerance,'errors_actual_minus_goal':result['errors_actual_minus_goal']}))
                     last_report=now
                 time.sleep_ms(policy['poll_interval_ms'])
         elif name=='close':

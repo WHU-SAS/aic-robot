@@ -8,11 +8,6 @@ class Geometry:
         self.model=model;self.pick=pick;self.table_z_m=table_z_mm/1000
         self.joints=model['joints'];self.points=model['points']
         self.open_angle=self.angle(6,pick['opening_count'])
-        self.alignment_close_count=None
-        self.cube_envelope=None
-        self.planning_budget=None
-    def check_planning_budget(self):
-        if self.planning_budget is not None:self.planning_budget.check()
     def angle(self,i,count):
         j=self.joints[i-1]
         return (count-j['zero_count'])*j['positive_direction']*2*math.pi/4096
@@ -31,59 +26,24 @@ class Geometry:
             t=matmul(matmul(t,j['origin_transform']),rigid(rotation(j['axis'],a),[0.,0.,0.]))
             result[j['child']]=t
         return result
-    def tip_geometry(self,q):
-        ts=self.transforms(q)
-        pts={link:transform(ts[link],self.points[link]['tip']) for link in ('wan2','zhua')}
-        return pts,ts
     def metrics(self,q):
-        pts,ts=self.tip_geometry(q);lows={}
+        ts=self.transforms(q);pts={};lows={}
         for link in ('wan2','zhua'):
-            t=ts[link]
+            t=ts[link];pts[link]=transform(t,self.points[link]['tip'])
             lows[link]=min(dot(t[2][:3],v)+t[2][3] for v in self.points[link]['hull'])
         return [(a+b)/2 for a,b in zip(pts['wan2'],pts['zhua'])],pts,lows,ts
     def alignment_midpoint(self,q):
-        q=list(q);q[5]=self.open_angle;pts,t=self.tip_geometry(q)
-        mid=[(a+b)/2 for a,b in zip(pts['wan2'],pts['zhua'])]
-        offset=self.compensation_xy(q);shift=self.closing_shift_delta(q)
-        for i in range(2):mid[i]+=offset[i]+shift[i]
-        return mid
-    def closing_shift_local(self):
-        # Half the moving fingertip displacement is the two-tip midpoint
-        # displacement. Express it in joint 5's frame, before its wrist roll.
-        if self.alignment_close_count is None:return [0.,0.,0.]
-        j=self.joints[5];tip=self.points['zhua']['tip']
-        points=[]
-        for a in (self.open_angle,self.angle(6,self.alignment_close_count)):
-            t=matmul(j['origin_transform'],rigid(rotation(j['axis'],a),[0.,0.,0.]))
-            points.append(transform(t,tip))
-        return [(b-a)/2 for a,b in zip(*points)]
-    def closing_shift_delta(self,q):
-        if self.alignment_close_count is None or abs(q[4])<1e-12:return [0.,0.,0.]
-        local=self.closing_shift_local()
-        current=self.transforms(q)['wan2'];reference=list(q);reference[4]=0.
-        zero=self.transforms(reference)['wan2']
-        return [dot([current[i][j]-zero[i][j] for j in range(3)],local) for i in range(3)]
-    def compensation_xy(self,q):
-        # The empirical correction was measured with joint 5 at zero roll.
-        # Preserve that reference direction as the base turns; only the real
-        # fingertip geometry follows the commanded wrist roll.
-        reference=list(q);reference[4]=0.;reference[5]=self.open_angle
-        pts,_=self.tip_geometry(reference)
+        q=list(q);q[5]=self.open_angle;mid,pts,low,t=self.metrics(q)
         direction=[pts['zhua'][i]-pts['wan2'][i] for i in range(2)];length=norm(direction)
-        if length<1e-8:raise ValueError('Reference jaw line has no horizontal projection')
-        return [v/length*self.pick['cube_offset_toward_moving_finger_mm']/1000 for v in direction]
-    def nominal_contact(self,q,orientation=None):
+        if length<1e-8:raise ValueError('Open jaw line has no horizontal projection')
+        for i in range(2):mid[i]+=direction[i]/length*self.pick['cube_offset_toward_moving_finger_mm']/1000
+        return mid
+    def nominal_contact(self,q):
         t=self.transforms(q)['wan2'];axis=[t[0][1],t[1][1]];length=norm(axis)
         if length<1e-8:raise ValueError('Gripper across-axis has no horizontal projection')
         width=.020*(abs(axis[0])+abs(axis[1]))/length
-        if orientation is not None:
-            across=[t[i][1] for i in range(3)]
-            width=.020*sum(abs(dot(across,v)) for v in orientation['axes_Base']+[orientation['table_normal_Base']])
         fixed=self.points['wan2']['distal'];moving=self.points['zhua']['distal']
-        fixed_y=min(v[1] for v in fixed)
-        def gap(a):
-            c=math.cos(a);s=math.sin(a)
-            return fixed_y-max(v[1]*c-v[2]*s-.0132 for v in moving)
+        def gap(a):return min(v[1] for v in fixed)-max(v[1]*math.cos(a)-v[2]*math.sin(a)-.0132 for v in moving)
         lo=0.;hi=math.pi/2;target=width-.0007
         if (gap(lo)-target)*(gap(hi)-target)>0:raise ValueError('No nominal contact opening')
         for unused in range(45):
@@ -92,7 +52,6 @@ class Geometry:
             else:hi=mid
         return (lo+hi)/2,width
     def solve(self,xy,height,tilt,seed,q5):
-        self.check_planning_budget()
         theta=math.radians(180-tilt)
         # The first two pitch links end at Base z=.1075 and each have length .118.
         # Compute orientation-dependent tool offsets using the SAME exported FK.
@@ -123,69 +82,28 @@ class Geometry:
         if not found:raise ValueError('No IK solution within joint limits for requested stage')
         found.sort(key=lambda v:(sum((a-b)**2 for a,b in zip(v[2][:4],seed[:4])),v[0]));return found[0][1],found[0][2]
     def report(self,counts):
-        q=self.angles(counts);mid,pts,low,t=self.metrics(q)
-        return {'alignment_reference':('open_midpoint_with_relative_closing_shift' if self.alignment_close_count is not None else 'open_fingertip_midpoint'),
-                'compensation_reference':'zero_roll_same_base_and_pitch',
-                'compensation_Base_xy_mm':[v*1000 for v in self.compensation_xy(q)],
-                'closing_shift_delta_Base_mm':[v*1000 for v in self.closing_shift_delta(q)],
-                'alignment_close_count':self.alignment_close_count,
+        q=self.angles(counts);mid,pts,low,t=self.metrics(q);angle,width=self.nominal_contact(q)
+        return {'alignment_reference':'open_fingertip_midpoint',
                 'alignment_center_Base_mm':[v*1000 for v in self.alignment_midpoint(q)],
                 'gripper_midpoint_Base_mm':[v*1000 for v in mid],
                 'fixed_tip_center_Base_mm':[v*1000 for v in pts['wan2']],
                 'moving_tip_center_Base_mm':[v*1000 for v in pts['zhua']],
                 'link_clearance_above_table_mm':{k:(v-self.table_z_m)*1000 for k,v in low.items()},
                 'cube_offset_toward_moving_finger_mm':self.pick['cube_offset_toward_moving_finger_mm']}
-    def build_stages(self,xy,q0,tilt,q5,orientation=None,stage_tilts=None):
-        stage_tilts=stage_tilts or {'hover':tilt,'descend':tilt,'close':tilt,'lift':tilt}
-        hover,qh=self.solve(xy,self.pick['hover_tip_height_mm']/1000,stage_tilts['hover'],q0,q5)
-        low,ql=self.solve(xy,self.pick['descend_tip_height_mm']/1000,tilt,qh,q5)
-        angle,width=self.nominal_contact(ql,orientation)
-        qc=list(ql);qc[5]=angle;nominal=self.counts(qc)[5]
-        close=list(low);close[5]=nominal-self.pick['extra_closing_counts']
-        for j,c in zip(self.joints,close):
-            if not j['software_count_limits'][0]<=c<=j['software_count_limits'][1]:raise ValueError('Close target outside joint limits')
-        lift,qu=self.solve(xy,self.pick['lift_tip_height_mm']/1000,stage_tilts['lift'],ql,q5);lift[5]=close[5]
-        return {'hover':hover,'descend':low,'close':close,'lift':lift,'tilt_deg':tilt,'stage_tilts_deg':dict(stage_tilts),
-                'extra_closing_counts':self.pick['extra_closing_counts'],
-                'nominal_cube_width_mm':width*1000,
-                'cube_offset_toward_moving_finger_mm':self.pick['cube_offset_toward_moving_finger_mm'],
-                'target_xy_Base_mm':[v*1000 for v in xy],
-                'target_FK':{k:self.report(v) for k,v in [('hover',hover),('descend',low),('close',close),('lift',lift)]}}
-    def validate_open_fingers(self,plan):
-        if self.cube_envelope is None:return None
-        from finger_collision import validate_plan
-        result=validate_plan(self,plan,self.cube_envelope)
-        plan['open_finger_collision_check']=result
-        return result
-    def plan(self,xy,start,orientation=None):
-        from planning import PlanningBudget
-        self.planning_budget=PlanningBudget(self.pick.get('planning_timeout_ms',10000))
-        self.check_planning_budget()
-        from finger_collision import CubeEnvelope
-        self.cube_envelope=CubeEnvelope(self,xy,orientation)
-        self.alignment_close_count=None
-        if orientation is not None and orientation.get('status')=='estimated':
-            from wrist_alignment import plan_aligned
-            try:
-                result=plan_aligned(self,xy,start,orientation)
-                self.check_planning_budget()
-                return result
-            except ValueError as exc:
-                self.alignment_close_count=None
-                if self.pick.get('unreachable_cube_orientation')!='keep_current_wrist':raise
-                orientation={'status':'unavailable','reason':'Cube-aligned pose unavailable; user-selected original-wrist fallback',
-                    'alignment_failure':str(exc)}
+    def plan(self,xy,start):
         q0=self.angles(start);q5=q0[4];failures=[]
         for tilt in sorted([20,25,30,35,40,45],key=lambda t:abs(t-25)):
             try:
-                result=self.build_stages(xy,q0,tilt,q5)
-                self.validate_open_fingers(result)
-                result['wrist_alignment']={'status':'held_current',
-                    'reason':orientation.get('reason') if orientation else 'Orientation alignment not requested',
-                    'servo5_goal':result['hover'][4]}
-                if orientation and orientation.get('alignment_failure'):
-                    result['wrist_alignment']['alignment_failure']=orientation['alignment_failure']
-                self.check_planning_budget()
-                return result
+                hover,qh=self.solve(xy,self.pick['hover_tip_height_mm']/1000,tilt,q0,q5)
+                low,ql=self.solve(xy,self.pick['descend_tip_height_mm']/1000,tilt,qh,q5)
+                angle,width=self.nominal_contact(ql)
+                qc=list(ql);qc[5]=angle;nominal=self.counts(qc)[5]
+                close=list(low);close[5]=nominal-self.pick['extra_closing_counts']
+                lift,qu=self.solve(xy,self.pick['lift_tip_height_mm']/1000,tilt,ql,q5);lift[5]=close[5]
+                return {'hover':hover,'descend':low,'close':close,'lift':lift,'tilt_deg':tilt,
+                        'extra_closing_counts':self.pick['extra_closing_counts'],
+                        'cube_offset_toward_moving_finger_mm':self.pick['cube_offset_toward_moving_finger_mm'],
+                        'target_xy_Base_mm':[v*1000 for v in xy],
+                        'target_FK':{k:self.report(v) for k,v in [('hover',hover),('descend',low),('close',close),('lift',lift)]}}
             except ValueError as exc:failures.append(str(exc))
-        raise ValueError('No verified complete plan among searched candidates: '+str(failures))
+        raise ValueError('No complete four-stage IK: '+str(failures))

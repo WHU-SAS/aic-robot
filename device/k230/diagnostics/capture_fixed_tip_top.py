@@ -8,10 +8,8 @@ from camera import CameraSession
 from uart1_servo_read import FPIOA, UART, BAUD, read_registers, signed_position
 
 
-def capture_fixed_tip_top(config, remote, sample_type='fixed_fingertip_cube_top_contact'):
-    if sample_type not in ('fixed_fingertip_cube_top_contact', 'fixed_point_pivot_contact'):
-        raise ValueError('Unknown contact protocol')
-    record = {'sample_type':sample_type, 'contacting_jaw':'fixed',
+def capture_fixed_tip_top(config, remote):
+    record = {'sample_type':'fixed_fingertip_cube_top_contact', 'contacting_jaw':'fixed',
               'cube_edge_mm':20, 'samples_before':[], 'samples_after':[],
               'motion_commands_sent':False, 'pid_writes_sent':False,
               'torque_writes_sent':False, 'status':'incomplete'}
@@ -61,7 +59,7 @@ def capture_fixed_tip_top(config, remote, sample_type='fixed_fingertip_cube_top_
             time.sleep_ms(50)
         camera.stop()
         try:
-            os.mkdir(remote.rsplit('/',1)[0])
+            os.mkdir('/sdcard/formal_fixed_tip_top')
         except OSError:
             pass
         image.save(remote,quality=95)
