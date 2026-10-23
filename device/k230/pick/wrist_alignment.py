@@ -148,6 +148,10 @@ def _search_aligned(g,xy,start,orientation):
                 height_excess[key]=max(0.,max(preview.values())-20.,-min(preview.values()))
                 if height_excess[key]>0:
                     raise ValueError('Rotated fingers do not both overlap the 20mm cube height')
+                outcome='collision'
+                if g.cube_envelope is not None:
+                    hit=g.cube_envelope.pose(g,ql)
+                    if hit:raise ValueError('Open finger intersects cube at descend: '+str(hit))
                 outcome='ik'
                 high=choose_high_tilt(g.pick['hover_tip_height_mm'],tilt,roll,index,q0)
                 lift=choose_high_tilt(g.pick['lift_tip_height_mm'],tilt,roll,index,ql)
@@ -164,6 +168,8 @@ def _search_aligned(g,xy,start,orientation):
                 height_excess[key]=max(0.,max(clearances.values())-20.,-min(clearances.values()))
                 if height_excess[key]>0:
                     raise ValueError('Rotated fingers do not both overlap the 20mm cube height')
+                outcome='collision'
+                g.validate_open_fingers(plan)
                 q=g.angles(plan['descend']);_,tips,low,_=g.metrics(q)
                 plan['wrist_alignment']={'status':'aligned','cube_yaw_table_deg':orientation['yaw_table_deg'],
                     'side_count':orientation['side_count'],'cube_axis_index':index,
@@ -191,9 +197,9 @@ def _search_aligned(g,xy,start,orientation):
     for branch,rows in branches.items():
         rows.sort()
         for (lo,a),(hi,b) in zip(rows,rows[1:]):
-            if {a,b}=={'ik','height'}:
-                key=(hi if b=='height' else lo,branch[0],branch[1])
-                intervals.append((height_excess[key],branch,lo,a,hi,b))
+            if {a,b} in ({'ik','height'},{'ik','collision'}):
+                key=(hi if b in ('height','collision') else lo,branch[0],branch[1])
+                intervals.append((height_excess.get(key,0.),branch,lo,a,hi,b))
     # Try the closest height fit first. Bisection brackets the transition;
     # only the matching roll branch needs refinement, not every cube axis.
     for excess,branch,lo,a,hi,b in sorted(intervals):

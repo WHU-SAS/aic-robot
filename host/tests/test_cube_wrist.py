@@ -27,6 +27,13 @@ class CubeWristTests(unittest.TestCase):
     def setUpClass(cls):
         cls.cfg,_,_=build_bundle();cls.plane=cls.cfg['vision']['localization']['table_plane_Base_mm']
         cls.T=cls.cfg['extrinsics']['T_Base_from_Camera_mm'];cls.start=cls.cfg['ready_control']['goals']
+    def setUp(self):
+        # These tests isolate direction, width and IK math. Full-plan collision
+        # acceptance/rejection is tested in test_finger_collision.
+        guard=patch.object(Geometry,'validate_open_fingers',return_value=None)
+        guard.start();self.addCleanup(guard.stop)
+        preview=patch('finger_collision.CubeEnvelope.pose',return_value=None)
+        preview.start();self.addCleanup(preview.stop)
     def geometry(self,xy):
         n=self.plane['normal'];z=(self.plane['offset_mm']-n[0]*xy[0]*1000-n[1]*xy[1]*1000)/n[2]
         return Geometry(self.cfg['model'],self.cfg['pick'],z)

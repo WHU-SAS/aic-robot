@@ -41,7 +41,10 @@ class BoardMathTests(unittest.TestCase):
         pick,cfg=parameters();vision={'cube_center_Base_mm':[245.,-28.,-65.]};start=[2048]*6
         pc,pp=make_plan(vision,start,pick,cfg)
         board=Geometry(self.config['model'],pick,pp['table_z_Base_mm'])
-        bp=board.plan([.245,-.028],start)
+        # Compare FK/IK arithmetic only; production collision rejection is
+        # separately exercised against real geometry in test_finger_collision.
+        with patch.object(board,'validate_open_fingers',return_value=None):
+            bp=board.plan([.245,-.028],start)
         for stage in ('hover','descend','close','lift'):
             self.assertEqual(bp[stage],pp[stage])
             a=board.report(bp[stage])['alignment_center_Base_mm'];b=pc.report(bp[stage])['alignment_center_Base_mm']

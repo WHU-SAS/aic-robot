@@ -9,6 +9,7 @@ class Geometry:
         self.joints=model['joints'];self.points=model['points']
         self.open_angle=self.angle(6,pick['opening_count'])
         self.alignment_close_count=None
+        self.cube_envelope=None
     def angle(self,i,count):
         j=self.joints[i-1]
         return (count-j['zero_count'])*j['positive_direction']*2*math.pi/4096
@@ -146,7 +147,15 @@ class Geometry:
                 'cube_offset_toward_moving_finger_mm':self.pick['cube_offset_toward_moving_finger_mm'],
                 'target_xy_Base_mm':[v*1000 for v in xy],
                 'target_FK':{k:self.report(v) for k,v in [('hover',hover),('descend',low),('close',close),('lift',lift)]}}
+    def validate_open_fingers(self,plan):
+        if self.cube_envelope is None:return None
+        from finger_collision import validate_plan
+        result=validate_plan(self,plan,self.cube_envelope)
+        plan['open_finger_collision_check']=result
+        return result
     def plan(self,xy,start,orientation=None):
+        from finger_collision import CubeEnvelope
+        self.cube_envelope=CubeEnvelope(self,xy,orientation)
         self.alignment_close_count=None
         if orientation is not None and orientation.get('status')=='estimated':
             from wrist_alignment import plan_aligned
@@ -160,6 +169,7 @@ class Geometry:
         for tilt in sorted([20,25,30,35,40,45],key=lambda t:abs(t-25)):
             try:
                 result=self.build_stages(xy,q0,tilt,q5)
+                self.validate_open_fingers(result)
                 result['wrist_alignment']={'status':'held_current',
                     'reason':orientation.get('reason') if orientation else 'Orientation alignment not requested',
                     'servo5_goal':result['hover'][4]}
