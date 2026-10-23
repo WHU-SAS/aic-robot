@@ -96,7 +96,13 @@ class StatusDisplay:
         if kind=='ready_feedback':name='回准备位'
         if kind=='stage_started':self.state('执行阶段：'+name)
         elif kind=='stage_complete':self.state('阶段完成：'+name)
-        elif kind=='gripper_settled':self.state('夹爪已满足连续0.5秒静止条件，准备抬升')
+        elif kind=='gripper_settled':
+            details=event.get('details',{})
+            rule=('连续%d次读数稳定'%details['sample_count']) if 'sample_count' in details else '连续0.5秒静止'
+            self.state('夹爪已满足'+rule+'条件，准备抬升')
+        elif kind=='position_gate_waiting':
+            self.state('等待到位：'+name+'，各轴偏差 '+str(event.get('errors_actual_minus_goal',[])))
+        elif kind=='position_gate_passed':self.state('位置偏差已满足要求：'+name)
         elif kind in ('stage_feedback','ready_feedback'):
             now=self.clock()
             if self.feedback_period<=0 or now-self.last_feedback<self.feedback_period:return

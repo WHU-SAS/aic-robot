@@ -9,11 +9,15 @@ def frame(servo_id, instruction, params):
     body=bytes((servo_id,len(params)+2,instruction))+bytes(params)
     return b'\xff\xff'+body+bytes(((~sum(body))&255,))
 
-def sync_frame(goals, profiles):
+def sync_frame(goals, profiles, servo_ids=None):
     if len(goals)!=6 or len(profiles)!=6:
         raise ValueError('Six axes required')
+    ids=list(range(1,7)) if servo_ids is None else list(servo_ids)
+    if not ids or len(set(ids))!=len(ids) or any(type(i) is not int or not 1<=i<=6 for i in ids):
+        raise ValueError('Invalid servo subset')
     params=[41,7]
-    for index in range(6):
+    for servo_id in ids:
+        index=servo_id-1
         goal=goals[index];profile=profiles[index]
         speed=profile['speed_raw'];acc=profile['acceleration_raw']
         if type(goal) is not int or not 0<=goal<=4095 or not 1<=speed<=1000 or not 1<=acc<=100:

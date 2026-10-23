@@ -23,5 +23,13 @@
   "cube_offset_toward_moving_finger_mm": -45,
   "cube_offset_authorization": "User 2026-10-22: restore cumulative fixed-jaw offset to 45mm; explicitly approved writing and activating K230",
   "accepted_date": "2026-10-22",
-  "acceptance": "User restored previously accepted cumulative 45mm fixed-jaw offset; retain 1-second lift dwell and fast voice resume"
+  "acceptance": "User restored previously accepted cumulative 45mm fixed-jaw offset; retain 1-second lift dwell and fast voice resume",
+  "standalone_stage_policy": {
+    "hover_tolerance_counts": 30,
+    "descend_tolerance_counts": 10,
+    "descend_axis4_lead_ms": 200,
+    "gripper_stable_samples": 5,
+    "gripper_stable_tolerance_counts": 1,
+    "poll_interval_ms": 50
+  }
 }

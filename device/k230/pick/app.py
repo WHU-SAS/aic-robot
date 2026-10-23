@@ -89,22 +89,6 @@ def arm_snapshot(config):
     finally:uart.deinit()
 
 
-def record_descend_position(control,goals):
-    # User-approved diagnostic only: one snapshot, no arrival gate or retry.
-    started=time.ticks_ms()
-    try:
-        rows=arm_snapshot(control)
-        positions=[row['position'] for row in rows]
-        details={'goals':list(goals),'positions':positions,
-                 'errors_actual_minus_goal':[a-b for a,b in zip(positions,goals)],
-                 'read_ms':time.ticks_diff(time.ticks_ms(),started)}
-    except Exception as exc:
-        log('descend_position_sample_failed',{'error':str(exc),
-            'read_ms':time.ticks_diff(time.ticks_ms(),started)})
-        return
-    log('descend_position_sample',details)
-
-
 def run_once(config,execute=False):
     vision=config['vision'];intr=config['intrinsics'];K=[list(row) for row in intr['camera_matrix']]
     for j in range(3):K[0][j]*=1280/intr['image_width'];K[1][j]*=960/intr['image_height']
@@ -142,9 +126,10 @@ def run_once(config,execute=False):
         action=dict(control);action['goals']=plan[name]
         stage={'name':name,'duration_s':config['pick']['stage_durations_s'].get(name,0),
           'stationary_s':config['pick']['stage_durations_s']['close_minimum_stationary_s'],
-          'tolerance_counts':config['pick']['gripper_stationary_tolerance_counts']}
-        run_pick_stage_direct(action,stage)
-        if name=='descend':record_descend_position(control,plan[name])
+          'tolerance_counts':config['pick']['gripper_stationary_tolerance_counts'],
+          'policy':config['pick']['standalone_stage_policy']}
+        arrival=run_pick_stage_direct(action,stage)
+        if name=='descend':log('descend_position_sample',arrival)
     log('complete_torque_on',{'actual_grasp_success':'requires observation','torque_state':'unchanged_not_checked'})
     return plan
 

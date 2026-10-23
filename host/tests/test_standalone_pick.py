@@ -317,21 +317,23 @@ class DirectReadyTransportTests(unittest.TestCase):
 
 
 class DirectPickTests(unittest.TestCase):
-    def run_stage(self,name,positions=(),short_write=False):
-        cfg,files,_=deploy.build_bundle();writes=[];reads=[];closed=[];clock=[0];positions=iter(positions)
+    def run_stage(self,name,positions=(),short_at=None,fail_read_at=None):
+        cfg,files,_=deploy.build_bundle();writes=[];reads=[];closed=[];clock=[0];values=iter(positions)
         class Pins:
             UART1_TXD=1;UART1_RXD=2
             def set_function(self,*args):pass
         class Port:
             UART1=1;EIGHTBITS=8;PARITY_NONE=None;STOPBITS_ONE=1
             def __init__(self,*args,**kwargs):pass
-            def write(self,p):writes.append(p);return 0 if short_write else len(p)
+            def write(self,p):
+                writes.append((clock[0],p));return 0 if len(writes)==short_at else len(p)
             def deinit(self):closed.append(True)
         def read(uart,i,address,size):
             self.assertTrue(writes,'No pre-dispatch reads allowed')
-            self.assertEqual((i,address,size),(6,56,2))
-            reads.append(clock[0]);v=next(positions);return bytes((v&255,v>>8))
-        def forbidden(*args,**kwargs):raise AssertionError('Legacy checks/hold must not run')
+            self.assertEqual((address,size),(56,2));reads.append((clock[0],i));clock[0]+=30
+            if len(reads)==fail_read_at:raise RuntimeError('read timeout')
+            v=next(values);return bytes((v&255,v>>8))
+        def forbidden(*args,**kwargs):raise AssertionError('Legacy preflight/hold must not run')
         def sleep(ms):clock[0]+=ms
         ns={}
         with patch.dict(sys.modules,{'machine':SimpleNamespace(UART=Port,FPIOA=Pins),
@@ -339,39 +341,78 @@ class DirectPickTests(unittest.TestCase):
             exec(files['control.py'].decode(),ns)
         ns.update(read_checked=read,preflight=forbidden,initialize_hold=forbidden,send_sync=forbidden)
         control=dict(cfg['control']);control['goals']=[2048]*6
-        stage={'name':name,'duration_s':.2,'stationary_s':.5,'tolerance_counts':1}
-        error=None
-        with contextlib.redirect_stdout(io.StringIO()):
-            try:ns['run_pick_stage_direct'](control,stage)
+        stage={'name':name,'duration_s':1,'policy':cfg['pick']['standalone_stage_policy']}
+        error=None;result=None
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            try:result=ns['run_pick_stage_direct'](control,stage)
             except RuntimeError as exc:error=exc
-        return writes,reads,closed,clock[0],error,ns['sync_frame'](control['goals'],control['profiles'])
+        return SimpleNamespace(writes=writes,reads=reads,closed=closed,elapsed=clock[0],error=error,
+             result=result,expected=ns['sync_frame'](control['goals'],control['profiles']),output=output.getvalue())
 
-    def test_nonclose_stages_only_send_one_goal_packet_and_keep_dwell(self):
-        for name in ('hover','descend','lift'):
-            writes,reads,closed,elapsed,error,expected=self.run_stage(name)
-            self.assertEqual(writes,[expected]);self.assertEqual(reads,[])
-            self.assertEqual(closed,[True]);self.assertIsNone(error);self.assertGreaterEqual(elapsed,202)
+    def packet_ids(self,packet):
+        self.assertEqual(packet[:3],b'\xff\xff\xfe')
+        self.assertEqual(packet[4:7],bytes((0x83,41,7)))
+        self.assertEqual(packet[3]+4,len(packet));self.assertEqual(sum(packet[2:])&255,255)
+        return list(packet[7:-1:8])
 
-    def test_close_waits_for_half_second_stillness_after_last_large_change(self):
-        # Initial movement must not count as the stationary half second.
-        values=[2200,2220,2240]+[2241]*11
-        writes,reads,closed,elapsed,error,expected=self.run_stage('close',values)
-        self.assertIsNone(error);self.assertEqual(writes,[expected]);self.assertEqual(closed,[True])
-        self.assertGreaterEqual(elapsed,602);self.assertTrue(reads)
+    def test_hover_requires_all_six_within_inclusive_30_without_six_second_delay(self):
+        r=self.run_stage('hover',[2048]*5+[2079]+[2018,2078,2048,2048,2048,2078])
+        self.assertIsNone(r.error);self.assertEqual(len(r.reads),12)
+        self.assertEqual([i for t,i in r.reads],list(range(1,7))*2)
+        self.assertEqual(r.result['errors_actual_minus_goal'],[-30,30,0,0,0,30])
+        self.assertLess(r.elapsed,1000);self.assertEqual(r.writes,[(0,r.expected)])
+        self.assertEqual(r.closed,[True])
 
-    def test_short_write_does_not_read_or_send_another_target(self):
-        writes,reads,closed,elapsed,error,_=self.run_stage('hover',short_write=True)
-        self.assertIsInstance(error,RuntimeError);self.assertEqual(len(writes),1)
-        self.assertEqual(reads,[]);self.assertEqual(closed,[True])
+    def test_descend_sends_only_axis4_then_other_five_after_200ms(self):
+        r=self.run_stage('descend',[2059]+[2048]*5+[2038,2058,2048,2048,2048,2058])
+        self.assertIsNone(r.error);self.assertEqual(len(r.writes),2)
+        self.assertEqual(self.packet_ids(r.writes[0][1]),[4]);self.assertEqual(self.packet_ids(r.writes[1][1]),[1,2,3,5,6])
+        self.assertEqual(r.writes[1][0]-r.writes[0][0],200)
+        self.assertEqual(len(r.reads),12);self.assertGreaterEqual(r.reads[0][0],202)
+        # Every partial goal/profile is identical to its entry in the full packet.
+        for _,packet in r.writes:
+            for start in range(7,len(packet)-1,8):
+                entry=packet[start:start+8];offset=7+(entry[0]-1)*8
+                self.assertEqual(entry,r.expected[offset:offset+8])
+        self.assertEqual(r.result['errors_actual_minus_goal'],[-10,10,0,0,0,10])
 
-    def test_plan_is_followed_by_hover_without_hold_action(self):
-        self.check_descend_diagnostic(False)
+    def test_each_gate_poll_uses_fresh_values_not_per_axis_latched_success(self):
+        # The first two polls each have a DIFFERENT out-of-band axis.
+        r=self.run_stage('hover',[2079]+[2048]*5+[2048,2079]+[2048]*4+[2048]*6)
+        self.assertEqual(len(r.reads),18);self.assertEqual(r.result['positions'],[2048]*6)
 
-    def test_descend_read_failure_does_not_skip_close_or_lift(self):
-        self.check_descend_diagnostic(True)
+    def test_close_accepts_five_readings_in_one_plus_minus_one_band(self):
+        r=self.run_stage('close',[2200,2201,2199,2200,2201])
+        self.assertIsNone(r.error);self.assertEqual(len(r.reads),5)
+        self.assertTrue(all(i==6 for t,i in r.reads));self.assertLess(r.elapsed,500)
+        self.assertIn('"sample_count": 5',r.output);self.assertEqual(r.writes,[(0,r.expected)])
 
-    def check_descend_diagnostic(self,fail_read):
-        app=VoiceDispatchTests().app();cfg,_,_=deploy.build_bundle();events=[];reads=[]
+    def test_close_does_not_accept_creeping_single_count_motion(self):
+        r=self.run_stage('close',list(range(2200,2210))+[2209]*5)
+        self.assertIsNone(r.error);self.assertGreater(len(r.reads),10)
+        self.assertIn('"sample_count": 5',r.output)
+
+    def test_lift_retains_one_second_and_no_encoder_reads(self):
+        r=self.run_stage('lift');self.assertIsNone(r.error);self.assertEqual(r.reads,[])
+        self.assertEqual(r.writes,[(0,r.expected)]);self.assertEqual(r.elapsed,1002)
+
+    def test_short_writes_and_missing_feedback_do_not_advance(self):
+        for name,short_at,count in [('hover',1,1),('descend',1,1),('descend',2,2)]:
+            r=self.run_stage(name,short_at=short_at)
+            self.assertIsInstance(r.error,RuntimeError);self.assertEqual(len(r.writes),count)
+            self.assertEqual(r.reads,[]);self.assertEqual(r.closed,[True])
+        for name in ('hover','descend','close'):
+            r=self.run_stage(name,fail_read_at=1)
+            self.assertIsInstance(r.error,RuntimeError);self.assertEqual(r.closed,[True]);self.assertIsNone(r.result)
+
+    def test_plan_to_stages_reuses_arrival_sample_without_extra_servo_read(self):
+        self.check_flow(False)
+
+    def test_descend_gate_read_failure_prevents_close_and_lift(self):
+        self.check_flow(True)
+
+    def check_flow(self,fail_read):
+        app=VoiceDispatchTests().app();cfg,_,_=deploy.build_bundle();events=[];stages=[]
         class Camera:
             def __init__(self,*args):pass
             def open(self):pass
@@ -381,30 +422,24 @@ class DirectPickTests(unittest.TestCase):
         class Model:
             def __init__(self,*args):pass
             def plan(self,*args):events.append('plan');return plan
-        def snapshot(control):
-            reads.append(control)
-            if len(reads)==2:
-                events.append('descend_read')
+        sample={'goals':plan['descend'],'positions':[2048+i for i in range(6)],
+                'errors_actual_minus_goal':list(range(6)),'read_ms':180,'source':'arrival_gate'}
+        def stage(c,s):
+            events.append(s['name']);stages.append(s)
+            if s['name']=='descend':
                 if fail_read:raise RuntimeError('read timeout')
-                return [{'position':2048+i} for i in range(6)]
-            return [{'position':2048} for i in range(6)]
+                return sample
         with patch.dict(sys.modules,{'cv2':SimpleNamespace(imread=lambda p:object()),'control':SimpleNamespace()}), \
              patch.object(app,'CameraSession',Camera),patch.object(app,'Geometry',Model), \
              patch.object(app,'localize',return_value={'cube_center_Base_mm':[240,0,-60]}), \
-             patch.object(app,'arm_snapshot',side_effect=snapshot), \
-             patch.object(app,'log') as logs,patch.object(app,'run_pick_stage_direct',side_effect=lambda c,s:events.append(s['name'])):
-            app.run_once(cfg,execute=True)
-        self.assertEqual(events,['plan','hover','descend','descend_read','close','lift'])
-        self.assertEqual(len(reads),2)
-        found=next(c.args[1] for c in logs.call_args_list if c.args[0]=='localized')
-        self.assertEqual(set(found['perception_timing_ms']),{'camera_open_warmup','snapshot','jpeg_save','camera_close','jpeg_read','visual_localization','capture_and_localize'})
-        if fail_read:
-            logs.assert_any_call('descend_position_sample_failed',{'error':'read timeout','read_ms':0})
-            self.assertFalse(any(c.args[0]=='descend_position_sample' for c in logs.call_args_list))
-        else:
-            sample=next(c.args[1] for c in logs.call_args_list if c.args[0]=='descend_position_sample')
-            self.assertEqual(sample['goals'],plan['descend'])
-            self.assertEqual(sample['errors_actual_minus_goal'],list(range(6)))
+             patch.object(app,'arm_snapshot',return_value=[{'position':2048} for i in range(6)]) as snapshot, \
+             patch.object(app,'log') as logs,patch.object(app,'run_pick_stage_direct',side_effect=stage):
+            if fail_read:
+                with self.assertRaisesRegex(RuntimeError,'read timeout'):app.run_once(cfg,execute=True)
+            else:app.run_once(cfg,execute=True)
+        snapshot.assert_called_once();self.assertTrue(all(s['policy']==cfg['pick']['standalone_stage_policy'] for s in stages))
+        self.assertEqual(events,['plan','hover','descend'] if fail_read else ['plan','hover','descend','close','lift'])
+        if not fail_read:logs.assert_any_call('descend_position_sample',sample)
 
 
 class DeploymentTests(unittest.TestCase):
