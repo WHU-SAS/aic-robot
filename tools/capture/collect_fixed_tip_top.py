@@ -39,11 +39,12 @@ def source_without_local_imports(path):
     return ''.join(line for n,line in enumerate(lines) if n not in removed)
 
 
-def build_script(config,remote):
+def build_script(config,remote,protocol='fixed-tip-top'):
+    sample_type=protocol_type(protocol)
     paths=('device/k230/diagnostics/uart1_servo_read.py',
            'device/k230/vision/camera.py',
            'device/k230/diagnostics/capture_fixed_tip_top.py')
-    return '\n'.join(source_without_local_imports(ROOT/p) for p in paths)+'\ncapture_fixed_tip_top(%r,%r)\n' % (config,remote)
+    return '\n'.join(source_without_local_imports(ROOT/p) for p in paths)+'\ncapture_fixed_tip_top(%r,%r,%r)\n' % (config,remote,sample_type)
 
 
 def summarize(record):
@@ -85,14 +86,25 @@ print('EXPORT_DONE')
     return data
 
 
-def freeze_session(session):
+def protocol_type(protocol):
+    types={'fixed-tip-top':'fixed_fingertip_cube_top_contact',
+           'tool-pivot':'fixed_point_pivot_contact'}
+    if protocol not in types:raise ValueError('Unknown capture protocol')
+    return types[protocol]
+
+
+def freeze_session(session,protocol='fixed-tip-top'):
+    sample_type=protocol_type(protocol)
+    manifest=session/'session.json'
+    if manifest.exists() and json.loads(manifest.read_text()).get('sample_type')!=sample_type:
+        raise RuntimeError('Cannot mix contact protocols in one session')
     session.mkdir(parents=True,exist_ok=True)
     snapshot=session/'snapshot'
     snapshot.mkdir(exist_ok=True)
     paths=['configs/vision/blue_cube.json','configs/vision/runtime/camera_intrinsics.json',
            'configs/arm/joint_mapping.json','configs/arm/user_selected_pid_demo_baseline.json',
            'configs/arm/motion_defaults.json','models/genkiarm/genkiarm.urdf',
-           'host/arm/gripper_geometry.py','host/arm/urdf_fk.py',
+           'host/arm/gripper_geometry.py','host/arm/urdf_fk.py','host/arm/joint_mapping.py',
            'device/k230/diagnostics/uart1_servo_read.py',
            'device/k230/vision/camera.py','device/k230/diagnostics/capture_fixed_tip_top.py',
            'tools/capture/collect_fixed_tip_top.py']
@@ -108,7 +120,13 @@ def freeze_session(session):
             target.write_bytes(content)
         files.append({'path':name,'sha256':hashlib.sha256(content).hexdigest()})
     manifest=session/'session.json'
-    if not manifest.exists():
+    if not manifest.exists() and protocol=='tool-pivot':
+        save(manifest,{'schema':'aic.tool_pivot_session.v1','created':stamp(),
+            'sample_type':sample_type,'contacting_jaw':'fixed',
+            'contact_requirement':'Same marked material point on fixed jaw touches same stationary cube top corner in every pose',
+            'training_groups':[1,2,3],'validation_groups':[4],
+            'planned_groups':4,'files':files,'motion_commands_sent':False})
+    elif not manifest.exists():
         save(manifest,{'schema':'aic.fixed_tip_top_session.v1','created':stamp(),
             'sample_type':'fixed_fingertip_cube_top_contact','contacting_jaw':'fixed',
             'cube_edge_mm':20, 'nominal_gripper_opening_deg':30,
@@ -121,23 +139,26 @@ def freeze_session(session):
     return load_vision_config(snapshot/'configs/vision/blue_cube.json')
 
 
-def collect(session,port=PORT):
+def collect(session,port=PORT,protocol='fixed-tip-top'):
+    sample_type=protocol_type(protocol)
     session.mkdir(parents=True,exist_ok=True)
     with (session/'collection.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        config=freeze_session(session)
+        config=freeze_session(session,protocol)
         collection_path=session/'collection.json'
         collection=json.loads(collection_path.read_text()) if collection_path.exists() else {'groups':[]}
-        group=len(collection['groups'])+1
+        completed=[e for e in collection['groups'] if e['status']=='raw_pair_saved_locally']
+        group=len(completed)+1 if protocol=='tool-pivot' else len(collection['groups'])+1
+        if protocol=='tool-pivot' and group>4:raise RuntimeError('Four pivot groups already collected; use a new session for a new audit')
         name='group_%03d_%s' % (group,datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y%m%d_%H%M%S_%f'))
         folder=session/name
         folder.mkdir(exist_ok=False)
-        remote='/sdcard/formal_fixed_tip_top/'+name+'.jpg'
+        remote=('/sdcard/tool_reference_pivot/' if protocol=='tool-pivot' else '/sdcard/formal_fixed_tip_top/')+name+'.jpg'
         entry={'group':group,'folder':name,'status':'pending'}
         collection['groups'].append(entry)
         save(collection_path,collection)
-        record={'schema':'aic.fixed_tip_top_pair.v1','group':group,'created':stamp(),
-                'status':'pending','raw_only':True,'sample_type':'fixed_fingertip_cube_top_contact',
+        record={'schema':'aic.tool_pivot_pair.v1' if protocol=='tool-pivot' else 'aic.fixed_tip_top_pair.v1','group':group,'created':stamp(),
+                'status':'pending','raw_only':True,'sample_type':sample_type,
                 'contacting_jaw':'fixed','cube_edge_mm':20,'port_requested':port,
                 'motion_commands_sent':False,'pid_writes_sent':False,'torque_writes_sent':False,
                 'camera_capture':{'remote':remote,'downloaded':False}}
@@ -152,7 +173,7 @@ def collect(session,port=PORT):
             record['capture_started']=stamp()
             save(folder/'record.json',record)
             board_record=None
-            for line in link.execute(build_script(config,remote),timeout=45):
+            for line in link.execute(build_script(config,remote,protocol),timeout=45):
                 text=line.decode(errors='replace')
                 lines.append(text)
                 if text.startswith('PAIR_RECORD '):
@@ -163,11 +184,14 @@ def collect(session,port=PORT):
             if board_record is None:
                 raise RuntimeError('K230 did not return paired feedback; see board_log.txt')
             save(folder/'board_record.json',board_record)
+            if board_record.get('sample_type')!=sample_type:raise RuntimeError('Board returned wrong contact protocol')
             record.update(board_record)
             record['raw_only']=True
             if board_record['status']!='raw_pair_saved_on_camera_sd':
                 raise RuntimeError(board_record.get('error','K230 pair incomplete'))
             record['encoder_summary']=summarize(record)
+            if protocol=='tool-pivot' and any(any(v!=0 for v in axis['torque_states']) for axis in record['encoder_summary'].values()):
+                raise RuntimeError('Pivot capture requires all six axes torque off; no torque writes sent')
             record['camera_capture']['downloaded']=False
             save(folder/'record.json',record)
             image=download_image(link,record['camera_capture'])
@@ -193,11 +217,12 @@ def collect(session,port=PORT):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--session',type=Path,
-        default=ROOT/'data/k230/extrinsics/formal_fixed_tip_top_20261022')
+    parser.add_argument('--session',type=Path)
+    parser.add_argument('--protocol',choices=('fixed-tip-top','tool-pivot'),default='fixed-tip-top')
     parser.add_argument('--port',default=PORT)
     args=parser.parse_args()
-    collect(args.session.resolve(),args.port)
+    default=ROOT/('data/k230/tool_reference_pivot_20261023' if args.protocol=='tool-pivot' else 'data/k230/extrinsics/formal_fixed_tip_top_20261022')
+    collect((args.session or default).resolve(),args.port,args.protocol)
 
 
 if __name__=='__main__':
