@@ -112,4 +112,100 @@ class SidePolicyCases(unittest.TestCase):
         np.testing.assert_allclose(result['cube_center_Base_mm'],truth,atol=3)
 
 
+class TablePoseCases(unittest.TestCase):
+    def table(self,reverse=False):
+        from device.k230.pick.table_pose import context
+        T=[[1.,0.,0.,10.],[0.,0.,1.,20.],[0.,-1.,0.,30.],[0.,0.,0.,1.]]
+        return context(T,{'normal':[0.,0.,-2. if reverse else 2.],
+                          'offset_mm':-20. if reverse else 20.})
+
+    def pose(self,normal=(0.,0.,1.),height_y=10.,rms=1.):
+        return {'inward_face_normal_Camera':list(normal),
+                'cube_center_Camera_mm':[0.,height_y,250.],
+                'face_reprojection_rms_px':rms}
+
+    def test_lower_pixel_error_does_not_select_tilted_cube_side(self):
+        from device.k230.pick.table_pose import constrain_face
+        wrong=self.pose((0.,.6,.8),rms=.3);right=self.pose(rms=1.8)
+        source={'poses':[wrong,right]};r=constrain_face(source,self.table())
+        self.assertEqual(r['poses'][0]['original_pose_rank'],1)
+        self.assertEqual(r['poses'][0]['cube_center_Camera_mm'],right['cube_center_Camera_mm'])
+        self.assertFalse(r['table_pose_candidates'][0]['table_geometry']['accepted'])
+        self.assertEqual(source['poses'],[wrong,right])
+
+    def test_cube_height_rejects_inconsistent_pose_without_clamping(self):
+        from device.k230.pick.table_pose import constrain_face
+        bad=self.pose(height_y=-5.)
+        self.assertIsNone(constrain_face({'poses':[bad]},self.table()))
+        self.assertEqual(bad['cube_center_Camera_mm'],[0.,-5.,250.])
+        self.assertIsNone(constrain_face({'poses':[self.pose(rms=2.1)]},self.table()))
+
+    def test_plane_scale_sign_and_camera_rotation_are_respected(self):
+        from device.k230.pick.table_pose import metrics
+        a=metrics(self.pose(),self.table(),'side');b=metrics(self.pose(),self.table(True),'side')
+        self.assertEqual(a,b);self.assertEqual(a['center_height_mm'],10.)
+        self.assertAlmostEqual(a['normal_deviation_deg'],0.)
+
+    def test_visible_top_inward_normal_must_point_toward_table(self):
+        from device.k230.pick.table_pose import constrain_face
+        down=self.pose((0.,1.,0.));up=self.pose((0.,-1.,0.))
+        result=constrain_face({'poses':[up,down]},self.table(),'top')
+        self.assertEqual(result['poses'][0]['original_pose_rank'],1)
+
+    def test_adjacent_side_average_uses_table_validated_poses(self):
+        from device.k230.pick.table_pose import context
+        a,b=SidePolicyCases().faces(ratio=1.25)
+        for face in (a,b):
+            wrong=dict(face['poses'][0]);wrong['inward_face_normal_Camera']=[0.,.7,.7141428]
+            wrong['face_reprojection_rms_px']=.1;face['poses'].insert(0,wrong)
+        table=context(np.eye(4).tolist(),{'normal':[0.,-1.,0.],'offset_mm':-10.})
+        r=select_sides([a,b],[[1000.,0.,640.],[0.,1000.,480.],[0.,0.,1.]],[0.]*5,table)
+        self.assertEqual(r['side_selection'],'mean_of_similar_area_sides')
+        self.assertEqual(r['poses'][0]['cube_center_Camera_mm'],[1.,0.,250.])
+        self.assertTrue(all(f['selected_pose']['original_pose_rank']==1 for f in r['side_faces']))
+
+    def test_legacy_exit_cannot_bypass_table_geometry(self):
+        im=np.zeros((960,1280,3),np.uint8)
+        K=[[1550.,0.,640.],[0.,1550.,480.],[0.,0.,1.]]
+        face={'face_quad_px':[[500.,500.],[600.,500.],[600.,650.],[500.,650.]],
+              'poses':[self.pose((0.,.7,.7141428),height_y=0.,rms=.1)]}
+        table={'normal':[0.,-1.,0.],'offset_mm':-10.}
+        with patch('vision.fast_sides',return_value=None),patch('vision.basic_face',return_value=face), \
+             patch('vision.prefer_sides',return_value=None),patch('vision.shallow_face',return_value=False), \
+             patch('vision.internal_seam',return_value=None):
+            with self.assertRaisesRegex(ValueError,'consistent with upright cube'):
+                localize(im,K,[0.]*5,np.eye(4).tolist(),table)
+
+    def test_near_frontal_corner_noise_does_not_flip_to_mirrored_tilt(self):
+        from device.k230.pick.pose import pose_candidates,project
+        from device.k230.pick.table_pose import context,constrain_face
+        angle=-np.deg2rad(16.);R=cv2.Rodrigues(np.array([angle,0.,0.]))[0]
+        t=np.array([0.,25.,260.]);up=-R[:,1]
+        T=np.eye(4);T[:3,:3]=np.array([R[:,0],R[:,2],up])
+        table=context(T.tolist(),{'normal':[0.,0.,1.],'offset_mm':float(up@t-10.)})
+        K=[[1550.,0.,640.],[0.,1550.,480.],[0.,0.,1.]];D=[0.]*5
+        q=np.array([project((R@p+t).tolist(),K,D) for p in
+                    ([-10.,-10.,0.],[10.,-10.,0.],[10.,10.,0.],[-10.,10.,0.])])
+        noise=np.array([[.3,-.7],[-.6,.4],[.8,-.3],[-.4,.6]])
+        truth=t+10*R[:,2]
+        for scale in (0.,.5,1.,-1.):
+            poses=pose_candidates((q+scale*noise).tolist(),K,D,refine=True)
+            result=constrain_face({'poses':poses},table)
+            self.assertIsNotNone(result)
+            best=result['poses'][0]
+            self.assertLess(best['table_geometry']['normal_deviation_deg'],10.)
+            np.testing.assert_allclose(best['cube_center_Camera_mm'],truth,atol=3.)
+
+    def test_full_image_table_constraints_preserve_rotated_two_side_policy(self):
+        for yaw,exposure in ((.7,1.),(.85,.45),(.95,1.)):
+            im,K,D,truth=SidePolicyCases().scene(yaw,exposure)
+            R=cv2.Rodrigues(np.array([.4,yaw,.02]))[0]
+            up=-R[:,1];T=np.eye(4);T[:3,:3]=np.array([R[:,0],R[:,2],up])
+            table={'normal':[0.,0.,1.],'offset_mm':float(up@np.array([-10.,-10.,250.])-20.)}
+            result=localize(im,K.tolist(),D.tolist(),T.tolist(),table)
+            self.assertIn(result['side_selection'],('mean_of_similar_area_sides','larger_verified_side'))
+            np.testing.assert_allclose(result['cube_center_Base_mm'],T[:3,:3]@truth,atol=3.)
+            self.assertTrue(result['poses'][0]['table_geometry']['accepted'])
+
+
 if __name__=='__main__':unittest.main()

@@ -124,7 +124,8 @@ def run_once(config,execute=False):
     import cv2
     phase=time.ticks_ms();im=cv2.imread('/sdcard/aic/pick/last_frame.jpg')
     timing['jpeg_read']=time.ticks_diff(time.ticks_ms(),phase)
-    phase=time.ticks_ms();found=localize(im,K,intr['distortion_coefficients'],config['extrinsics']['T_Base_from_Camera_mm'])
+    phase=time.ticks_ms();found=localize(im,K,intr['distortion_coefficients'],config['extrinsics']['T_Base_from_Camera_mm'],
+        vision['localization'].get('table_plane_Base_mm') if vision['localization'].get('table_pose_constraints_enabled') else None)
     timing['visual_localization']=time.ticks_diff(time.ticks_ms(),phase)
     timing['capture_and_localize']=time.ticks_diff(time.ticks_ms(),perception_started)
     found['perception_timing_ms']=timing

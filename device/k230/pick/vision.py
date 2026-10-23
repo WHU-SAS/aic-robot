@@ -17,6 +17,7 @@ try:
     from .reflection_faces import detect_reflection_face
     from .top_boundaries import validate_top_boundary
     from .side_faces import prefer_sides,fast_sides
+    from .table_pose import context as table_context,constrain_face
     from .face_selection import internal_seam,separated_face_inside,adjacent_side,independent_adjacent_side,shallow_face
 except ImportError:
     from pose import pose_candidates
@@ -24,6 +25,7 @@ except ImportError:
     from reflection_faces import detect_reflection_face
     from top_boundaries import validate_top_boundary
     from side_faces import prefer_sides,fast_sides
+    from table_pose import context as table_context,constrain_face
     from face_selection import internal_seam,separated_face_inside,adjacent_side,independent_adjacent_side,shallow_face
 
 def median(values):
@@ -262,10 +264,11 @@ def gradient_side(im,hsv,K,D):
         except (ValueError,ZeroDivisionError):continue
     return None
 
-def localize(im,K,D,T):
+def localize(im,K,D,T,table_plane=None):
     if im.shape[:2]!=(960,1280):raise ValueError('Expected 1280x960 BGR frame')
     hsv=cv2.cvtColor(im,cv2.COLOR_BGR2HSV)
-    direct=fast_sides(im,K,D,hsv)
+    table=table_context(T,table_plane)
+    direct=fast_sides(im,K,D,hsv,table)
     if direct is not None:
         center=direct['poses'][0]['cube_center_Camera_mm']
         direct['cube_center_Camera_mm']=center
@@ -273,7 +276,7 @@ def localize(im,K,D,T):
         return direct
     result=basic_face(hsv,K,D) or dim_face(hsv,K,D)
     initial=result
-    selected=prefer_sides(im,K,D,result)
+    selected=prefer_sides(im,K,D,result,table)
     if selected is not None:
         center=selected['poses'][0]['cube_center_Camera_mm']
         selected['cube_center_Camera_mm']=center
@@ -301,7 +304,7 @@ def localize(im,K,D,T):
         result=split_face(hsv,K,D)
     result=result or gradient_side(im,hsv,K,D) or detect_reflection_face(im,K,D,pose_candidates)
     if result is not initial:
-        selected=prefer_sides(im,K,D,result)
+        selected=prefer_sides(im,K,D,result,table)
         if selected is not None:
             for key in ('rejected_multiface_outline','preferred_over_top'):
                 if key in result:selected.setdefault(key,result[key])
@@ -310,6 +313,9 @@ def localize(im,K,D,T):
         result=validate_top_boundary(im,K,D,result)
         if result['status']!='complete_face_candidate':raise ValueError(result['reason'])
     if result is None:raise ValueError('No reliable physical blue20mm face')
+    if table is not None and 'side_selection' not in result:
+        result=constrain_face(result,table,'top' if shallow_face(result['face_quad_px']) else 'side')
+        if result is None:raise ValueError('No face pose consistent with upright cube on calibrated table')
     result.setdefault('status','complete_face_candidate')
     result.setdefault('vision_path','legacy_recovery')
     center=result['poses'][0]['cube_center_Camera_mm']

@@ -19,7 +19,7 @@ def localize(image,output,vision_config=None):
  if im is None or im.shape[:2]!=(960,1280):raise RuntimeError('Expected a completed1280x960 K230 frame')
  K=np.array(intr['camera_matrix'],float);K[0]*=1280/intr['image_width'];K[1]*=960/intr['image_height'];D=np.array(intr['distortion_coefficients'],float)
  from device.k230.pick.vision import localize as runtime_localize
- try:v=runtime_localize(im,K.tolist(),D.tolist(),ext['T_Base_from_Camera_mm'])
+ try:v=runtime_localize(im,K.tolist(),D.tolist(),ext['T_Base_from_Camera_mm'],cfg.get('table_plane_Base_mm') if cfg.get('table_pose_constraints_enabled') else None)
  except ValueError as exc:v={'status':'no_complete_face','reason':str(exc)}
  if v['status']!='complete_face_candidate' or not v.get('poses'):
   (output/'vision_candidates.json').write_text(json.dumps(v,ensure_ascii=False,indent=2)+'\n');raise RuntimeError('未识别到完整可靠的蓝色20mm方块面：'+str(v.get('reason',v['status'])))

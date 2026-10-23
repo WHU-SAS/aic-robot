@@ -8,10 +8,12 @@ try:
     from .reflection_faces import FLOAT,ordered,measure_edge,intersect,distance,validate_seam
     from .pose import pose_candidates,project
     from .face_selection import internal_seam
+    from .table_pose import constrain_face,pair_priority,metrics as table_metrics
 except ImportError:
     from reflection_faces import FLOAT,ordered,measure_edge,intersect,distance,validate_seam
     from pose import pose_candidates,project
     from face_selection import internal_seam
+    from table_pose import constrain_face,pair_priority,metrics as table_metrics
 
 AREA_RATIO=1.25
 CENTER_AGREEMENT_MM=8.
@@ -199,15 +201,17 @@ def detect_sides(im,K,D,anchor,hsv=None):
     return found
 
 
-def fast_sides(im,K,D,hsv):
+def fast_sides(im,K,D,hsv,table=None):
     anchor=component_anchor(hsv)
     if anchor is None:return None
-    result=select_sides(detect_sides(im,K,D,anchor,hsv),K,D)
+    result=select_sides(detect_sides(im,K,D,anchor,hsv),K,D,table)
     if result is not None:result['vision_path']='direct_component_sides'
     return result
 
 
-def select_sides(faces,K,D):
+def select_sides(faces,K,D,table=None):
+    if table is not None:
+        faces=[v for v in (constrain_face(f,table) for f in faces) if v is not None]
     if not faces:return None
     faces=sorted(faces,key=lambda f:-f['area_px2']);first=faces[0];second=None;pair=None
     for candidate in faces[1:]:
@@ -218,7 +222,7 @@ def select_sides(faces,K,D):
                 normals=abs(sum(x*y for x,y in zip(a['inward_face_normal_Camera'],b['inward_face_normal_Camera'])))
                 separation=distance(a['cube_center_Camera_mm'],b['cube_center_Camera_mm'])
                 if normals<=.35 and separation<=CENTER_AGREEMENT_MM:
-                    pairs.append((a['face_reprojection_rms_px']+b['face_reprojection_rms_px'],a,b,separation))
+                    pairs.append((pair_priority(a,b),a,b,separation))
         if not pairs:raise ValueError('Adjacent side centers or normals disagree; no average target')
         pairs.sort(key=lambda p:p[0]);pair=pairs[0];second=candidate;break
     result=dict(first);used=[first];rule='single_verified_side'
@@ -230,11 +234,13 @@ def select_sides(faces,K,D):
             center=[(a+b)/2 for a,b in zip(pair[1]['cube_center_Camera_mm'],pair[2]['cube_center_Camera_mm'])]
             pose=dict(pose);pose['cube_center_Camera_mm']=center;pose['cube_center_pixel']=project(center,K,D)
             pose['face_reprojection_rms_px']=max(pair[1]['face_reprojection_rms_px'],pair[2]['face_reprojection_rms_px'])
+            if table is not None:pose['table_geometry']=table_metrics(pose,table,'side')
         else:rule='larger_verified_side'
     result.update(status='complete_face_candidate',poses=[pose],side_selection=rule,
         side_area_ratio_limit=AREA_RATIO,side_center_agreement_limit_mm=CENTER_AGREEMENT_MM,
         selected_side_count=len(used),side_faces=[{'face_quad_px':f['face_quad_px'],'area_px2':f['area_px2'],
-            'poses':f['poses'],'physical_edges':f['physical_edges']} for f in ([first,second] if second else [first])])
+            'poses':f['poses'],'physical_edges':f['physical_edges'],
+            'table_pose_candidates':f.get('table_pose_candidates',[])} for f in ([first,second] if second else [first])])
     for index,face in enumerate(result['side_faces']):
         face['used_for_center']=index<len(used)
         face['selected_pose']=pair[index+1] if pair else first['poses'][0]
@@ -247,8 +253,8 @@ def select_sides(faces,K,D):
     return result
 
 
-def prefer_sides(im,K,D,anchor):
-    result=select_sides(detect_sides(im,K,D,anchor),K,D)
+def prefer_sides(im,K,D,anchor,table=None):
+    result=select_sides(detect_sides(im,K,D,anchor),K,D,table)
     if result is not None and internal_seam(cv2.cvtColor(im,cv2.COLOR_BGR2HSV),anchor['face_quad_px']) is not None:
         result['rejected_multiface_outline']={'face_quad_px':anchor['face_quad_px'],
             'reason':'Measured an individual side instead of the merged outline'}

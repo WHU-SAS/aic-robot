@@ -51,6 +51,7 @@
       ],
       "offset_mm": -53.41470013284543,
       "equation": "normal dot Base_mm = offset_mm"
-    }
+    },
+    "table_pose_constraints_enabled": true
   }
 }
