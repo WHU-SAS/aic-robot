@@ -74,49 +74,93 @@ def roll_candidates(g,xy,tilt,orientation):
 
 
 def plan_aligned(g,xy,start,orientation):
-    q0=g.angles(start);failures=[];candidates=[]
+    q0=g.angles(start);failures=[];outcomes={};height_excess={}
+    attempts=0
     tilts=g.pick.get('wrist_alignment_tilts_deg',list(range(0,46,5)))
-    for tilt in tilts:
-        for roll,index,sign in roll_candidates(g,xy,tilt,orientation):
-            # Tip-height difference only depends on wrist orientation, not on
-            # the shoulder/elbow translation or Base yaw. Rank before full IK.
-            reference=[0.,0.,0.,math.radians(180-tilt),roll,g.open_angle]
-            mid=g.alignment_midpoint(reference);target=[xy[0]+.013,xy[1]]
-            reference[0]=math.atan2(target[1],target[0])-math.atan2(mid[1],sign*math.sqrt(dot(target,target)-mid[1]**2))
-            _,_,low,_=g.metrics(reference)
-            try:contact,width=g.nominal_contact(reference,orientation)
-            except ValueError:continue
-            closed=list(reference);closed[5]=contact-g.pick['extra_closing_counts']*2*math.pi/4096
-            _,_,closed_low,_=g.metrics(closed)
-            heights=[g.pick['descend_tip_height_mm']+(v-min(low.values()))*1000 for v in closed_low.values()]
-            difference=abs(heights[0]-heights[1])
-            # Prefer fingers able to overlap the 20mm cube at closure. These
-            # scores rank geometric candidates, not new runtime motion gates.
-            excess=max(0.,max(heights)-20.,-min(heights))
-            score=(excess,int(difference/2.),abs(roll-q0[4]),difference,abs(tilt-25))
-            candidates.append((score,tilt,roll,index))
-    candidates.sort(key=lambda item:item[0])
-    for score,tilt,roll,index in candidates:
-        try:
-            plan=g.build_stages(xy,q0,tilt,roll,orientation)
-            errors=[]
-            for name in ('hover','descend','lift'):
-                q=g.angles(plan[name])
-                errors.append(abs(error(closure(g,q),orientation['axes_Base'][index],orientation['table_normal_Base']))*180/math.pi)
-            if max(errors)>1.:raise ValueError('Rounded wrist direction differs from selected side')
-            clearances=plan['target_FK']['close']['link_clearance_above_table_mm']
-            if min(clearances.values())<0 or max(clearances.values())>20:
-                raise ValueError('Rotated fingers do not both overlap the 20mm cube height')
-            q=g.angles(plan['descend']);_,tips,low,_=g.metrics(q)
-            plan['wrist_alignment']={'status':'aligned','cube_yaw_table_deg':orientation['yaw_table_deg'],
-                'side_count':orientation['side_count'],'cube_axis_index':index,
-                'closure_direction_Base':closure(g,q),
-                'servo5_goal':plan['descend'][4],'servo5_angle_deg':q[4]*180/math.pi,
-                'servo5_change_deg':(q[4]-q0[4])*180/math.pi,
-                'stage_direction_errors_deg':errors,
-                'finger_low_height_difference_mm':abs(low['wan2']-low['zhua'])*1000,
-                'tip_height_difference_mm':abs(tips['wan2'][2]-tips['zhua'][2])*1000,
-                'closed_finger_clearances_mm':plan['target_FK']['close']['link_clearance_above_table_mm']}
-            return plan
-        except ValueError as exc:failures.append(str(exc))
+    def collect(values,branch=None):
+        result=[]
+        for tilt in values:
+            for roll,index,sign in roll_candidates(g,xy,tilt,orientation):
+                if branch is not None and (index,sign)!=branch:continue
+                # Tip-height difference only depends on wrist orientation, not on
+                # the shoulder/elbow translation or Base yaw. Rank before full IK.
+                reference=[0.,0.,0.,math.radians(180-tilt),roll,g.open_angle]
+                mid=g.alignment_midpoint(reference);target=[xy[0]+.013,xy[1]]
+                reference[0]=math.atan2(target[1],target[0])-math.atan2(mid[1],sign*math.sqrt(dot(target,target)-mid[1]**2))
+                _,_,low,_=g.metrics(reference)
+                try:contact,width=g.nominal_contact(reference,orientation)
+                except ValueError:continue
+                closed=list(reference);closed[5]=contact-g.pick['extra_closing_counts']*2*math.pi/4096
+                _,_,closed_low,_=g.metrics(closed)
+                heights=[g.pick['descend_tip_height_mm']+(v-min(low.values()))*1000 for v in closed_low.values()]
+                difference=abs(heights[0]-heights[1])
+                # Prefer fingers able to overlap the 20mm cube at closure. These
+                # scores rank geometric candidates, not new runtime motion gates.
+                excess=max(0.,max(heights)-20.,-min(heights))
+                score=(excess,int(difference/2.),abs(roll-q0[4]),difference,abs(tilt-25))
+                result.append((score,tilt,roll,index,sign))
+        return sorted(result,key=lambda item:item[0])
+    def attempt(items,search):
+        nonlocal attempts
+        for score,tilt,roll,index,sign in items:
+            attempts+=1
+            key=(round(tilt,6),index,sign)
+            outcome='ik'
+            try:
+                plan=g.build_stages(xy,q0,tilt,roll,orientation)
+                errors=[]
+                for name in ('hover','descend','lift'):
+                    q=g.angles(plan[name])
+                    errors.append(abs(error(closure(g,q),orientation['axes_Base'][index],orientation['table_normal_Base']))*180/math.pi)
+                outcome='direction'
+                if max(errors)>1.:raise ValueError('Rounded wrist direction differs from selected side')
+                outcome='height'
+                clearances=plan['target_FK']['close']['link_clearance_above_table_mm']
+                height_excess[key]=max(0.,max(clearances.values())-20.,-min(clearances.values()))
+                if height_excess[key]>0:
+                    raise ValueError('Rotated fingers do not both overlap the 20mm cube height')
+                q=g.angles(plan['descend']);_,tips,low,_=g.metrics(q)
+                plan['wrist_alignment']={'status':'aligned','cube_yaw_table_deg':orientation['yaw_table_deg'],
+                    'side_count':orientation['side_count'],'cube_axis_index':index,
+                    'closure_direction_Base':closure(g,q),
+                    'servo5_goal':plan['descend'][4],'servo5_angle_deg':q[4]*180/math.pi,
+                    'servo5_change_deg':(q[4]-q0[4])*180/math.pi,
+                    'stage_direction_errors_deg':errors,
+                    'tilt_search':search,'candidate_attempts':attempts,
+                    'finger_low_height_difference_mm':abs(low['wan2']-low['zhua'])*1000,
+                    'tip_height_difference_mm':abs(tips['wan2'][2]-tips['zhua'][2])*1000,
+                    'closed_finger_clearances_mm':plan['target_FK']['close']['link_clearance_above_table_mm']}
+                return plan
+            except ValueError as exc:
+                outcomes[key]=outcome;failures.append(str(exc))
+        return None
+    result=attempt(collect(tilts),'coarse')
+    if result is not None:return result
+    # A 5-degree grid can skip the narrow overlap between arm reachability
+    # and finger-height feasibility. Refine only intervals where those two
+    # failure reasons meet; retain exactly the same encoded-goal checks.
+    branches={};intervals=[]
+    for (tilt,index,sign),reason in outcomes.items():
+        branches.setdefault((index,sign),[]).append((tilt,reason))
+    for branch,rows in branches.items():
+        rows.sort()
+        for (lo,a),(hi,b) in zip(rows,rows[1:]):
+            if {a,b}=={'ik','height'}:
+                key=(hi if b=='height' else lo,branch[0],branch[1])
+                intervals.append((height_excess[key],branch,lo,a,hi,b))
+    # Try the closest height fit first. Bisection brackets the transition;
+    # only the matching roll branch needs refinement, not every cube axis.
+    for excess,branch,lo,a,hi,b in sorted(intervals):
+        while hi-lo>1.:
+            mid=round((lo+hi)/2,6)
+            result=attempt(collect([mid],branch),'boundary_bisection')
+            if result is not None:return result
+            reason=outcomes.get((mid,branch[0],branch[1]))
+            if reason==a:lo=mid
+            elif reason==b:hi=mid
+            else:break
+        values=[i/10. for i in range(int(math.floor(lo*10))+1,int(math.ceil(hi*10)))
+                if lo<i/10.<hi]
+        result=attempt(collect(values,branch),'boundary_refined_0.1deg')
+        if result is not None:return result
     raise ValueError('No feasible cube-aligned four-stage IK: '+str(sorted(set(failures))))

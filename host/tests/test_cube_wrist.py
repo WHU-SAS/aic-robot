@@ -70,6 +70,25 @@ class CubeWristTests(unittest.TestCase):
         self.assertEqual(p['wrist_alignment']['status'],'held_current')
         self.assertIn('alignment_failure',p['wrist_alignment'])
         for stage in ('hover','descend','close','lift'):self.assertEqual(p[stage],original[stage])
+    def test_latest_rotated_cube_refines_between_reach_and_height_boundaries(self):
+        # Actual failed scene: the 10-degree candidate was unreachable, while
+        # 15 degrees put one finger above the cube. A feasible encoded pose
+        # lies between them; it must not silently retain the old wrist angle.
+        xy=[.2672202,.02377807];g=self.geometry(xy)
+        o=estimate(synthetic_found(-38.1356,self.T,self.plane,False),self.T,self.plane)
+        p=g.plan(xy,self.start,o);w=p['wrist_alignment']
+        self.assertEqual(w['status'],'aligned')
+        self.assertEqual(w['tilt_search'],'boundary_refined_0.1deg')
+        self.assertGreater(p['tilt_deg'],10);self.assertLess(p['tilt_deg'],15)
+        self.assertGreater(abs(w['servo5_change_deg']),30)
+        self.assertLess(max(w['stage_direction_errors_deg']),1)
+        self.assertGreaterEqual(min(w['closed_finger_clearances_mm'].values()),0)
+        self.assertLessEqual(max(w['closed_finger_clearances_mm'].values()),20)
+        for stage in ('hover','descend','close','lift'):
+            self.assertEqual(p[stage][4],p['hover'][4])
+            for j,c in zip(g.joints,p[stage]):
+                self.assertLessEqual(j['software_count_limits'][0],c)
+                self.assertLessEqual(c,j['software_count_limits'][1])
     def test_width_is_cube_support_along_actual_3d_closure_axis(self):
         g=self.geometry([.2295,.02553]);o=estimate(synthetic_found(30,self.T,self.plane),self.T,self.plane)
         p=g.plan([.2295,.02553],self.start,o);q=g.angles(p['descend']);d=closure(g,q)
