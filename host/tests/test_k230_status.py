@@ -19,6 +19,12 @@ class DisplayTests(unittest.TestCase):
         self.lines=[];self.clock=Clock();self.display=StatusDisplay(self.lines.append,clock=self.clock)
     def feed(self,event,details=None):
         self.display.feed(('AIC_PICK '+json.dumps({'event':event,'details':details},ensure_ascii=False)+'\n').encode())
+    def test_planning_timeout_is_distinct_from_voice_failure_and_no_solution(self):
+        self.feed('planning_started',{'limit_ms':10000})
+        self.assertIn('正在规划',self.lines[-1])
+        self.feed('planning_timeout_no_motion',{'limit_ms':10000,'elapsed_ms':10003,'motion_dispatched':False})
+        self.assertIn('搜索超时',self.lines[-1]);self.assertIn('恢复语音监听',self.lines[-1])
+        self.assertIn('尚未证明',self.lines[-1])
     def test_split_utf8_and_lines_preserve_chinese_wake_event(self):
         data=('AIC_PICK '+json.dumps({'event':'voice_ready','details':{'word':'思达思达'}},ensure_ascii=False)+'\r\n').encode()
         for b in data:self.display.feed(bytes([b]))

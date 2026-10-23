@@ -5,7 +5,11 @@
 are NOT additional physical translations of the links.
 """
 import math
-from numeric import dot,cross,unit
+from numeric import cross,unit
+
+
+def dot3(a,b):
+    return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]
 
 
 class FingerCollision(ValueError):pass
@@ -32,7 +36,7 @@ def boxes_overlap(center,rotation,half,cube_half):
     return True
 
 
-def hull_overlap(points,half,neighbors=None):
+def hull_overlap(points,half,neighbors=None,rotation=None,origin=None):
     """GJK intersection against the complete convex finger hull, after SAT.
 
     A separating support plane proves clearance. Degenerate or unconverged
@@ -43,47 +47,53 @@ def hull_overlap(points,half,neighbors=None):
     previous=0
     def support(d):
         nonlocal previous
-        if neighbors is None:p=max(points,key=lambda p:dot(p,d))
+        # Support directions transform contravariantly; transform only the
+        # selected support vertex, rather than every hull vertex per query.
+        if rotation is None:search_d=d
+        else:
+            search_d=[rotation[0][j]*d[0]+rotation[1][j]*d[1]+rotation[2][j]*d[2] for j in range(3)]
+        if neighbors is None:p=max(points,key=lambda p:dot3(p,search_d))
         else:
             # Linear support on a convex polytope: an edge-local maximum is
             # global. Warm-start from the previous GJK support vertex.
-            value=dot(points[previous],d)
+            value=dot3(points[previous],search_d)
             while True:
                 best=previous
                 for index in neighbors[previous]:
-                    candidate=dot(points[index],d)
+                    candidate=dot3(points[index],search_d)
                     if candidate>value:best=index;value=candidate
                 if best==previous:break
                 previous=best
             p=points[previous]
+        if rotation is not None:p=[dot3(row,p)+o for row,o in zip(rotation,origin)]
         return [p[i]+(half[i] if d[i]>=0 else -half[i]) for i in range(3)]
     def line(a,b):
         ab=sub(b,a);ao=neg(a)
-        if dot(ab,ao)>0:return [b,a],cross(cross(ab,ao),ab)
+        if dot3(ab,ao)>0:return [b,a],cross(cross(ab,ao),ab)
         return [a],ao
     simplex=[support([1.,0.,0.])];d=neg(simplex[0])
     for unused in range(48):
-        size=math.sqrt(dot(d,d))
+        size=math.sqrt(dot3(d,d))
         if size<1e-14:return True
         a=support(d)
-        if dot(a,d)<-1e-12*size:return False
+        if dot3(a,d)<-1e-12*size:return False
         simplex.append(a);ao=neg(a)
         if len(simplex)==2:
             simplex,d=line(a,simplex[0])
         elif len(simplex)==3:
             b=simplex[-2];c=simplex[-3];ab=sub(b,a);ac=sub(c,a);abc=cross(ab,ac)
-            if dot(cross(abc,ac),ao)>0:
-                if dot(ac,ao)>0:simplex=[c,a];d=cross(cross(ac,ao),ac)
+            if dot3(cross(abc,ac),ao)>0:
+                if dot3(ac,ao)>0:simplex=[c,a];d=cross(cross(ac,ao),ac)
                 else:simplex,d=line(a,b)
-            elif dot(cross(ab,abc),ao)>0:simplex,d=line(a,b)
-            elif dot(abc,ao)>0:d=abc
+            elif dot3(cross(ab,abc),ao)>0:simplex,d=line(a,b)
+            elif dot3(abc,ao)>0:d=abc
             else:simplex=[b,c,a];d=neg(abc)
         else:
             b,c,e=simplex[-2],simplex[-3],simplex[-4]
             for u,v,opposite in ((b,c,e),(c,e,b),(e,b,c)):
                 normal=cross(sub(u,a),sub(v,a))
-                if dot(normal,sub(opposite,a))>0:normal=neg(normal)
-                if dot(normal,ao)>0:
+                if dot3(normal,sub(opposite,a))>0:normal=neg(normal)
+                if dot3(normal,ao)>0:
                     simplex=[v,u,a];d=normal;break
             else:return True
     return True
@@ -97,7 +107,7 @@ class CubeEnvelope:
         self.center=[xy[0],xy[1],g.table_z_m+.010/n[2]]
         known=orientation and orientation.get('status')=='estimated'
         x=orientation['axes_Base'][0] if known else [1.,0.,0.]
-        x=unit([x[i]-dot(x,n)*n[i] for i in range(3)])
+        x=unit([x[i]-dot3(x,n)*n[i] for i in range(3)])
         self.axes=[x,unit(cross(n,x)),n]
         # Unknown yaw: contain every rotation of the 20mm square on the table.
         self.half=[.010 if known else .010*math.sqrt(2)]*2+[.010]
@@ -106,13 +116,15 @@ class CubeEnvelope:
         self.arrival_cache={}
 
     def pose(self,g,q,inflate=0.):
+        check=getattr(g,'check_planning_budget',None)
+        if check is not None:check()
         self.checks+=1;ts=g.transforms(q)
         for link in ('wan2','zhua'):
             if not g.points[link].get('collision_boxes'):raise FingerCollision('Missing finger collision geometry: '+link)
             t=ts[link];R=[[sum(ax[k]*t[k][j] for k in range(3)) for j in range(3)] for ax in self.axes]
-            origin=[dot([t[k][3]-self.center[k] for k in range(3)],ax) for ax in self.axes]
+            origin=[dot3([t[k][3]-self.center[k] for k in range(3)],ax) for ax in self.axes]
             # Compose Base -> cube once, not for every hull vertex and box.
-            def local(p):return [dot(R[i],p)+origin[i] for i in range(3)]
+            def local(p):return [dot3(R[i],p)+origin[i] for i in range(3)]
             # Inflation encloses motion between samples, not encoder errors.
             cube_half=[v+inflate for v in self.half]
             bound=g.points[link]['collision_bounds'];center=local(bound['center'])
@@ -120,8 +132,8 @@ class CubeEnvelope:
             for index,box in enumerate(g.points[link]['collision_boxes']):
                 center=local(box['center'])
                 if boxes_overlap(center,R,box['half'],cube_half):
-                    points=[local(vertex) for vertex in g.points[link]['hull']]
-                    if hull_overlap(points,cube_half,g.points[link].get('collision_neighbors')):
+                    points=g.points[link]['hull']
+                    if hull_overlap(points,cube_half,g.points[link].get('collision_neighbors'),R,origin):
                         return {'finger':link,'box':index,'cube_local_center_mm':[v*1000 for v in center],
                                 'motion_enclosure_mm':inflate*1000}
                     break
@@ -129,7 +141,7 @@ class CubeEnvelope:
 
 
 def motion_radii(g):
-    tip_radius=max(math.sqrt(dot(v,v)) for link in ('wan2','zhua') for v in g.points[link]['hull'])
+    tip_radius=max(math.sqrt(dot3(v,v)) for link in ('wan2','zhua') for v in g.points[link]['hull'])
     lengths=[math.sqrt(sum(j['origin_transform'][i][3]**2 for i in range(3))) for j in g.joints]
     return [sum(lengths[i+1:])+tip_radius for i in range(6)]
 

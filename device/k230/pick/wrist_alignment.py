@@ -31,6 +31,7 @@ def roll_candidates(g,xy,tilt,orientation):
     yaw_limits=sorted(g.angle(1,c) for c in g.joints[0]['software_count_limits'])
     cache={}
     def evaluate(roll,sign):
+        g.check_planning_budget()
         if roll not in cache:
             r=rotation(g.joints[4]['axis'],roll)
             pts=[[o+v for o,v in zip(pivot,matvec(R,matvec(r,p)))] for p in local]
@@ -99,6 +100,7 @@ def _search_aligned(g,xy,start,orientation):
     def collect(values,branch=None):
         result=[]
         for tilt in values:
+            g.check_planning_budget()
             for roll,index,sign in roll_candidates(g,xy,tilt,orientation):
                 if branch is not None and (index,sign)!=branch:continue
                 # Tip-height difference only depends on wrist orientation, not on
@@ -215,4 +217,4 @@ def _search_aligned(g,xy,start,orientation):
                 if lo<i/10.<hi]
         result=attempt(collect(values,branch),'boundary_refined_0.1deg')
         if result is not None:return result
-    raise ValueError('No feasible cube-aligned four-stage IK: '+str(sorted(set(failures))))
+    raise ValueError('No verified cube-aligned plan among searched candidates: '+str(sorted(set(failures))))

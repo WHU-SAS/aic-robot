@@ -43,6 +43,19 @@ class CollisionTests(unittest.TestCase):
                     a=mapping[int(face[i])];b=mapping[int(face[(i+1)%3])]
                     neighbors[a].add(b);neighbors[b].add(a)
             self.assertEqual(hull_overlap(points[indices].tolist(),half,[list(v) for v in neighbors]),exact)
+    def test_lazy_transformed_support_matches_independent_hull_oracle(self):
+        rng=np.random.default_rng(24)
+        for unused in range(80):
+            points=rng.normal(size=(24,3))*.008;h=ConvexHull(points)
+            indices=list(h.vertices);mapping={int(v):i for i,v in enumerate(indices)};neighbors=[set() for _ in indices]
+            for face in h.simplices:
+                for i in range(3):
+                    a=mapping[int(face[i])];b=mapping[int(face[(i+1)%3])];neighbors[a].add(b);neighbors[b].add(a)
+            R=np.array(rotation([0.,0.,1.],rng.uniform(-math.pi,math.pi)));origin=rng.uniform(-.03,.03,3)
+            transformed=points[indices]@R.T+origin;oracle=ConvexHull(transformed)
+            expected=linprog([0,0,0],A_ub=oracle.equations[:,:3],b_ub=-oracle.equations[:,3],bounds=[(-.01,.01)]*3,method='highs').success
+            self.assertEqual(hull_overlap(points[indices].tolist(),[.01]*3,[list(v) for v in neighbors],R.tolist(),origin.tolist()),expected)
+
     def test_geometry_slices_enclose_random_points_in_each_finger_hull(self):
         rng=np.random.default_rng(1)
         for item in self.cfg['model']['points'].values():

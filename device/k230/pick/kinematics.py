@@ -10,6 +10,9 @@ class Geometry:
         self.open_angle=self.angle(6,pick['opening_count'])
         self.alignment_close_count=None
         self.cube_envelope=None
+        self.planning_budget=None
+    def check_planning_budget(self):
+        if self.planning_budget is not None:self.planning_budget.check()
     def angle(self,i,count):
         j=self.joints[i-1]
         return (count-j['zero_count'])*j['positive_direction']*2*math.pi/4096
@@ -89,6 +92,7 @@ class Geometry:
             else:hi=mid
         return (lo+hi)/2,width
     def solve(self,xy,height,tilt,seed,q5):
+        self.check_planning_budget()
         theta=math.radians(180-tilt)
         # The first two pitch links end at Base z=.1075 and each have length .118.
         # Compute orientation-dependent tool offsets using the SAME exported FK.
@@ -154,12 +158,18 @@ class Geometry:
         plan['open_finger_collision_check']=result
         return result
     def plan(self,xy,start,orientation=None):
+        from planning import PlanningBudget
+        self.planning_budget=PlanningBudget(self.pick.get('planning_timeout_ms',10000))
+        self.check_planning_budget()
         from finger_collision import CubeEnvelope
         self.cube_envelope=CubeEnvelope(self,xy,orientation)
         self.alignment_close_count=None
         if orientation is not None and orientation.get('status')=='estimated':
             from wrist_alignment import plan_aligned
-            try:return plan_aligned(self,xy,start,orientation)
+            try:
+                result=plan_aligned(self,xy,start,orientation)
+                self.check_planning_budget()
+                return result
             except ValueError as exc:
                 self.alignment_close_count=None
                 if self.pick.get('unreachable_cube_orientation')!='keep_current_wrist':raise
@@ -175,6 +185,7 @@ class Geometry:
                     'servo5_goal':result['hover'][4]}
                 if orientation and orientation.get('alignment_failure'):
                     result['wrist_alignment']['alignment_failure']=orientation['alignment_failure']
+                self.check_planning_budget()
                 return result
             except ValueError as exc:failures.append(str(exc))
-        raise ValueError('No complete four-stage IK: '+str(failures))
+        raise ValueError('No verified complete plan among searched candidates: '+str(failures))

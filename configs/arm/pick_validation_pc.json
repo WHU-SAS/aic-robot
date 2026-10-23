@@ -45,5 +45,6 @@
     40,
     45
   ],
-  "unreachable_cube_orientation": "keep_current_wrist"
+  "unreachable_cube_orientation": "keep_current_wrist",
+  "planning_timeout_ms": 10000
 }

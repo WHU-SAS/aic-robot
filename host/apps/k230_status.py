@@ -78,6 +78,10 @@ class StatusDisplay:
             self.state('监听就绪：'+ '、'.join('“'+word+'”' for word in details['words']))
         elif event=='wake' and isinstance(details,dict) and details.get('action')=='ready':
             self.state('已识别“回准备位”：准备执行准备位动作')
+        elif event=='planning_started':
+            self.state('已听到指令并完成识别，正在规划（上限%.1f秒）'%(details['limit_ms']/1000))
+        elif event=='planning_timeout_no_motion':
+            self.state('规划搜索超时（%.1f秒），未发送动作，将恢复语音监听；尚未证明该位置无解'%(details['elapsed_ms']/1000))
         elif event=='localized':
             center=details.get('cube_center_Base_mm') if isinstance(details,dict) else None
             text='识别成功'
