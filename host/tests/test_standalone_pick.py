@@ -360,6 +360,7 @@ class DirectPickTests(unittest.TestCase):
         self.assertIsNone(r.error);self.assertEqual(len(r.reads),12)
         self.assertEqual([i for t,i in r.reads],list(range(1,7))*2)
         self.assertEqual(r.result['errors_actual_minus_goal'],[-30,30,0,0,0,30])
+        self.assertEqual(r.result['checked_servo_ids'],[1,2,3,4,5,6])
         self.assertLess(r.elapsed,1000);self.assertEqual(r.writes,[(0,r.expected)])
         self.assertEqual(r.closed,[True])
 
@@ -375,6 +376,19 @@ class DirectPickTests(unittest.TestCase):
                 entry=packet[start:start+8];offset=7+(entry[0]-1)*8
                 self.assertEqual(entry,r.expected[offset:offset+8])
         self.assertEqual(r.result['errors_actual_minus_goal'],[-10,10,0,0,0,10])
+
+    def test_descend_ignores_open_gripper_error_but_records_all_six(self):
+        r=self.run_stage('descend',[2042,2053,2052,2048,2051,2035])
+        self.assertIsNone(r.error);self.assertEqual(len(r.reads),6)
+        self.assertEqual(r.result['errors_actual_minus_goal'],[-6,5,4,0,3,-13])
+        self.assertEqual(r.result['checked_servo_ids'],[1,2,3,4,5])
+
+    def test_descend_still_waits_for_axis5_and_requires_axis6_read(self):
+        r=self.run_stage('descend',[2048]*4+[2059,2035]+[2048]*4+[2058,2035])
+        self.assertIsNone(r.error);self.assertEqual(len(r.reads),12)
+        r=self.run_stage('descend',[2048]*5,fail_read_at=6)
+        self.assertIsInstance(r.error,RuntimeError);self.assertIsNone(r.result)
+        self.assertNotIn('position_gate_passed',r.output)
 
     def test_each_gate_poll_uses_fresh_values_not_per_axis_latched_success(self):
         # The first two polls each have a DIFFERENT out-of-band axis.
