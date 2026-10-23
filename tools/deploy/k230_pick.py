@@ -131,7 +131,7 @@ def verify(link,remote,manifest,config):
     # Imports/pose/IK and saved registration checks only: no camera/UART init.
     source="""import os,sys,json,binascii,uhashlib
 sys.path.insert(0,%r)
-for name in ['app','pose','numeric','kinematics','vision','reflection_faces','face_selection','side_faces','table_pose','top_boundaries','camera','wake_word','control','voice_commands']:
+for name in ['app','pose','numeric','kinematics','vision','reflection_faces','face_selection','side_faces','cube_orientation','wrist_alignment','table_pose','top_boundaries','camera','wake_word','control','voice_commands']:
  if name in sys.modules:del sys.modules[name]
 with open(%r+'/manifest.json') as f:m=json.load(f)
 for name,item in m['files'].items():

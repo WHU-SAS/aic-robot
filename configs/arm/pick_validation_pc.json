@@ -31,5 +31,19 @@
     "gripper_stable_samples": 5,
     "gripper_stable_tolerance_counts": 1,
     "poll_interval_ms": 50
-  }
+  },
+  "align_wrist_to_cube_sides": true,
+  "wrist_alignment_tilts_deg": [
+    0,
+    5,
+    10,
+    15,
+    20,
+    25,
+    30,
+    35,
+    40,
+    45
+  ],
+  "unreachable_cube_orientation": "keep_current_wrist"
 }

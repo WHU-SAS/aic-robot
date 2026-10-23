@@ -6,6 +6,7 @@ import os,gc,json,time
 from camera import CameraSession
 from vision import localize
 from kinematics import Geometry
+from cube_orientation import estimate as estimate_orientation
 from control import run_pick_stage_direct,run_ready_direct
 from voice_commands import registered_commands,resolve_events
 
@@ -111,6 +112,10 @@ def run_once(config,execute=False):
     phase=time.ticks_ms();found=localize(im,K,intr['distortion_coefficients'],config['extrinsics']['T_Base_from_Camera_mm'],
         vision['localization'].get('table_plane_Base_mm') if vision['localization'].get('table_pose_constraints_enabled') else None)
     timing['visual_localization']=time.ticks_diff(time.ticks_ms(),phase)
+    phase=time.ticks_ms()
+    if config['pick'].get('align_wrist_to_cube_sides',False):
+        found['cube_orientation']=estimate_orientation(found,config['extrinsics']['T_Base_from_Camera_mm'],vision['localization']['table_plane_Base_mm'])
+    timing['cube_orientation']=time.ticks_diff(time.ticks_ms(),phase)
     timing['capture_and_localize']=time.ticks_diff(time.ticks_ms(),perception_started)
     found['perception_timing_ms']=timing
     del im;gc.collect();log('localized',found)
@@ -121,7 +126,9 @@ def run_once(config,execute=False):
     xy=found['cube_center_Base_mm'][:2];plane=vision['localization']['table_plane_Base_mm'];n=plane['normal']
     table_z=(plane['offset_mm']-n[0]*xy[0]-n[1]*xy[1])/n[2]
     geometry=Geometry(config['model'],config['pick'],table_z)
-    plan=geometry.plan([v/1000 for v in xy],start);log('planned',plan)
+    phase=time.ticks_ms()
+    plan=geometry.plan([v/1000 for v in xy],start,found.get('cube_orientation'))
+    plan['planning_ms']=time.ticks_diff(time.ticks_ms(),phase);log('planned',plan)
     for name in ('hover','descend','close','lift'):
         action=dict(control);action['goals']=plan[name]
         stage={'name':name,'duration_s':config['pick']['stage_durations_s'].get(name,0),

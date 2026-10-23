@@ -26,24 +26,35 @@ class Geometry:
             t=matmul(matmul(t,j['origin_transform']),rigid(rotation(j['axis'],a),[0.,0.,0.]))
             result[j['child']]=t
         return result
+    def tip_geometry(self,q):
+        ts=self.transforms(q)
+        pts={link:transform(ts[link],self.points[link]['tip']) for link in ('wan2','zhua')}
+        return pts,ts
     def metrics(self,q):
-        ts=self.transforms(q);pts={};lows={}
+        pts,ts=self.tip_geometry(q);lows={}
         for link in ('wan2','zhua'):
-            t=ts[link];pts[link]=transform(t,self.points[link]['tip'])
+            t=ts[link]
             lows[link]=min(dot(t[2][:3],v)+t[2][3] for v in self.points[link]['hull'])
         return [(a+b)/2 for a,b in zip(pts['wan2'],pts['zhua'])],pts,lows,ts
     def alignment_midpoint(self,q):
-        q=list(q);q[5]=self.open_angle;mid,pts,low,t=self.metrics(q)
+        q=list(q);q[5]=self.open_angle;pts,t=self.tip_geometry(q)
+        mid=[(a+b)/2 for a,b in zip(pts['wan2'],pts['zhua'])]
         direction=[pts['zhua'][i]-pts['wan2'][i] for i in range(2)];length=norm(direction)
         if length<1e-8:raise ValueError('Open jaw line has no horizontal projection')
         for i in range(2):mid[i]+=direction[i]/length*self.pick['cube_offset_toward_moving_finger_mm']/1000
         return mid
-    def nominal_contact(self,q):
+    def nominal_contact(self,q,orientation=None):
         t=self.transforms(q)['wan2'];axis=[t[0][1],t[1][1]];length=norm(axis)
         if length<1e-8:raise ValueError('Gripper across-axis has no horizontal projection')
         width=.020*(abs(axis[0])+abs(axis[1]))/length
+        if orientation is not None:
+            across=[t[i][1] for i in range(3)]
+            width=.020*sum(abs(dot(across,v)) for v in orientation['axes_Base']+[orientation['table_normal_Base']])
         fixed=self.points['wan2']['distal'];moving=self.points['zhua']['distal']
-        def gap(a):return min(v[1] for v in fixed)-max(v[1]*math.cos(a)-v[2]*math.sin(a)-.0132 for v in moving)
+        fixed_y=min(v[1] for v in fixed)
+        def gap(a):
+            c=math.cos(a);s=math.sin(a)
+            return fixed_y-max(v[1]*c-v[2]*s-.0132 for v in moving)
         lo=0.;hi=math.pi/2;target=width-.0007
         if (gap(lo)-target)*(gap(hi)-target)>0:raise ValueError('No nominal contact opening')
         for unused in range(45):
@@ -82,7 +93,7 @@ class Geometry:
         if not found:raise ValueError('No IK solution within joint limits for requested stage')
         found.sort(key=lambda v:(sum((a-b)**2 for a,b in zip(v[2][:4],seed[:4])),v[0]));return found[0][1],found[0][2]
     def report(self,counts):
-        q=self.angles(counts);mid,pts,low,t=self.metrics(q);angle,width=self.nominal_contact(q)
+        q=self.angles(counts);mid,pts,low,t=self.metrics(q)
         return {'alignment_reference':'open_fingertip_midpoint',
                 'alignment_center_Base_mm':[v*1000 for v in self.alignment_midpoint(q)],
                 'gripper_midpoint_Base_mm':[v*1000 for v in mid],
@@ -90,20 +101,38 @@ class Geometry:
                 'moving_tip_center_Base_mm':[v*1000 for v in pts['zhua']],
                 'link_clearance_above_table_mm':{k:(v-self.table_z_m)*1000 for k,v in low.items()},
                 'cube_offset_toward_moving_finger_mm':self.pick['cube_offset_toward_moving_finger_mm']}
-    def plan(self,xy,start):
+    def build_stages(self,xy,q0,tilt,q5,orientation=None):
+        hover,qh=self.solve(xy,self.pick['hover_tip_height_mm']/1000,tilt,q0,q5)
+        low,ql=self.solve(xy,self.pick['descend_tip_height_mm']/1000,tilt,qh,q5)
+        angle,width=self.nominal_contact(ql,orientation)
+        qc=list(ql);qc[5]=angle;nominal=self.counts(qc)[5]
+        close=list(low);close[5]=nominal-self.pick['extra_closing_counts']
+        for j,c in zip(self.joints,close):
+            if not j['software_count_limits'][0]<=c<=j['software_count_limits'][1]:raise ValueError('Close target outside joint limits')
+        lift,qu=self.solve(xy,self.pick['lift_tip_height_mm']/1000,tilt,ql,q5);lift[5]=close[5]
+        return {'hover':hover,'descend':low,'close':close,'lift':lift,'tilt_deg':tilt,
+                'extra_closing_counts':self.pick['extra_closing_counts'],
+                'nominal_cube_width_mm':width*1000,
+                'cube_offset_toward_moving_finger_mm':self.pick['cube_offset_toward_moving_finger_mm'],
+                'target_xy_Base_mm':[v*1000 for v in xy],
+                'target_FK':{k:self.report(v) for k,v in [('hover',hover),('descend',low),('close',close),('lift',lift)]}}
+    def plan(self,xy,start,orientation=None):
+        if orientation is not None and orientation.get('status')=='estimated':
+            from wrist_alignment import plan_aligned
+            try:return plan_aligned(self,xy,start,orientation)
+            except ValueError as exc:
+                if self.pick.get('unreachable_cube_orientation')!='keep_current_wrist':raise
+                orientation={'status':'unavailable','reason':'Cube-aligned pose unavailable; user-selected original-wrist fallback',
+                    'alignment_failure':str(exc)}
         q0=self.angles(start);q5=q0[4];failures=[]
         for tilt in sorted([20,25,30,35,40,45],key=lambda t:abs(t-25)):
             try:
-                hover,qh=self.solve(xy,self.pick['hover_tip_height_mm']/1000,tilt,q0,q5)
-                low,ql=self.solve(xy,self.pick['descend_tip_height_mm']/1000,tilt,qh,q5)
-                angle,width=self.nominal_contact(ql)
-                qc=list(ql);qc[5]=angle;nominal=self.counts(qc)[5]
-                close=list(low);close[5]=nominal-self.pick['extra_closing_counts']
-                lift,qu=self.solve(xy,self.pick['lift_tip_height_mm']/1000,tilt,ql,q5);lift[5]=close[5]
-                return {'hover':hover,'descend':low,'close':close,'lift':lift,'tilt_deg':tilt,
-                        'extra_closing_counts':self.pick['extra_closing_counts'],
-                        'cube_offset_toward_moving_finger_mm':self.pick['cube_offset_toward_moving_finger_mm'],
-                        'target_xy_Base_mm':[v*1000 for v in xy],
-                        'target_FK':{k:self.report(v) for k,v in [('hover',hover),('descend',low),('close',close),('lift',lift)]}}
+                result=self.build_stages(xy,q0,tilt,q5)
+                result['wrist_alignment']={'status':'held_current',
+                    'reason':orientation.get('reason') if orientation else 'Orientation alignment not requested',
+                    'servo5_goal':result['hover'][4]}
+                if orientation and orientation.get('alignment_failure'):
+                    result['wrist_alignment']['alignment_failure']=orientation['alignment_failure']
+                return result
             except ValueError as exc:failures.append(str(exc))
         raise ValueError('No complete four-stage IK: '+str(failures))
