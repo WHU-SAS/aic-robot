@@ -66,6 +66,42 @@ class CubeWristTests(unittest.TestCase):
         self.assertEqual(p['descend'],[2145,2766,2683,2458,2048,2389])
         self.assertEqual(p['close'],[2145,2766,2683,2458,2048,2159])
         self.assertEqual(p['lift'],[2145,2625,2571,2712,2048,2159])
+    def test_relative_closing_shift_matches_independent_full_fk(self):
+        g=self.geometry([.2528551,.001102018]);g.alignment_close_count=2157
+        def midpoint(q):
+            pts,_=g.tip_geometry(q)
+            return [(a+b)/2 for a,b in zip(pts['wan2'],pts['zhua'])]
+        for roll in (-1.47,-.7,0.,.9):
+            q=[.15,.8,.4,math.pi-.1-1.2,roll,g.open_angle]
+            closed=list(q);closed[5]=g.angle(6,2157)
+            zero=list(q);zero[4]=0.;zero_closed=list(zero);zero_closed[5]=closed[5]
+            a,b,c,d=[midpoint(v) for v in (q,closed,zero,zero_closed)]
+            expected=[b[i]-a[i]-d[i]+c[i] for i in range(3)]
+            for x,y in zip(g.closing_shift_delta(q),expected):self.assertAlmostEqual(x,y,places=10)
+            aligned=g.alignment_midpoint(q);offset=g.compensation_xy(q)
+            # Corrected open reference equals the current predicted closed
+            # midpoint plus the zero-roll baseline minus its closing shift.
+            for i in range(2):self.assertAlmostEqual(aligned[i],b[i]+offset[i]-(d[i]-c[i]),places=10)
+            self.assertAlmostEqual(aligned[2],a[2],places=10)
+    def test_two_direction_miss_uses_exact_planned_closing_count(self):
+        xy=[.2528551,.001102018];g=self.geometry(xy)
+        o=estimate(synthetic_found(-15.21932,self.T,self.plane),self.T,self.plane)
+        p=g.plan(xy,self.start,o)
+        self.assertEqual(p['wrist_alignment']['status'],'aligned')
+        self.assertEqual(g.alignment_close_count,p['close'][5])
+        self.assertEqual(p['wrist_alignment']['alignment_close_count'],p['close'][5])
+        for stage in ('hover','descend','close','lift'):
+            report=p['target_FK'][stage]
+            self.assertEqual(report['alignment_close_count'],p['close'][5])
+            self.assertLess(math.dist(report['alignment_center_Base_mm'][:2],[v*1000 for v in xy]),2)
+        self.assertLess(max(p['wrist_alignment']['stage_direction_errors_deg']),1)
+    def test_enabled_closing_reference_leaves_zero_roll_targets_unchanged(self):
+        xy=[.2696684,-.01245227];g=self.geometry(xy)
+        old=g.build_stages(xy,g.angles(self.start),25,0.)
+        g.alignment_close_count=2159
+        new=g.build_stages(xy,g.angles(self.start),25,0.)
+        for stage in ('hover','descend','close','lift'):self.assertEqual(old[stage],new[stage])
+
     def test_two_normals_fuse_modulo_90_not_toward_diagonal(self):
         for yaw in (-89,-46,-45,-44,-15,0,30,44,45,46,89,179):
             found=synthetic_found(yaw,self.T,self.plane);o=estimate(found,self.T,self.plane)
@@ -105,6 +141,7 @@ class CubeWristTests(unittest.TestCase):
         p=g.plan(xy,self.start,o);original=g.plan(xy,self.start)
         self.assertEqual(p['wrist_alignment']['status'],'held_current')
         self.assertIn('alignment_failure',p['wrist_alignment'])
+        self.assertIsNone(g.alignment_close_count)
         for stage in ('hover','descend','close','lift'):self.assertEqual(p[stage],original[stage])
     def test_previous_narrow_boundary_scene_retains_valid_stage_tilts(self):
         # Changing the empirical reference can make one pitch reachable for

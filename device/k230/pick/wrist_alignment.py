@@ -26,6 +26,7 @@ def roll_candidates(g,xy,tilt,orientation):
     tips,ts=g.tip_geometry(reference);t=ts['wan2'];R=[row[:3] for row in t[:3]];pivot=[t[i][3] for i in range(3)]
     local=[matvec(transpose(R),[v-o for v,o in zip(tips[k],pivot)]) for k in ('wan2','zhua')]
     offset=g.compensation_xy(reference)
+    closing_local=g.closing_shift_local();closing_zero=matvec(R,closing_local)
     target=[xy[0]+.013,xy[1]]
     yaw_limits=sorted(g.angle(1,c) for c in g.joints[0]['software_count_limits'])
     cache={}
@@ -33,7 +34,8 @@ def roll_candidates(g,xy,tilt,orientation):
         if roll not in cache:
             r=rotation(g.joints[4]['axis'],roll)
             pts=[[o+v for o,v in zip(pivot,matvec(R,matvec(r,p)))] for p in local]
-            offy=(pts[0][1]+pts[1][1])/2+offset[1]
+            closing_rotated=matvec(R,matvec(r,closing_local))
+            offy=(pts[0][1]+pts[1][1])/2+offset[1]+closing_rotated[1]-closing_zero[1]
             direction=matvec(R,matvec(r,[0.,1.,0.]));rr=dot(target,target)-offy**2
             cache[roll]=(offy,direction,rr)
         offy,d,rr=cache[roll]
@@ -74,6 +76,23 @@ def roll_candidates(g,xy,tilt,orientation):
 
 
 def plan_aligned(g,xy,start,orientation):
+    # The closing width depends on the selected pose. Re-solve using that
+    # encoded closing goal until the alignment reference and command agree.
+    reference=[0.,0.,0.,math.pi,0.,g.open_angle]
+    contact,_=g.nominal_contact(reference)
+    j=g.joints[5]
+    g.alignment_close_count=j['zero_count']+j['positive_direction']*int(round(contact*4096/(2*math.pi)))-g.pick['extra_closing_counts']
+    for iteration in range(4):
+        plan=_search_aligned(g,xy,start,orientation)
+        if plan['close'][5]==g.alignment_close_count:
+            plan['wrist_alignment']['closing_reference_iterations']=iteration+1
+            plan['wrist_alignment']['alignment_close_count']=g.alignment_close_count
+            return plan
+        g.alignment_close_count=plan['close'][5]
+    raise ValueError('Closing midpoint reference did not converge to encoded goal')
+
+
+def _search_aligned(g,xy,start,orientation):
     q0=g.angles(start);failures=[];outcomes={};height_excess={}
     attempts=0
     tilts=g.pick.get('wrist_alignment_tilts_deg',list(range(0,46,5)))

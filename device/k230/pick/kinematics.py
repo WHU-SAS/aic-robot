@@ -8,6 +8,7 @@ class Geometry:
         self.model=model;self.pick=pick;self.table_z_m=table_z_mm/1000
         self.joints=model['joints'];self.points=model['points']
         self.open_angle=self.angle(6,pick['opening_count'])
+        self.alignment_close_count=None
     def angle(self,i,count):
         j=self.joints[i-1]
         return (count-j['zero_count'])*j['positive_direction']*2*math.pi/4096
@@ -39,9 +40,25 @@ class Geometry:
     def alignment_midpoint(self,q):
         q=list(q);q[5]=self.open_angle;pts,t=self.tip_geometry(q)
         mid=[(a+b)/2 for a,b in zip(pts['wan2'],pts['zhua'])]
-        offset=self.compensation_xy(q)
-        for i in range(2):mid[i]+=offset[i]
+        offset=self.compensation_xy(q);shift=self.closing_shift_delta(q)
+        for i in range(2):mid[i]+=offset[i]+shift[i]
         return mid
+    def closing_shift_local(self):
+        # Half the moving fingertip displacement is the two-tip midpoint
+        # displacement. Express it in joint 5's frame, before its wrist roll.
+        if self.alignment_close_count is None:return [0.,0.,0.]
+        j=self.joints[5];tip=self.points['zhua']['tip']
+        points=[]
+        for a in (self.open_angle,self.angle(6,self.alignment_close_count)):
+            t=matmul(j['origin_transform'],rigid(rotation(j['axis'],a),[0.,0.,0.]))
+            points.append(transform(t,tip))
+        return [(b-a)/2 for a,b in zip(*points)]
+    def closing_shift_delta(self,q):
+        if self.alignment_close_count is None or abs(q[4])<1e-12:return [0.,0.,0.]
+        local=self.closing_shift_local()
+        current=self.transforms(q)['wan2'];reference=list(q);reference[4]=0.
+        zero=self.transforms(reference)['wan2']
+        return [dot([current[i][j]-zero[i][j] for j in range(3)],local) for i in range(3)]
     def compensation_xy(self,q):
         # The empirical correction was measured with joint 5 at zero roll.
         # Preserve that reference direction as the base turns; only the real
@@ -102,9 +119,11 @@ class Geometry:
         found.sort(key=lambda v:(sum((a-b)**2 for a,b in zip(v[2][:4],seed[:4])),v[0]));return found[0][1],found[0][2]
     def report(self,counts):
         q=self.angles(counts);mid,pts,low,t=self.metrics(q)
-        return {'alignment_reference':'open_fingertip_midpoint',
+        return {'alignment_reference':('open_midpoint_with_relative_closing_shift' if self.alignment_close_count is not None else 'open_fingertip_midpoint'),
                 'compensation_reference':'zero_roll_same_base_and_pitch',
                 'compensation_Base_xy_mm':[v*1000 for v in self.compensation_xy(q)],
+                'closing_shift_delta_Base_mm':[v*1000 for v in self.closing_shift_delta(q)],
+                'alignment_close_count':self.alignment_close_count,
                 'alignment_center_Base_mm':[v*1000 for v in self.alignment_midpoint(q)],
                 'gripper_midpoint_Base_mm':[v*1000 for v in mid],
                 'fixed_tip_center_Base_mm':[v*1000 for v in pts['wan2']],
@@ -128,10 +147,12 @@ class Geometry:
                 'target_xy_Base_mm':[v*1000 for v in xy],
                 'target_FK':{k:self.report(v) for k,v in [('hover',hover),('descend',low),('close',close),('lift',lift)]}}
     def plan(self,xy,start,orientation=None):
+        self.alignment_close_count=None
         if orientation is not None and orientation.get('status')=='estimated':
             from wrist_alignment import plan_aligned
             try:return plan_aligned(self,xy,start,orientation)
             except ValueError as exc:
+                self.alignment_close_count=None
                 if self.pick.get('unreachable_cube_orientation')!='keep_current_wrist':raise
                 orientation={'status':'unavailable','reason':'Cube-aligned pose unavailable; user-selected original-wrist fallback',
                     'alignment_failure':str(exc)}
