@@ -101,16 +101,17 @@ class Geometry:
                 'moving_tip_center_Base_mm':[v*1000 for v in pts['zhua']],
                 'link_clearance_above_table_mm':{k:(v-self.table_z_m)*1000 for k,v in low.items()},
                 'cube_offset_toward_moving_finger_mm':self.pick['cube_offset_toward_moving_finger_mm']}
-    def build_stages(self,xy,q0,tilt,q5,orientation=None):
-        hover,qh=self.solve(xy,self.pick['hover_tip_height_mm']/1000,tilt,q0,q5)
+    def build_stages(self,xy,q0,tilt,q5,orientation=None,stage_tilts=None):
+        stage_tilts=stage_tilts or {'hover':tilt,'descend':tilt,'close':tilt,'lift':tilt}
+        hover,qh=self.solve(xy,self.pick['hover_tip_height_mm']/1000,stage_tilts['hover'],q0,q5)
         low,ql=self.solve(xy,self.pick['descend_tip_height_mm']/1000,tilt,qh,q5)
         angle,width=self.nominal_contact(ql,orientation)
         qc=list(ql);qc[5]=angle;nominal=self.counts(qc)[5]
         close=list(low);close[5]=nominal-self.pick['extra_closing_counts']
         for j,c in zip(self.joints,close):
             if not j['software_count_limits'][0]<=c<=j['software_count_limits'][1]:raise ValueError('Close target outside joint limits')
-        lift,qu=self.solve(xy,self.pick['lift_tip_height_mm']/1000,tilt,ql,q5);lift[5]=close[5]
-        return {'hover':hover,'descend':low,'close':close,'lift':lift,'tilt_deg':tilt,
+        lift,qu=self.solve(xy,self.pick['lift_tip_height_mm']/1000,stage_tilts['lift'],ql,q5);lift[5]=close[5]
+        return {'hover':hover,'descend':low,'close':close,'lift':lift,'tilt_deg':tilt,'stage_tilts_deg':dict(stage_tilts),
                 'extra_closing_counts':self.pick['extra_closing_counts'],
                 'nominal_cube_width_mm':width*1000,
                 'cube_offset_toward_moving_finger_mm':self.pick['cube_offset_toward_moving_finger_mm'],

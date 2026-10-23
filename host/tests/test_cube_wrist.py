@@ -70,22 +70,45 @@ class CubeWristTests(unittest.TestCase):
         self.assertEqual(p['wrist_alignment']['status'],'held_current')
         self.assertIn('alignment_failure',p['wrist_alignment'])
         for stage in ('hover','descend','close','lift'):self.assertEqual(p[stage],original[stage])
-    def test_latest_rotated_cube_refines_between_reach_and_height_boundaries(self):
-        # Actual failed scene: the 10-degree candidate was unreachable, while
-        # 15 degrees put one finger above the cube. A feasible encoded pose
-        # lies between them; it must not silently retain the old wrist angle.
+    def test_previous_narrow_boundary_scene_uses_independent_stage_tilts(self):
+        # Same-pitch planning previously needed a narrow 13.2-degree pose.
+        # Independent elevated stages allow a lower grasp pitch and more overlap.
         xy=[.2672202,.02377807];g=self.geometry(xy)
         o=estimate(synthetic_found(-38.1356,self.T,self.plane,False),self.T,self.plane)
         p=g.plan(xy,self.start,o);w=p['wrist_alignment']
         self.assertEqual(w['status'],'aligned')
-        self.assertEqual(w['tilt_search'],'boundary_refined_0.1deg')
-        self.assertGreater(p['tilt_deg'],10);self.assertLess(p['tilt_deg'],15)
+        self.assertNotEqual(p['stage_tilts_deg']['hover'],p['stage_tilts_deg']['descend'])
+        self.assertLess(max(w['closed_finger_clearances_mm'].values()),19)
         self.assertGreater(abs(w['servo5_change_deg']),30)
         self.assertLess(max(w['stage_direction_errors_deg']),1)
         self.assertGreaterEqual(min(w['closed_finger_clearances_mm'].values()),0)
         self.assertLessEqual(max(w['closed_finger_clearances_mm'].values()),20)
         for stage in ('hover','descend','close','lift'):
             self.assertEqual(p[stage][4],p['hover'][4])
+            for j,c in zip(g.joints,p[stage]):
+                self.assertLessEqual(j['software_count_limits'][0],c)
+                self.assertLessEqual(c,j['software_count_limits'][1])
+    def test_latest_scene_has_reachable_high_and_low_poses_with_one_roll(self):
+        xy=[.2703452,-.01172861];g=self.geometry(xy)
+        o=estimate(synthetic_found(36.23959,self.T,self.plane,False),self.T,self.plane)
+        p=g.plan(xy,self.start,o);w=p['wrist_alignment']
+        self.assertEqual(w['status'],'aligned')
+        self.assertGreater(abs(w['servo5_change_deg']),40)
+        self.assertNotEqual(p['stage_tilts_deg']['hover'],p['stage_tilts_deg']['descend'])
+        self.assertEqual(p['stage_tilts_deg']['close'],p['stage_tilts_deg']['descend'])
+        self.assertLess(max(w['stage_direction_errors_deg']),1)
+        self.assertGreaterEqual(min(w['closed_finger_clearances_mm'].values()),0)
+        self.assertLess(max(w['closed_finger_clearances_mm'].values()),20)
+        for stage,height in (('hover',80),('descend',15),('lift',80)):
+            self.assertEqual(p[stage][4],p['close'][4])
+            self.assertGreaterEqual(p['stage_tilts_deg'][stage],0)
+            self.assertLessEqual(p['stage_tilts_deg'][stage],45)
+            q=list(p[stage]);q[5]=self.cfg['pick']['opening_count'];report=g.report(q)
+            self.assertLess(math.dist(report['alignment_center_Base_mm'][:2],[x*1000 for x in xy]),2)
+            self.assertLess(abs(min(report['link_clearance_above_table_mm'].values())-height),2)
+            # Verify pitch metadata describes the encoded joints, within rounding.
+            actual=180-math.degrees(sum(g.angles(q)[1:4]))
+            self.assertLess(abs(actual-p['stage_tilts_deg'][stage]),.3)
             for j,c in zip(g.joints,p[stage]):
                 self.assertLessEqual(j['software_count_limits'][0],c)
                 self.assertLessEqual(c,j['software_count_limits'][1])

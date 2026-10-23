@@ -100,6 +100,17 @@ def plan_aligned(g,xy,start,orientation):
                 score=(excess,int(difference/2.),abs(roll-q0[4]),difference,abs(tilt-25))
                 result.append((score,tilt,roll,index,sign))
         return sorted(result,key=lambda item:item[0])
+    def choose_high_tilt(height,low_tilt,roll,axis_index,seed):
+        # Keep joint 5 fixed; prefer the nearest reachable pitch for each
+        # elevated stage instead of forcing the grasp pitch at every height.
+        choices=sorted(set(tilts+[low_tilt]),key=lambda t:(abs(t-low_tilt),t))
+        for high_tilt in choices:
+            try:
+                _,q=g.solve(xy,height/1000,high_tilt,seed,roll)
+                deviation=abs(error(closure(g,q),orientation['axes_Base'][axis_index],orientation['table_normal_Base']))
+                if deviation<=math.pi/180:return high_tilt
+            except ValueError:continue
+        raise ValueError('No elevated IK with fixed wrist roll and side alignment')
     def attempt(items,search):
         nonlocal attempts
         for score,tilt,roll,index,sign in items:
@@ -107,7 +118,22 @@ def plan_aligned(g,xy,start,orientation):
             key=(round(tilt,6),index,sign)
             outcome='ik'
             try:
-                plan=g.build_stages(xy,q0,tilt,roll,orientation)
+                # Reject unsuitable grasp poses before searching elevated
+                # stages. The final encoded plan is checked again below.
+                _,ql=g.solve(xy,g.pick['descend_tip_height_mm']/1000,tilt,q0,roll)
+                contact,_=g.nominal_contact(ql,orientation)
+                qc=list(ql);qc[5]=contact;closed=g.counts(qc)
+                closed[5]-=g.pick['extra_closing_counts']
+                preview=g.report(closed)['link_clearance_above_table_mm']
+                outcome='height'
+                height_excess[key]=max(0.,max(preview.values())-20.,-min(preview.values()))
+                if height_excess[key]>0:
+                    raise ValueError('Rotated fingers do not both overlap the 20mm cube height')
+                outcome='ik'
+                high=choose_high_tilt(g.pick['hover_tip_height_mm'],tilt,roll,index,q0)
+                lift=choose_high_tilt(g.pick['lift_tip_height_mm'],tilt,roll,index,ql)
+                stage_tilts={'hover':high,'descend':tilt,'close':tilt,'lift':lift}
+                plan=g.build_stages(xy,q0,tilt,roll,orientation,stage_tilts=stage_tilts)
                 errors=[]
                 for name in ('hover','descend','lift'):
                     q=g.angles(plan[name])
@@ -127,6 +153,7 @@ def plan_aligned(g,xy,start,orientation):
                     'servo5_change_deg':(q[4]-q0[4])*180/math.pi,
                     'stage_direction_errors_deg':errors,
                     'tilt_search':search,'candidate_attempts':attempts,
+                    'stage_tilts_deg':dict(stage_tilts),
                     'finger_low_height_difference_mm':abs(low['wan2']-low['zhua'])*1000,
                     'tip_height_difference_mm':abs(tips['wan2'][2]-tips['zhua'][2])*1000,
                     'closed_finger_clearances_mm':plan['target_FK']['close']['link_clearance_above_table_mm']}

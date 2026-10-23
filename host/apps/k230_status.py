@@ -88,6 +88,9 @@ class StatusDisplay:
             wrist=details.get('wrist_alignment',{})
             if wrist.get('status')=='aligned':
                 self.state('规划完成：方块方向 %.1f°（90°等价），5号目标 %.1f° / 编码%d，转动%+.1f°' % (wrist['cube_yaw_table_deg'],wrist['servo5_angle_deg'],wrist['servo5_goal'],wrist['servo5_change_deg']))
+                tilts=details.get('stage_tilts_deg')
+                if tilts:
+                    self.emit('腕部倾角：悬停 %.1f° / 下探 %.1f° / 抬升 %.1f°；5号保持同一目标' % (tilts['hover'],tilts['descend'],tilts['lift']))
             elif wrist.get('alignment_failure'):self.state('规划完成：旋转姿态无法兼顾方向和高度，5号保持原角度、按原方式抓取')
             else:self.state('规划完成：本轮无可靠侧面方向，5号保持原角度')
         elif event=='voice_failed':
