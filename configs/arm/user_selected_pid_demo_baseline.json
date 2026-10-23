@@ -35,7 +35,7 @@
       "acceleration": 20
     },
     "4": {
-      "P": 4,
+      "P": 20,
       "I": 3,
       "D": 60,
       "integral_limit": 16,
@@ -68,10 +68,10 @@
       "acceleration": 5
     }
   },
-  "adoption": "User froze the 2026-10-23 three-pose tuning result: axis2 P48/I24/D160/limit48, axis3 P40/I12/D140/limit24. Parameter writes were individually read back; axis2 limit56 trial was restored to48 before adoption. Other axes retain the previously adopted values.",
-  "verified_at": "2026-10-23T17:25:51+08:00",
+  "adoption": "User-selected current parameters. On 2026-10-23 axis4 P changed from4 to20 for comparison; I3/D60/limit16 retained. Axes2/3 retain the adopted three-pose result. No motion strategy changes.",
+  "verified_at": "2026-10-23T18:45:00+08:00",
   "tuning_policy": "Use this user-selected baseline in practice; make focused adjustments only when new problems appear.",
-  "changed_parameter_count": 3,
+  "changed_parameter_count": 1,
   "software_motion_defaults_provenance": "User adopted project-wide defaults; normal and neutral return both axes2/3/4=600/20, other axes=150/5. Updated 2026-10-11T17:05:36.715935+08:00",
   "requested_pid": {
     "1": {
@@ -93,7 +93,7 @@
       "integral_limit": 24
     },
     "4": {
-      "P": 4,
+      "P": 20,
       "I": 3,
       "D": 60,
       "integral_limit": 16
@@ -147,24 +147,12 @@
   "pick_entry_status": "user_accepted_20261013",
   "latest_adoption_changes": [
     {
-      "id": 2,
+      "id": 4,
       "parameter": "P",
-      "previous": 16,
-      "adopted": 48
-    },
-    {
-      "id": 3,
-      "parameter": "P",
-      "previous": 10,
-      "adopted": 40
-    },
-    {
-      "id": 3,
-      "parameter": "I",
       "previous": 4,
-      "adopted": 12
+      "adopted": 20
     }
   ],
   "adopted_at": "2026-10-23T17:28:01.367471+08:00",
-  "verification_scope": "Latest full six-axis read: repeated trial 20261023_172336_489046; final axis2 limit48 restoration separately double-read at17:25:51. No motion during adoption."
+  "verification_scope": "Axis4 P20 written and read twice; registers21..27, torque, goal and EEPROM lock compared before/after. Other axes double-read at18:44:37."
 }
