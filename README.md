@@ -38,6 +38,7 @@
 ./scripts/demo-v0-pick --detect-only        # 第0版：仅识别
 ./scripts/demo-v0-pick --execute --hands-free # 第0版：完整抓取演示
 ./scripts/arm-ready --execute               # 小车行驶前回准备位
+./scripts/pid-three --execute --label baseline # 三组固定下降姿态PID对照（约29秒）
 ```
 
 小车行驶时保持 [准备位与扭矩](docs/guides/arm/准备位脚本.md)，停车后抓取；准备位会张开夹爪，持物行驶策略待定。PID、速度和控制策略由用户决定。
@@ -51,6 +52,7 @@
 | K230独立语音抓取、部署与日志 | [独立抓取](docs/guides/arm/K230_STANDALONE_PICK.md) |
 | 新外参PC抓取验证、偏移和日志 | [PC验证入口](docs/guides/arm/PC_PICK_VALIDATION.md) |
 | 第0版抓取动作、偏移、日志 | [抓取流程](docs/guides/arm/K230_ONBOARD_PICK.md) |
+| 三组固定动作 PID 对照 | [测试脚本](docs/guides/arm/PID_THREE_ACTIONS.md) |
 | 当前 PID 和运动参数 | [舵机基线](docs/guides/arm/BASELINE.md) |
 | 接线、供电、硬件型号 | [硬件接线](docs/hardware/connections.md) |
 | CanMV 测试、Linux / Keil 编译和下载 | [板端联调](docs/guides/k230-and-mspm0.md) |

@@ -1,0 +1,71 @@
+{
+  "name": "ready_three_descents_v1",
+  "ready_counts": [
+    2048,
+    1138,
+    2958,
+    2958,
+    2048,
+    2389
+  ],
+  "action_sample_s": 5.0,
+  "ready_sample_s": 3.5,
+  "sample_period_ms": 50,
+  "actions": [
+    {
+      "name": "action_1_near",
+      "counts": [
+        2061,
+        2673,
+        2871,
+        2364,
+        2046,
+        2389
+      ],
+      "target_xy_Base_mm": [
+        250.994,
+        24.30814
+      ],
+      "tilt_deg": 25,
+      "source": "2026-10-23 last completed pick, descend goal"
+    },
+    {
+      "name": "action_2_middle",
+      "counts": [
+        2057,
+        2819,
+        2584,
+        2504,
+        2046,
+        2389
+      ],
+      "target_xy_Base_mm": [
+        276.6046,
+        25.59494
+      ],
+      "tilt_deg": 25,
+      "source": "2026-10-22 23:57 saved pick, descend goal"
+    },
+    {
+      "name": "action_3_far",
+      "counts": [
+        2031,
+        2908,
+        2501,
+        2385,
+        2046,
+        2389
+      ],
+      "target_xy_Base_mm": [
+        305.8411,
+        38.10012
+      ],
+      "tilt_deg": 35,
+      "source": "2026-10-22 23:50 saved pick, descend goal"
+    }
+  ],
+  "model_tip_height_mm": 15,
+  "opening_count": 2389,
+  "motion_defaults_reference": "configs/arm/motion_defaults.json",
+  "notes": "Frozen targets from executed pick logs. Open gripper throughout. Sampling windows never wait for convergence."
+}
