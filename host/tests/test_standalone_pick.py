@@ -365,7 +365,13 @@ class DirectPickTests(unittest.TestCase):
         self.assertEqual(reads,[]);self.assertEqual(closed,[True])
 
     def test_plan_is_followed_by_hover_without_hold_action(self):
-        app=VoiceDispatchTests().app();cfg,_,_=deploy.build_bundle();events=[]
+        self.check_descend_diagnostic(False)
+
+    def test_descend_read_failure_does_not_skip_close_or_lift(self):
+        self.check_descend_diagnostic(True)
+
+    def check_descend_diagnostic(self,fail_read):
+        app=VoiceDispatchTests().app();cfg,_,_=deploy.build_bundle();events=[];reads=[]
         class Camera:
             def __init__(self,*args):pass
             def open(self):pass
@@ -375,15 +381,30 @@ class DirectPickTests(unittest.TestCase):
         class Model:
             def __init__(self,*args):pass
             def plan(self,*args):events.append('plan');return plan
+        def snapshot(control):
+            reads.append(control)
+            if len(reads)==2:
+                events.append('descend_read')
+                if fail_read:raise RuntimeError('read timeout')
+                return [{'position':2048+i} for i in range(6)]
+            return [{'position':2048} for i in range(6)]
         with patch.dict(sys.modules,{'cv2':SimpleNamespace(imread=lambda p:object()),'control':SimpleNamespace()}), \
              patch.object(app,'CameraSession',Camera),patch.object(app,'Geometry',Model), \
              patch.object(app,'localize',return_value={'cube_center_Base_mm':[240,0,-60]}), \
-             patch.object(app,'arm_snapshot',return_value=[{'position':2048} for i in range(6)]), \
+             patch.object(app,'arm_snapshot',side_effect=snapshot), \
              patch.object(app,'log') as logs,patch.object(app,'run_pick_stage_direct',side_effect=lambda c,s:events.append(s['name'])):
             app.run_once(cfg,execute=True)
-        self.assertEqual(events,['plan','hover','descend','close','lift'])
+        self.assertEqual(events,['plan','hover','descend','descend_read','close','lift'])
+        self.assertEqual(len(reads),2)
         found=next(c.args[1] for c in logs.call_args_list if c.args[0]=='localized')
         self.assertEqual(set(found['perception_timing_ms']),{'camera_open_warmup','snapshot','jpeg_save','camera_close','jpeg_read','visual_localization','capture_and_localize'})
+        if fail_read:
+            logs.assert_any_call('descend_position_sample_failed',{'error':'read timeout','read_ms':0})
+            self.assertFalse(any(c.args[0]=='descend_position_sample' for c in logs.call_args_list))
+        else:
+            sample=next(c.args[1] for c in logs.call_args_list if c.args[0]=='descend_position_sample')
+            self.assertEqual(sample['goals'],plan['descend'])
+            self.assertEqual(sample['errors_actual_minus_goal'],list(range(6)))
 
 
 class DeploymentTests(unittest.TestCase):
