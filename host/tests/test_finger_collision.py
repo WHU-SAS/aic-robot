@@ -65,12 +65,80 @@ class CollisionTests(unittest.TestCase):
         self.assertFalse(plan['open_finger_collision_check']['actual_motion_certified'])
         self.assertTrue(plan['open_finger_collision_check']['sweep_checked'])
         self.assertGreater(plan['open_finger_collision_check']['pose_checks'],3)
-    def test_reported_scene_selects_a_different_clear_target(self):
+    def test_previous_far_scene_is_rejected_when_gate_box_is_not_clear(self):
         xy=[.2929968,.003688034];g,o=self.scene(xy,-5.850853)
-        plan=g.plan(xy,self.start,o)
-        self.assertNotEqual(plan['descend'],[2103,2779,2904,1996,2030,2389])
-        self.assertTrue(plan['open_finger_collision_check']['sweep_checked'])
-        self.assertIsNone(g.cube_envelope.pose(g,g.angles(plan['descend'])))
+        with self.assertRaisesRegex(ValueError,'Arrival tolerance'):g.plan(xy,self.start,o)
+
+    def test_latest_nominally_clear_target_is_not_clear_with_existing_tolerance(self):
+        from finger_collision import validate_arrival
+        xy=[.2674373,.01030131];g,o=self.scene(xy,-31.42021);cube=CubeEnvelope(g,xy,o)
+        counts=[2093,2978,2190,2853,1723,2389];q=g.angles(counts)
+        self.assertIsNone(cube.pose(g,q))
+        # This is a REAL allowed endpoint, not an invented larger threshold.
+        counts[1]+=10
+        self.assertIsNotNone(cube.pose(g,g.angles(counts)))
+        with self.assertRaisesRegex(FingerCollision,'Arrival tolerance'):
+            validate_arrival(g,cube,q,'descend')
+
+    def test_known_clear_scene_encloses_random_allowed_arrivals(self):
+        xy=[.2528551,.001102018];g,o=self.scene(xy,-15.21932)
+        plan=g.plan(xy,self.start,o);rng=np.random.default_rng(22)
+        details=plan['open_finger_collision_check']
+        self.assertEqual(details['geometry_margin_mm'],0)
+        self.assertEqual(details['arrival_tolerance_checks']['descend']['excluded_servo_ids'],[6])
+        for stage,ids,tol in [('hover',range(6),30),('descend',range(5),10)]:
+            for unused in range(50):
+                counts=list(plan[stage])
+                for i in ids:counts[i]+=int(rng.integers(-tol,tol+1))
+                self.assertIsNone(g.cube_envelope.pose(g,g.angles(counts)))
+
+    def test_joint_box_checks_interior_not_only_axis_extremes(self):
+        from finger_collision import validate_arrival
+        from types import SimpleNamespace
+        unit=2*math.pi/4096
+        class Cube:
+            def pose(self,g,q,inflate=0):
+                # Small colliding island strictly inside the tolerance box.
+                return {'finger':'wan2'} if abs(q[0]-5*unit)<=unit+inflate and abs(q[1]-5*unit)<=unit+inflate else None
+        g=SimpleNamespace(pick={'standalone_stage_policy':{'descend_tolerance_counts':10}},
+            points={k:{'hull':[[1.,0,0]]} for k in ('wan2','zhua')},
+            joints=[{'origin_transform':np.eye(4).tolist(),'positive_direction':1} for _ in range(6)])
+        with self.assertRaises(FingerCollision):validate_arrival(g,Cube(),[0.]*6,'descend')
+
+    def test_gate_box_is_not_clipped_to_target_limits(self):
+        from finger_collision import validate_arrival
+        from types import SimpleNamespace
+        class Cube:
+            def pose(self,g,q,inflate=0):return {'finger':'wan2'} if q[0]>.01 else None
+        g=SimpleNamespace(pick={'standalone_stage_policy':{'descend_tolerance_counts':10}},
+            points={k:{'hull':[[1.,0,0]]} for k in ('wan2','zhua')},
+            joints=[{'origin_transform':np.eye(4).tolist(),'positive_direction':1,'software_count_limits':[0,1]} for _ in range(6)])
+        with self.assertRaises(FingerCollision):validate_arrival(g,Cube(),[0.]*6,'descend')
+
+    def test_arrival_cache_is_limited_to_same_cube_target_and_tolerance(self):
+        from finger_collision import validate_arrival
+        xy=[.2528551,.001102018];g,o=self.scene(xy,-15.21932)
+        cube=CubeEnvelope(g,xy,o);q=g.angles(self.start)
+        # Use a high, known clear posture to isolate cache scope.
+        with patch.object(cube,'pose',return_value=None) as check:
+            validate_arrival(g,cube,q,'hover');calls=check.call_count
+            validate_arrival(g,cube,q,'hover');self.assertEqual(check.call_count,calls)
+            other=list(q);other[0]+=.001
+            validate_arrival(g,cube,other,'hover');self.assertGreater(check.call_count,calls)
+        fresh=CubeEnvelope(g,xy,o)
+        self.assertEqual(fresh.arrival_cache,{})
+
+    def test_composed_frame_collision_matches_independent_halfspace_oracle(self):
+        xy=[.2674373,.01030131];g,o=self.scene(xy,-31.42021);cube=CubeEnvelope(g,xy,o)
+        rng=np.random.default_rng(23)
+        for unused in range(24):
+            q=g.angles((np.array([2093,2978,2190,2853,1723,2389])+rng.integers(-25,26,6)).tolist())
+            ts=g.transforms(q);expected=False
+            for link in ('wan2','zhua'):
+                points=np.array([transform(ts[link],v) for v in g.points[link]['hull']])
+                local=(points-np.array(cube.center))@np.array(cube.axes).T;h=ConvexHull(local)
+                expected |= linprog([0,0,0],A_ub=h.equations[:,:3],b_ub=-h.equations[:,3],bounds=[(-v,v) for v in cube.half],method='highs').success
+            self.assertEqual(cube.pose(g,q) is not None,expected)
 
     def test_fallback_cannot_bypass_rejection(self):
         xy=[.269,-.012];g,o=self.scene(xy,30)

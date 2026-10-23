@@ -150,8 +150,8 @@ def _search_aligned(g,xy,start,orientation):
                     raise ValueError('Rotated fingers do not both overlap the 20mm cube height')
                 outcome='collision'
                 if g.cube_envelope is not None:
-                    hit=g.cube_envelope.pose(g,ql)
-                    if hit:raise ValueError('Open finger intersects cube at descend: '+str(hit))
+                    from finger_collision import validate_arrival
+                    validate_arrival(g,g.cube_envelope,g.angles(g.counts(ql)),'descend')
                 outcome='ik'
                 high=choose_high_tilt(g.pick['hover_tip_height_mm'],tilt,roll,index,q0)
                 lift=choose_high_tilt(g.pick['lift_tip_height_mm'],tilt,roll,index,ql)

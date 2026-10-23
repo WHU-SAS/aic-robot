@@ -5,7 +5,7 @@
 are NOT additional physical translations of the links.
 """
 import math
-from numeric import dot,cross,unit,transform
+from numeric import dot,cross,unit
 
 
 class FingerCollision(ValueError):pass
@@ -103,25 +103,24 @@ class CubeEnvelope:
         self.half=[.010 if known else .010*math.sqrt(2)]*2+[.010]
         self.orientation_known=bool(known)
         self.checks=0
+        self.arrival_cache={}
 
     def pose(self,g,q,inflate=0.):
         self.checks+=1;ts=g.transforms(q)
         for link in ('wan2','zhua'):
             if not g.points[link].get('collision_boxes'):raise FingerCollision('Missing finger collision geometry: '+link)
             t=ts[link];R=[[sum(ax[k]*t[k][j] for k in range(3)) for j in range(3)] for ax in self.axes]
+            origin=[dot([t[k][3]-self.center[k] for k in range(3)],ax) for ax in self.axes]
+            # Compose Base -> cube once, not for every hull vertex and box.
+            def local(p):return [dot(R[i],p)+origin[i] for i in range(3)]
             # Inflation encloses motion between samples, not encoder errors.
             cube_half=[v+inflate for v in self.half]
-            bound=g.points[link]['collision_bounds'];p=transform(t,bound['center'])
-            delta=[p[i]-self.center[i] for i in range(3)];center=[dot(delta,ax) for ax in self.axes]
+            bound=g.points[link]['collision_bounds'];center=local(bound['center'])
             if not boxes_overlap(center,R,bound['half'],cube_half):continue
             for index,box in enumerate(g.points[link]['collision_boxes']):
-                p=transform(t,box['center']);delta=[p[i]-self.center[i] for i in range(3)]
-                center=[dot(delta,ax) for ax in self.axes]
+                center=local(box['center'])
                 if boxes_overlap(center,R,box['half'],cube_half):
-                    points=[]
-                    for vertex in g.points[link]['hull']:
-                        world=transform(t,vertex);delta=[world[i]-self.center[i] for i in range(3)]
-                        points.append([dot(delta,ax) for ax in self.axes])
+                    points=[local(vertex) for vertex in g.points[link]['hull']]
                     if hull_overlap(points,cube_half,g.points[link].get('collision_neighbors')):
                         return {'finger':link,'box':index,'cube_local_center_mm':[v*1000 for v in center],
                                 'motion_enclosure_mm':inflate*1000}
@@ -129,12 +128,73 @@ class CubeEnvelope:
         return None
 
 
+def motion_radii(g):
+    tip_radius=max(math.sqrt(dot(v,v)) for link in ('wan2','zhua') for v in g.points[link]['hull'])
+    lengths=[math.sqrt(sum(j['origin_transform'][i][3]**2 for i in range(3))) for j in g.joints]
+    return [sum(lengths[i+1:])+tip_radius for i in range(6)]
+
+
+def validate_arrival(g,cube,q,stage):
+    # A preview and the final candidate often have identical encoded targets.
+    # Cache only within this cube/plan, never across camera captures or runs.
+    cache=getattr(cube,'arrival_cache',None)
+    key=(stage,tuple(q),g.pick['standalone_stage_policy'][stage+'_tolerance_counts'])
+    if cache is not None and key in cache:
+        ok,value=cache[key]
+        if not ok:raise FingerCollision(value)
+        return value
+    try:result=_validate_arrival(g,cube,q,stage)
+    except FingerCollision as exc:
+        if cache is not None and len(cache)<256:cache[key]=(False,str(exc))
+        raise
+    if cache is not None and len(cache)<256:cache[key]=(True,result)
+    return result
+
+
+def _validate_arrival(g,cube,q,stage):
+    """Enclose the existing arrival gate, without changing runtime thresholds.
+
+    Hover checks all six axes; descent checks only 1..5, exactly like the gate.
+    Descent axis 6 is nominal here, not falsely treated as within +/-10.
+    A subdivided joint box covers its continuous interior, not just corners.
+    """
+    policy=g.pick['standalone_stage_policy'];tolerance=policy[stage+'_tolerance_counts']
+    if not math.isfinite(tolerance) or tolerance<0:raise FingerCollision('Invalid arrival tolerance')
+    ids=list(range(6 if stage=='hover' else 5));radii=motion_radii(g)
+    half=[tolerance*2*math.pi/4096 if i in ids else 0. for i in range(6)]
+    # Do not clip the gate box to software target limits: real arrival feedback
+    # can pass the existing gate just outside those limits.
+    lo=[a-h for a,h in zip(q,half)];hi=[a+h for a,h in zip(q,half)]
+    def reject(at,kind):
+        hit=cube.pose(g,at)
+        if hit:
+            hit.update(stage=stage,checked_servo_ids=[i+1 for i in ids],
+                       error_counts=[round((at[i]-q[i])*g.joints[i]['positive_direction']*4096/(2*math.pi),3) for i in range(6)])
+            raise FingerCollision('Arrival tolerance intersects cube ('+kind+'): '+str(hit))
+    reject(q,'nominal')
+    # Cheap witnesses reject common failures before interval subdivision.
+    for i in ids:
+        for endpoint in (lo[i],hi[i]):
+            at=list(q);at[i]=endpoint;reject(at,'axis extreme')
+    stack=[(lo,hi)];checks=0
+    while stack:
+        left,right=stack.pop();mid=[(a+b)/2 for a,b in zip(left,right)]
+        parts=[(b-a)*r/2 for a,b,r in zip(left,right,radii)]
+        if not cube.pose(g,mid,sum(parts)):continue
+        reject(mid,'box midpoint');checks+=1
+        if sum(parts)<=.00005 or checks>=256:
+            raise FingerCollision('Arrival tolerance clearance unresolved at '+stage)
+        axis=max(range(6),key=lambda i:parts[i]);a=list(right);a[axis]=mid[axis]
+        b=list(left);b[axis]=mid[axis]
+        stack.append((b,right));stack.append((left,a))
+    return {'tolerance_counts':tolerance,'checked_servo_ids':[i+1 for i in ids],
+            'continuous_box_enclosed':True,'excluded_servo_ids':([] if stage=='hover' else [6])}
+
+
 def segment(g,cube,a,b,label):
     # The maximum downstream distance from each joint bounds its contribution
     # to any finger point's displacement, independent of the current pose.
-    tip_radius=max(math.sqrt(dot(v,v)) for link in ('wan2','zhua') for v in g.points[link]['hull'])
-    lengths=[math.sqrt(sum(j['origin_transform'][i][3]**2 for i in range(3))) for j in g.joints]
-    radii=[sum(lengths[i+1:])+tip_radius for i in range(6)]
+    radii=motion_radii(g)
     stack=[(a,b,0.,1.)];checks=0
     while stack:
         left,right,u0,u1=stack.pop();q=[(left[i]+right[i])/2 for i in range(6)]
@@ -162,9 +222,7 @@ def validate_plan(g,plan,cube):
     """
     start_checks=cube.checks
     hover=g.angles(plan['hover']);down=g.angles(plan['descend'])
-    for name,q in (('hover',hover),('descend',down)):
-        hit=cube.pose(g,q)
-        if hit:raise FingerCollision('Open finger intersects cube at '+name+': '+str(hit))
+    arrival={name:validate_arrival(g,cube,q,name) for name,q in (('hover',hover),('descend',down))}
     segment(g,cube,hover,down,'synchronous')
     ahead=list(hover);ahead[3]=down[3]
     segment(g,cube,hover,ahead,'axis4_first')
@@ -173,4 +231,6 @@ def validate_plan(g,plan,cube):
             'cube_size_mm':20,'orientation_known':cube.orientation_known,'geometry':'separate_convex_finger_hulls_with_slice_box_broadphase',
             'pose_checks':cube.checks-start_checks,'paths':['synchronous','axis4_first_then_remaining'],
             'sweep_checked':True,
-            'actual_motion_certified':False,'encoder_error_included':False}
+            'actual_motion_certified':False,'encoder_error_included':True,'arrival_tolerance_checks':arrival,
+            'encoder_error_scope':'arrival_gated_axes_only_not_dynamic_tracking',
+            'geometry_margin_mm':0,'calibration_error_certified':False}
