@@ -25,6 +25,7 @@ def roll_candidates(g,xy,tilt,orientation):
     reference=[0.,0.,0.,theta,0.,g.open_angle]
     tips,ts=g.tip_geometry(reference);t=ts['wan2'];R=[row[:3] for row in t[:3]];pivot=[t[i][3] for i in range(3)]
     local=[matvec(transpose(R),[v-o for v,o in zip(tips[k],pivot)]) for k in ('wan2','zhua')]
+    offset=g.compensation_xy(reference)
     target=[xy[0]+.013,xy[1]]
     yaw_limits=sorted(g.angle(1,c) for c in g.joints[0]['software_count_limits'])
     cache={}
@@ -32,8 +33,7 @@ def roll_candidates(g,xy,tilt,orientation):
         if roll not in cache:
             r=rotation(g.joints[4]['axis'],roll)
             pts=[[o+v for o,v in zip(pivot,matvec(R,matvec(r,p)))] for p in local]
-            delta=[pts[1][i]-pts[0][i] for i in range(2)];length=math.sqrt(dot(delta,delta))
-            offy=(pts[0][1]+pts[1][1])/2+delta[1]/length*g.pick['cube_offset_toward_moving_finger_mm']/1000
+            offy=(pts[0][1]+pts[1][1])/2+offset[1]
             direction=matvec(R,matvec(r,[0.,1.,0.]));rr=dot(target,target)-offy**2
             cache[roll]=(offy,direction,rr)
         offy,d,rr=cache[roll]

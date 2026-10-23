@@ -39,10 +39,18 @@ class Geometry:
     def alignment_midpoint(self,q):
         q=list(q);q[5]=self.open_angle;pts,t=self.tip_geometry(q)
         mid=[(a+b)/2 for a,b in zip(pts['wan2'],pts['zhua'])]
-        direction=[pts['zhua'][i]-pts['wan2'][i] for i in range(2)];length=norm(direction)
-        if length<1e-8:raise ValueError('Open jaw line has no horizontal projection')
-        for i in range(2):mid[i]+=direction[i]/length*self.pick['cube_offset_toward_moving_finger_mm']/1000
+        offset=self.compensation_xy(q)
+        for i in range(2):mid[i]+=offset[i]
         return mid
+    def compensation_xy(self,q):
+        # The empirical correction was measured with joint 5 at zero roll.
+        # Preserve that reference direction as the base turns; only the real
+        # fingertip geometry follows the commanded wrist roll.
+        reference=list(q);reference[4]=0.;reference[5]=self.open_angle
+        pts,_=self.tip_geometry(reference)
+        direction=[pts['zhua'][i]-pts['wan2'][i] for i in range(2)];length=norm(direction)
+        if length<1e-8:raise ValueError('Reference jaw line has no horizontal projection')
+        return [v/length*self.pick['cube_offset_toward_moving_finger_mm']/1000 for v in direction]
     def nominal_contact(self,q,orientation=None):
         t=self.transforms(q)['wan2'];axis=[t[0][1],t[1][1]];length=norm(axis)
         if length<1e-8:raise ValueError('Gripper across-axis has no horizontal projection')
@@ -95,6 +103,8 @@ class Geometry:
     def report(self,counts):
         q=self.angles(counts);mid,pts,low,t=self.metrics(q)
         return {'alignment_reference':'open_fingertip_midpoint',
+                'compensation_reference':'zero_roll_same_base_and_pitch',
+                'compensation_Base_xy_mm':[v*1000 for v in self.compensation_xy(q)],
                 'alignment_center_Base_mm':[v*1000 for v in self.alignment_midpoint(q)],
                 'gripper_midpoint_Base_mm':[v*1000 for v in mid],
                 'fixed_tip_center_Base_mm':[v*1000 for v in pts['wan2']],

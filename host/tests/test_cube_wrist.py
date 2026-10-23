@@ -30,6 +30,42 @@ class CubeWristTests(unittest.TestCase):
     def geometry(self,xy):
         n=self.plane['normal'];z=(self.plane['offset_mm']-n[0]*xy[0]*1000-n[1]*xy[1]*1000)/n[2]
         return Geometry(self.cfg['model'],self.cfg['pick'],z)
+    def test_empirical_offset_is_independent_of_wrist_roll(self):
+        g=self.geometry([.2696684,-.01245227])
+        for yaw in (-.4,0.,.4):
+            for tilt in (0,10,25,45):
+                ref=[yaw,0.,0.,math.radians(180-tilt),0.,g.open_angle]
+                tips,_=g.tip_geometry(ref)
+                delta=[tips['zhua'][i]-tips['wan2'][i] for i in range(2)]
+                length=math.hypot(*delta)
+                expected=[v/length*(-.045) for v in delta]
+                for roll in (-1.,-.5,0.,.5,1.):
+                    q=list(ref);q[4]=roll
+                    pts,_=g.tip_geometry(q);mid=[(pts['wan2'][i]+pts['zhua'][i])/2 for i in range(3)]
+                    aligned=g.alignment_midpoint(q)
+                    for i in range(2):self.assertAlmostEqual(aligned[i]-mid[i],expected[i],places=10)
+                    self.assertAlmostEqual(aligned[2],mid[2],places=10)
+                q=list(ref);q[4]=.9
+                self.assertGreater(math.dist(g.tip_geometry(q)[0]['wan2'],tips['wan2']),.005)
+    def test_reported_miss_scene_preserves_reference_offset(self):
+        xy=[.2696684,-.01245227];g=self.geometry(xy)
+        o=estimate(synthetic_found(31.98557,self.T,self.plane,False),self.T,self.plane)
+        p=g.plan(xy,self.start,o)
+        self.assertEqual(p['wrist_alignment']['status'],'aligned')
+        self.assertGreater(abs(p['wrist_alignment']['servo5_change_deg']),20)
+        self.assertLess(max(p['wrist_alignment']['stage_direction_errors_deg']),1)
+        for stage in ('hover','descend','close','lift'):
+            q=g.angles(p[stage]);ref=list(q);ref[4]=0.
+            self.assertEqual(g.compensation_xy(q),g.compensation_xy(ref))
+            self.assertLess(math.dist(g.report(p[stage])['alignment_center_Base_mm'][:2],[v*1000 for v in xy]),2)
+
+    def test_zero_roll_keeps_pre_fix_original_targets(self):
+        xy=[.2696684,-.01245227];g=self.geometry(xy)
+        p=g.build_stages(xy,g.angles(self.start),25,0.)
+        self.assertEqual(p['hover'],[2145,2625,2571,2712,2048,2389])
+        self.assertEqual(p['descend'],[2145,2766,2683,2458,2048,2389])
+        self.assertEqual(p['close'],[2145,2766,2683,2458,2048,2159])
+        self.assertEqual(p['lift'],[2145,2625,2571,2712,2048,2159])
     def test_two_normals_fuse_modulo_90_not_toward_diagonal(self):
         for yaw in (-89,-46,-45,-44,-15,0,30,44,45,46,89,179):
             found=synthetic_found(yaw,self.T,self.plane);o=estimate(found,self.T,self.plane)
@@ -70,14 +106,13 @@ class CubeWristTests(unittest.TestCase):
         self.assertEqual(p['wrist_alignment']['status'],'held_current')
         self.assertIn('alignment_failure',p['wrist_alignment'])
         for stage in ('hover','descend','close','lift'):self.assertEqual(p[stage],original[stage])
-    def test_previous_narrow_boundary_scene_uses_independent_stage_tilts(self):
-        # Same-pitch planning previously needed a narrow 13.2-degree pose.
-        # Independent elevated stages allow a lower grasp pitch and more overlap.
+    def test_previous_narrow_boundary_scene_retains_valid_stage_tilts(self):
+        # Changing the empirical reference can make one pitch reachable for
+        # both heights; independent selection need not produce different values.
         xy=[.2672202,.02377807];g=self.geometry(xy)
         o=estimate(synthetic_found(-38.1356,self.T,self.plane,False),self.T,self.plane)
         p=g.plan(xy,self.start,o);w=p['wrist_alignment']
         self.assertEqual(w['status'],'aligned')
-        self.assertNotEqual(p['stage_tilts_deg']['hover'],p['stage_tilts_deg']['descend'])
         self.assertLess(max(w['closed_finger_clearances_mm'].values()),19)
         self.assertGreater(abs(w['servo5_change_deg']),30)
         self.assertLess(max(w['stage_direction_errors_deg']),1)
@@ -94,7 +129,6 @@ class CubeWristTests(unittest.TestCase):
         p=g.plan(xy,self.start,o);w=p['wrist_alignment']
         self.assertEqual(w['status'],'aligned')
         self.assertGreater(abs(w['servo5_change_deg']),40)
-        self.assertNotEqual(p['stage_tilts_deg']['hover'],p['stage_tilts_deg']['descend'])
         self.assertEqual(p['stage_tilts_deg']['close'],p['stage_tilts_deg']['descend'])
         self.assertLess(max(w['stage_direction_errors_deg']),1)
         self.assertGreaterEqual(min(w['closed_finger_clearances_mm'].values()),0)
