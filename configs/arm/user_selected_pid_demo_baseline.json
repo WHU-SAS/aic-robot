@@ -13,7 +13,7 @@
       "acceleration": 5
     },
     "2": {
-      "P": 16,
+      "P": 48,
       "I": 24,
       "D": 160,
       "integral_limit": 48,
@@ -24,8 +24,8 @@
       "acceleration": 20
     },
     "3": {
-      "P": 10,
-      "I": 4,
+      "P": 40,
+      "I": 12,
       "D": 140,
       "integral_limit": 24,
       "startup": 4,
@@ -68,10 +68,10 @@
       "acceleration": 5
     }
   },
-  "adoption": "User optimized the servos and requested adopting their live settings on 2026-10-20. Read twice through K230 UART1/URT-2; all six model777, mode0, phase12 and EEPROM lock1. No PID, EEPROM, speed or acceleration writes performed during adoption.",
-  "verified_at": "2026-10-20T22:04:43.348881+08:00",
+  "adoption": "User froze the 2026-10-23 three-pose tuning result: axis2 P48/I24/D160/limit48, axis3 P40/I12/D140/limit24. Parameter writes were individually read back; axis2 limit56 trial was restored to48 before adoption. Other axes retain the previously adopted values.",
+  "verified_at": "2026-10-23T17:25:51+08:00",
   "tuning_policy": "Use this user-selected baseline in practice; make focused adjustments only when new problems appear.",
-  "changed_parameter_count": 2,
+  "changed_parameter_count": 3,
   "software_motion_defaults_provenance": "User adopted project-wide defaults; normal and neutral return both axes2/3/4=600/20, other axes=150/5. Updated 2026-10-11T17:05:36.715935+08:00",
   "requested_pid": {
     "1": {
@@ -81,14 +81,14 @@
       "integral_limit": 0
     },
     "2": {
-      "P": 16,
+      "P": 48,
       "I": 24,
       "D": 160,
       "integral_limit": 48
     },
     "3": {
-      "P": 10,
-      "I": 4,
+      "P": 40,
+      "I": 12,
       "D": 140,
       "integral_limit": 24
     },
@@ -147,16 +147,24 @@
   "pick_entry_status": "user_accepted_20261013",
   "latest_adoption_changes": [
     {
-      "id": 1,
+      "id": 2,
       "parameter": "P",
       "previous": 16,
-      "adopted": 24
+      "adopted": 48
     },
     {
-      "id": 5,
+      "id": 3,
       "parameter": "P",
+      "previous": 10,
+      "adopted": 40
+    },
+    {
+      "id": 3,
+      "parameter": "I",
       "previous": 4,
-      "adopted": 24
+      "adopted": 12
     }
-  ]
+  ],
+  "adopted_at": "2026-10-23T17:28:01.367471+08:00",
+  "verification_scope": "Latest full six-axis read: repeated trial 20261023_172336_489046; final axis2 limit48 restoration separately double-read at17:25:51. No motion during adoption."
 }
