@@ -15,6 +15,7 @@ import glob
 import hashlib
 import json
 import subprocess
+import time
 
 from host.project_paths import ROOT
 from host.transport.download_calibration import CameraLink, PORT
@@ -58,8 +59,9 @@ finally:
 ''' % (remote, count, remote, delay_ms, delay_ms)
 
 
-def download(link, remote):
-    script = '''import binascii,time,uhashlib
+def download(link, remote, progress=None):
+    script = '''import binascii,time,uhashlib,os
+print('SIZE '+str(os.stat(%r)[6]))
 h=uhashlib.sha256();offset=0
 with open(%r,'rb') as f:
  while True:
@@ -70,18 +72,35 @@ with open(%r,'rb') as f:
   offset+=len(chunk);time.sleep_ms(15)
 print('HASH '+str(offset)+' '+binascii.hexlify(h.digest()).decode())
 print('EXPORT_DONE')
-''' % remote
-    data = bytearray(); expected = None; size = None
+''' % (remote, remote)
+    data = bytearray(); expected = None; size = None; total = None
     for line in link.execute(script, timeout=90):
-        if line.startswith(b'DATA '):
+        if line.startswith(b'SIZE '):
+            total = int(line[5:])
+            if progress is not None: progress(0, total)
+        elif line.startswith(b'DATA '):
             _, offset, encoded = line.split(b' ', 2)
             if int(offset) != len(data): raise RuntimeError('Image chunk offset mismatch')
             data.extend(base64.b64decode(encoded, validate=True))
+            if progress is not None: progress(len(data), total)
         elif line.startswith(b'HASH '):
             _, value, digest = line.split(); size = int(value); expected = digest.decode()
     digest = hashlib.sha256(data).hexdigest()
-    if expected != digest or size != len(data): raise RuntimeError('Image hash/size mismatch')
+    if expected != digest or size != len(data) or total != size:
+        raise RuntimeError('Image hash/size mismatch')
     return bytes(data), digest
+
+
+def download_progress(number, count):
+    last = [-float('inf')]
+    def update(received, total):
+        now = time.monotonic()
+        if now - last[0] < 3 and received != total: return
+        last[0] = now
+        if total:
+            print('下载 %d/%d：%d/%d KB（%.0f%%）' %
+                  (number, count, received // 1024, total // 1024, received * 100 / total), flush=True)
+    return update
 
 
 def main(argv=None):
@@ -125,12 +144,20 @@ def main(argv=None):
                     print('已拍%d/%d' % (row['number'], args.count), flush=True)
                 else: print(line, flush=True)
             if len(result['frames']) != args.count: raise RuntimeError('Capture incomplete; saved SD files retained')
+            print('拍摄完成，开始下载 %d 张原图；下载结束后恢复语音。' % args.count, flush=True)
+            download_started = time.monotonic()
+            downloaded_bytes = 0
             for row in result['frames']:
-                data, digest = download(link, row['remote'])
+                data, digest = download(link, row['remote'], download_progress(row['number'], args.count))
                 target = output / ('frame_%02d.jpg' % row['number'])
                 if target.exists(): raise RuntimeError('Refusing local image overwrite')
                 temp = target.with_suffix('.partial'); temp.write_bytes(data); temp.replace(target)
                 row.update(local=str(target), sha256=digest, bytes=len(data), quality_review='pending')
+                downloaded_bytes += len(data)
+                elapsed = time.monotonic() - download_started
+                remaining = elapsed / row['number'] * (args.count - row['number'])
+                print('已下载 %d/%d，平均 %.1f KB/s，预计剩余 %.0f 秒' %
+                      (row['number'], args.count, downloaded_bytes / max(elapsed, .001) / 1024, remaining), flush=True)
             result['status'] = 'captured_and_downloaded'
     except BaseException as exc:
         result.update(status='failed', error=repr(exc))
@@ -138,6 +165,7 @@ def main(argv=None):
     finally:
         if link is not None:
             try:
+                print('下载/采集阶段已结束，正在恢复语音监听……', flush=True)
                 restore = restore_listener(link)
                 (output / 'listener_log.txt').write_text('\n'.join(restore) + '\n')
                 result['listener_restored'] = True

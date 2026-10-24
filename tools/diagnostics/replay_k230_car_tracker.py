@@ -23,6 +23,11 @@ from host.transport.download_calibration import CameraLink, PORT
 def build_script(config, geometry, paths):
     sources = [(ROOT / p).read_text() for p in (
         'device/k230/car/ground_projection.py', 'device/k230/car/blue_tracker.py')]
+    # This transient script execs code in __main__, outside a Python package.
+    # CanMV raises KeyError (not ImportError) for the relative import there.
+    # Use the existing release's flat pose module before executing the class.
+    sources[0] = sources[0].replace('from ..pick.pose import undistort, project',
+                                    'from pose import undistort, project', 1)
     model = {'K': geometry.K, 'D': geometry.D, 'T': geometry.T,
              'plane': {'normal': geometry.normal, 'offset_mm': geometry.offset}}
     return '''import sys,json,time,gc,image

@@ -1,7 +1,11 @@
 import ast
+import base64
+import hashlib
 import unittest
 from device.k230.car.ground_projection import GroundProjection
-from tools.diagnostics.capture_car_far import build_script
+from tools.diagnostics.capture_car_far import build_script, download
+from host.car.distance_demo import visible_table_path
+from host.car.runtime import load
 
 
 class FarCaptureTests(unittest.TestCase):
@@ -33,6 +37,34 @@ class FarCaptureTests(unittest.TestCase):
         self.assertIn(')<2000', script)
         for forbidden in ('UART(', 'run_pick', 'run_ready', 'DRIVE', 'STARTUP='):
             self.assertNotIn(forbidden, script)
+
+    def test_download_reports_progress_and_verifies_size_and_hash(self):
+        content = b'opaque JPEG transfer payload'
+        class Link:
+            def __init__(self, size_delta=0): self.size_delta = size_delta
+            def execute(self, script, timeout):
+                ast.parse(script)
+                yield ('SIZE %d' % (len(content) + self.size_delta)).encode()
+                yield b'DATA 0 ' + base64.b64encode(content)
+                yield ('HASH %d %s' % (len(content), hashlib.sha256(content).hexdigest())).encode()
+        progress = []
+        actual, digest = download(Link(), '/sdcard/car_far/test/frame_01.jpg',
+                                  lambda received, total: progress.append((received, total)))
+        self.assertEqual(actual, content)
+        self.assertEqual(digest, hashlib.sha256(content).hexdigest())
+        self.assertEqual(progress, [(0, len(content)), (len(content), len(content))])
+        with self.assertRaises(RuntimeError):
+            download(Link(1), '/sdcard/car_far/test/frame_01.jpg')
+
+    def test_offscreen_camera_foot_is_clipped_without_huge_distortion_coordinates(self):
+        _, _, geometry = load()
+        bottom = geometry.estimated_bottom_from_image_center([708, 285])
+        points, outside = visible_table_path(geometry, bottom, geometry.camera_table_foot(), 1280, 960)
+        self.assertTrue(outside)
+        self.assertGreater(len(points), 2)
+        for x, y in points:
+            self.assertTrue(-.001 <= x <= 1279.001 and -.001 <= y <= 959.001)
+        self.assertAlmostEqual(points[0][1], 959)
 
 
 if __name__ == '__main__': unittest.main()
