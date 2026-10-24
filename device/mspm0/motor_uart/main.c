@@ -10,9 +10,9 @@ static RemoteControl control;
 static volatile int32_t pending_a, pending_b;
 static volatile uint32_t elapsed_ms, encoder_a_total, encoder_b_total;
 
-static void motor_output(bool enabled, uint16_t pwm)
+static void motor_output(bool enabled, int16_t left, int16_t right)
 {
-    if (!enabled || pwm == 0) {
+    if (!enabled || (!left && !right)) {
         DL_GPIO_clearPins(STBY_PORT, STBY_stby_PIN);
         DL_Timer_setCaptureCompareValue(PWM_0_INST, 0, GPIO_PWM_0_C0_IDX);
         DL_Timer_setCaptureCompareValue(PWM_0_INST, 0, GPIO_PWM_0_C1_IDX);
@@ -20,13 +20,17 @@ static void motor_output(bool enabled, uint16_t pwm)
         DL_GPIO_clearPins(BIN_PORT, BIN_BIN1_PIN | BIN_BIN2_PIN);
         return;
     }
-    if (pwm > REMOTE_PWM_TARGET) pwm = REMOTE_PWM_TARGET;
-    DL_GPIO_clearPins(AIN_PORT, MOTOR_A_REVERSE ? AIN_AIN1_PIN : AIN_AIN2_PIN);
-    DL_GPIO_setPins(AIN_PORT, MOTOR_A_REVERSE ? AIN_AIN2_PIN : AIN_AIN1_PIN);
-    DL_GPIO_clearPins(BIN_PORT, MOTOR_B_REVERSE ? BIN_BIN1_PIN : BIN_BIN2_PIN);
-    DL_GPIO_setPins(BIN_PORT, MOTOR_B_REVERSE ? BIN_BIN2_PIN : BIN_BIN1_PIN);
-    DL_Timer_setCaptureCompareValue(PWM_0_INST, pwm, GPIO_PWM_0_C0_IDX);
-    DL_Timer_setCaptureCompareValue(PWM_0_INST, pwm, GPIO_PWM_0_C1_IDX);
+    bool reverse_a = (left < 0) != (MOTOR_A_REVERSE != 0);
+    bool reverse_b = (right < 0) != (MOTOR_B_REVERSE != 0);
+    DL_GPIO_clearPins(AIN_PORT, AIN_AIN1_PIN | AIN_AIN2_PIN);
+    DL_GPIO_clearPins(BIN_PORT, BIN_BIN1_PIN | BIN_BIN2_PIN);
+    if (left) DL_GPIO_setPins(AIN_PORT, reverse_a ? AIN_AIN2_PIN : AIN_AIN1_PIN);
+    if (right) DL_GPIO_setPins(BIN_PORT, reverse_b ? BIN_BIN2_PIN : BIN_BIN1_PIN);
+    uint16_t a = remote_magnitude(left), b = remote_magnitude(right);
+    if (a > REMOTE_PWM_TARGET) a = REMOTE_PWM_TARGET;
+    if (b > REMOTE_PWM_TARGET) b = REMOTE_PWM_TARGET;
+    DL_Timer_setCaptureCompareValue(PWM_0_INST, a, GPIO_PWM_0_C0_IDX);
+    DL_Timer_setCaptureCompareValue(PWM_0_INST, b, GPIO_PWM_0_C1_IDX);
     DL_GPIO_setPins(STBY_PORT, STBY_stby_PIN);
 }
 
@@ -65,7 +69,7 @@ void TIMER_0_INST_IRQHandler(void)
     pending_a = pending_b = 0;
     elapsed_ms += 10;
     remote_step(&control, DL_GPIO_readPins(KEY_PORT, KEY_key_PIN) == 0);
-    motor_output(control.running, control.pwm);
+    motor_output(control.running, control.left_pwm, control.right_pwm);
 }
 
 static void init_uart1(void)
@@ -103,20 +107,23 @@ static void put_string(UART_Regs *uart, const char *text)
 static void respond(const MotorParser *request)
 {
     char body[160], frame[180];
-    static const char *const names[] = {"STATUS", "START", "STOP", "HB"};
+    static const char *const names[] = {"STATUS", "START", "STOP", "HB", "DRIVE"};
     RemoteControl snapshot;
     uint32_t ms, a, b;
     __disable_irq();
-    MotorResult result = remote_command(&control, request->sequence, request->command);
-    motor_output(control.running, control.pwm); /* STOP is applied before ACK. */
+    MotorResult result = remote_request(&control, request);
+    motor_output(control.running, control.left_pwm, control.right_pwm); /* STOP before ACK. */
     snapshot = control;
     ms = elapsed_ms; a = encoder_a_total; b = encoder_b_total;
     __enable_irq();
-    snprintf(body, sizeof(body), "R,%08lX,%s,%u,%lu,%u,%u,%ld,%ld,%u,%08lX",
+    snprintf(body, sizeof(body), "R,%08lX,%s,%u,%lu,%u,%u,%ld,%ld,%u,%08lX,2,%d,%d,%d,%d,%u",
         (unsigned long)request->sequence, names[request->command], (unsigned)result,
         (unsigned long)ms, (unsigned)snapshot.running, (unsigned)snapshot.pwm,
         (long)(int32_t)a, (long)(int32_t)b, (unsigned)snapshot.stop_reason,
-        (unsigned long)snapshot.last_sequence);
+        (unsigned long)snapshot.last_sequence,
+        (int)snapshot.left_pwm, (int)snapshot.right_pwm,
+        (int)snapshot.target_left, (int)snapshot.target_right,
+        snapshot.running ? (unsigned)(snapshot.duration_ticks - snapshot.run_ticks) * 10U : 0U);
     snprintf(frame, sizeof(frame), "@%s,%04X\n", body, (unsigned)motor_crc(body, strlen(body)));
     put_string(UART1, frame);
 }
@@ -127,7 +134,7 @@ int main(void)
     init_uart1();
     control.button_candidate = control.button_stable =
         DL_GPIO_readPins(KEY_PORT, KEY_key_PIN) == 0;
-    motor_output(false, 0);
+    motor_output(false, 0, 0);
     DL_Timer_setCaptureCompareAction(PWM_0_INST,
         DL_TIMER_CC_ZACT_CCP_HIGH | DL_TIMER_CC_CUACT_CCP_LOW, GPIO_PWM_0_C0_IDX);
     DL_Timer_setCaptureCompareAction(PWM_0_INST,
@@ -141,7 +148,7 @@ int main(void)
     NVIC_EnableIRQ(TIMER_0_INST_INT_IRQN);
     DL_Timer_startCounter(TIMER_0_INST);
     __enable_irq();
-    put_string(UART0, "AIC_MOTOR_UART_READY v1 115200 PWM=0 STBY=0\r\n");
+    put_string(UART0, "AIC_MOTOR_UART_READY v2 115200 PWM=0 STBY=0\r\n");
     for (;;) {
         if (!DL_UART_Main_isRXFIFOEmpty(UART1) &&
             motor_feed(&parser, DL_UART_Main_receiveData(UART1))) respond(&parser);

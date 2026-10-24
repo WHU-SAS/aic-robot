@@ -85,5 +85,52 @@ int main(void)
     assert(remote_command(&wrap, 0xFFFFFFFE, CMD_STOP) == RES_OK);
     assert(remote_command(&wrap, 0xFFFFFFFF, CMD_START) == RES_OK);
     assert(remote_command(&wrap, 0, CMD_STOP) == RES_OK && !wrap.running);
+    /* Independent, signed wheels; exact payload replay; bounded pulses. */
+    RemoteControl drive = {0};
+    char motion[64];
+    frame(motion, 1, "DRIVE,-800,400,300");
+    assert(feed(&p, motion) == 1 && p.command == CMD_DRIVE);
+    assert(p.left_pwm == -800 && p.right_pwm == 400 && p.duration_ticks == 30);
+    assert(remote_request(&drive, &p) == RES_OK);
+    for (unsigned n = 0; n < 20; ++n) remote_step(&drive, false);
+    assert(drive.left_pwm == -640 && drive.right_pwm == 400 && drive.pwm == 640);
+    assert(remote_request(&drive, &p) == RES_DUPLICATE && drive.run_ticks == 20);
+    p.right_pwm = 401;
+    assert(remote_request(&drive, &p) == RES_STALE && drive.target_right == 400);
+    p.right_pwm = 400; p.sequence = 2;
+    assert(remote_request(&drive, &p) == RES_BUSY && drive.run_ticks == 20);
+    for (unsigned n = 20; n < 30; ++n) remote_step(&drive, false);
+    assert(!drive.running && drive.stop_reason == 5 && !drive.left_pwm && !drive.right_pwm);
+    assert(remote_command(&drive, 3, CMD_HEARTBEAT) == RES_OK && !drive.running);
+    frame(motion, 4, "DRIVE,0,-1600,2000");
+    assert(feed(&p, motion) == 1 && remote_request(&drive, &p) == RES_OK);
+    for (unsigned n = 0; n < 100; ++n) remote_step(&drive, false);
+    assert(!drive.running && drive.stop_reason == 4 && !drive.right_pwm);
+    frame(motion, 5, "DRIVE,500,0,1000");
+    assert(feed(&p, motion) == 1 && remote_request(&drive, &p) == RES_OK);
+    for (unsigned n = 0; n < 10; ++n) remote_step(&drive, false);
+    assert(drive.left_pwm == 320 && !drive.right_pwm);
+    frame(motion, 6, "DRIVE,0,0,10");
+    assert(feed(&p, motion) == 1 && remote_request(&drive, &p) == RES_OK);
+    assert(!drive.running && !drive.left_pwm && !drive.right_pwm && drive.stop_reason == 1);
+    const char *bad[] = {"DRIVE,1601,0,100", "DRIVE,-1601,0,100", "DRIVE,1,1,0",
+        "DRIVE,1,1,5001", "DRIVE,1,1,11", "DRIVE,,1,100", "DRIVE,1,1,100,1",
+        "DRIVE,+1,1,100", "DRIVE,1,1,-100", "DRIVE,1,1,100x"};
+    for (unsigned n = 0; n < sizeof(bad)/sizeof(bad[0]); ++n) {
+        frame(motion, 7, bad[n]);
+        assert(feed(&p, motion) == 0);
+    }
+    frame(motion, 7, "DRIVE,-1600,1600,5000");
+    assert(feed(&p, motion) == 1 && remote_request(&drive, &p) == RES_OK);
+    for (unsigned n = 0; n < 500; ++n) {
+        if (n % 20 == 0) remote_command(&drive, 100+n, CMD_HEARTBEAT);
+        remote_step(&drive, false);
+    }
+    assert(!drive.running && drive.stop_reason == 3);
+    frame(motion, 1000, "DRIVE,-500,-500,1000");
+    assert(feed(&p, motion) == 1 && remote_request(&drive, &p) == RES_OK);
+    for (unsigned n = 0; n < 3; ++n) remote_step(&drive, true);
+    assert(!drive.running && drive.stop_reason == 2 && !drive.left_pwm && !drive.right_pwm);
+    assert(remote_request(&drive, &p) == RES_DUPLICATE && !drive.running);
     puts("PASS: noise/CRC/framing, replay, ramp, stop, watchdog, deadline, B21, wrap");
 }

@@ -3,6 +3,7 @@
 import argparse
 import ast
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import json
 from pathlib import Path
 import struct
@@ -22,21 +23,34 @@ def main():
     parser.add_argument('--on-ground', action='store_true', help='Confirm cleared ground path, arm ready pose, and observer present')
     parser.add_argument('--button', action='store_true', help='One start then manually press B21; requires --execute --wheels-lifted')
     parser.add_argument('--stop', action='store_true', help='Send STOP and confirm zero output')
+    parser.add_argument('--drive', nargs=3, type=int, metavar=('LEFT_PWM', 'RIGHT_PWM', 'DURATION_MS'),
+                        help='One signed independent-wheel pulse; requires --execute and declared setup')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
-    if args.execute and (args.stop or not (args.wheels_lifted or args.forward_once and args.on_ground)):
-        parser.error('--execute requires --wheels-lifted, or --forward-once --on-ground; cannot combine with --stop')
-    if args.on_ground and (not args.forward_once or not args.execute or args.wheels_lifted):
-        parser.error('--on-ground only applies to --execute --forward-once without --wheels-lifted')
+    if sum((bool(args.forward_once), bool(args.button), bool(args.stop), args.drive is not None)) > 1:
+        parser.error('choose one of --forward-once, --button, --stop, or --drive')
+    ground_motion = args.forward_once or args.drive is not None
+    if args.execute and (args.stop or not (args.wheels_lifted or ground_motion and args.on_ground)):
+        parser.error('--execute requires --wheels-lifted or an explicit pulse with --on-ground; cannot combine with --stop')
+    if args.on_ground and (not ground_motion or not args.execute or args.wheels_lifted):
+        parser.error('--on-ground requires --execute with --forward-once or --drive, without --wheels-lifted')
     if args.forward_once and (not args.execute or args.button):
         parser.error('--forward-once requires --execute and cannot combine with --button')
     if args.button and not args.execute:
         parser.error('--button requires --execute --wheels-lifted')
-    mode = 'forward' if args.forward_once else 'button' if args.button else 'bench' if args.execute else 'stop' if args.stop else 'status'
-    out = args.output or ROOT/'data/logs'/datetime.now().strftime('k230_motor_uart_%Y%m%d_%H%M%S_%f')
+    if args.drive is not None:
+        if not args.execute:
+            parser.error('--drive requires --execute')
+        left, right, duration = args.drive
+        if max(abs(left), abs(right)) > 1600 or not 10 <= duration <= 5000 or duration % 10:
+            parser.error('--drive PWM must be within +/-1600 and duration 10..5000 ms in 10 ms steps')
+    mode = 'drive' if args.drive is not None else 'forward' if args.forward_once else 'button' if args.button else 'bench' if args.execute else 'stop' if args.stop else 'status'
+    out = args.output or ROOT/'data/logs'/datetime.now(ZoneInfo('Asia/Shanghai')).strftime('k230_motor_uart_%Y%m%d_%H%M%S_%f')
     out.mkdir(parents=True, exist_ok=True)
     source = (ROOT/'device/k230/diagnostics/k230_motor_uart.py').read_text()
     source = source.replace('MODE = "status"', 'MODE = ' + repr(mode), 1)
+    if args.drive is not None:
+        source = source.replace('DRIVE = None', 'DRIVE = ' + repr(tuple(args.drive)), 1)
     script = ('try:\n exec(' + repr(source) + ')\n'
               'except BaseException as exc:\n import sys\n sys.print_exception(exc)\n'
               'finally:\n print("EXPORT_DONE")\n')
@@ -47,6 +61,8 @@ def main():
     result['setup'] = 'on_ground' if args.on_ground else 'wheels_lifted' if args.wheels_lifted else 'read_only_or_stop'
     if mode == 'forward':
         result['policy']['requested_forward_duration_ms'] = 1000
+    if mode == 'drive':
+        result['policy']['requested_drive'] = args.drive
     link, lines = None, []
     start = time.monotonic()
     try:
@@ -63,7 +79,7 @@ def main():
                 result['checks'].append(line[len('MOTOR_CHECK PASS '):])
         expected = {'bench': 'MOTOR_BENCH_PASS', 'status': 'MOTOR_STATUS_PASS 20/20',
                     'stop': 'MOTOR_STOP_PASS', 'button': 'MOTOR_BUTTON_PASS',
-                    'forward': 'MOTOR_FORWARD_PASS'}[mode]
+                    'forward': 'MOTOR_FORWARD_PASS', 'drive': 'MOTOR_DRIVE_PASS'}[mode]
         if expected not in lines:
             raise RuntimeError('Board did not complete ' + mode + '; see board_log.txt')
         if mode == 'forward':

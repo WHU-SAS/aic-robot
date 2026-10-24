@@ -4,6 +4,7 @@ from machine import UART, FPIOA
 import time
 
 MODE = "status"  # moving modes require host --execute --wheels-lifted
+DRIVE = None  # Explicit (left_pwm, right_pwm, duration_ms), never a default move.
 
 def crc16(data):
     crc = 0xFFFF
@@ -13,8 +14,18 @@ def crc16(data):
             crc = (((crc << 1) ^ 0x1021) if crc & 0x8000 else (crc << 1)) & 0xFFFF
     return crc
 
-def encode(sequence, command):
-    body = ('M,%08X,%s' % (sequence, command)).encode()
+def encode(sequence, command, drive=None):
+    suffix = command
+    if command == 'DRIVE':
+        if drive is None or len(drive) != 3 or any(type(v) is not int for v in drive):
+            raise ValueError('DRIVE requires integer left/right PWM and duration ms')
+        left, right, duration = drive
+        if max(abs(left), abs(right)) > 1600 or not 10 <= duration <= 5000 or duration % 10:
+            raise ValueError('DRIVE PWM must be within +/-1600; duration 10..5000 ms in 10 ms steps')
+        suffix += ',%d,%d,%d' % (left, right, duration)
+    elif drive is not None:
+        raise ValueError('Wheel parameters require DRIVE')
+    body = ('M,%08X,%s' % (sequence, suffix)).encode()
     return b'@' + body + (',%04X\n' % crc16(body)).encode()
 
 def decode(raw):
@@ -26,7 +37,7 @@ def decode(raw):
     if len(checksum) != 4 or int(checksum, 16) != crc16(body):
         raise ValueError('Response CRC mismatch')
     parts = body.decode().split(',')
-    if len(parts) != 11 or parts[0] != 'R':
+    if len(parts) not in (11, 17) or parts[0] != 'R':
         raise ValueError('Response fields invalid')
     state = {'seq': int(parts[1], 16), 'command': parts[2], 'result': int(parts[3]),
              'ms': int(parts[4]), 'run': int(parts[5]), 'pwm': int(parts[6]),
@@ -34,6 +45,14 @@ def decode(raw):
              'reason': int(parts[9]), 'last_seq': int(parts[10], 16)}
     if state['run'] not in (0, 1) or not 0 <= state['pwm'] <= 1600:
         raise ValueError('Invalid state range')
+    state['protocol_version'] = 1
+    if len(parts) == 17:
+        state.update(protocol_version=int(parts[11]), left_pwm=int(parts[12]),
+                     right_pwm=int(parts[13]), target_left=int(parts[14]),
+                     target_right=int(parts[15]), remaining_ms=int(parts[16]))
+        if state['protocol_version'] != 2 or not 0 <= state['remaining_ms'] <= 5000 or any(
+                abs(state[k]) > 1600 for k in ('left_pwm', 'right_pwm', 'target_left', 'target_right')):
+            raise ValueError('Invalid independent-wheel state')
     return state
 
 class MotorLink:
@@ -47,13 +66,13 @@ class MotorLink:
         self.buffer = b''
         self.last = None
 
-    def request(self, command, replay=None):
+    def request(self, command, replay=None, drive=None):
         if replay is None:
             self.sequence = (self.sequence + 1) & 0xFFFFFFFF
             sequence = self.sequence
         else:
             sequence = replay
-        tx = encode(sequence, command)
+        tx = encode(sequence, command, drive)
         if self.uart.write(tx) != len(tx):
             raise RuntimeError('Short UART write')
         started = time.ticks_ms()
@@ -81,11 +100,18 @@ class MotorLink:
         self.sequence = state['last_seq']
         return state
 
-    def expect(self, command, result=0, replay=None):
-        state = self.request(command, replay)
+    def expect(self, command, result=0, replay=None, drive=None):
+        state = self.request(command, replay, drive)
         if state['result'] != result:
             raise RuntimeError('Unexpected command result: ' + str(state))
         return state
+
+    def drive(self, left_pwm, right_pwm, duration_ms):
+        # Old firmware provides no capability marker: reject before any DRIVE
+        # write instead of assuming an unacknowledged command is harmless.
+        if self.last is None or self.last.get('protocol_version') != 2:
+            raise RuntimeError('Independent-wheel control requires MSPM0 protocol v2; sync first')
+        return self.expect('DRIVE', drive=(left_pwm, right_pwm, duration_ms))
 
     def stopped(self, reason):
         state = self.expect('STATUS')
@@ -226,6 +252,35 @@ def run_forward_once(link):
         time.sleep_ms(100)
     print('MOTOR_FORWARD_PASS')
 
+def run_drive_once(link, drive):
+    encode(0, 'DRIVE', drive)  # Validate all parameters before sending commands.
+    if link.last is None or link.last.get('protocol_version') != 2:
+        raise RuntimeError('Independent-wheel control requires MSPM0 protocol v2')
+    link.expect('STOP')
+    link.stopped(1)
+    start = link.drive(*drive)
+    left, right, duration = drive
+    if not left and not right:
+        link.stopped(1)
+        print('MOTOR_DRIVE_PASS')
+        return
+    if not start['run']:
+        raise RuntimeError('DRIVE not applied')
+    expected_reason = 3 if duration == 5000 else 5
+    started = time.ticks_ms()
+    while time.ticks_diff(time.ticks_ms(), started) < duration + 1000:
+        state = link.expect('HB')
+        if not state['run']:
+            if state['reason'] != expected_reason or state['pwm']:
+                raise RuntimeError('Unexpected DRIVE stop: ' + str(state))
+            break
+        time.sleep_ms(100)
+    else:
+        raise RuntimeError('DRIVE did not stop at its requested duration')
+    link.stopped(expected_reason)
+    print('MOTOR_CHECK PASS independent_wheel_pulse', drive)
+    print('MOTOR_DRIVE_PASS')
+
 def main():
     link = MotorLink()
     failed = False
@@ -237,6 +292,8 @@ def main():
             run_forward_once(link)
         elif MODE == 'button':
             run_button(link)
+        elif MODE == 'drive':
+            run_drive_once(link, DRIVE)
         elif MODE == 'stop':
             link.expect('STOP')
             link.stopped(1)
@@ -252,7 +309,7 @@ def main():
         failed = True
         raise
     finally:
-        if MODE in ('bench', 'button', 'forward') and failed:
+        if MODE in ('bench', 'button', 'forward', 'drive') and failed:
             try:
                 link.expect('STOP')
             except BaseException as exc:

@@ -86,3 +86,35 @@ class InteropTests(unittest.TestCase):
             frame = b'@'+valid+(',%04X\n'%board.crc16(valid)).encode()
             self.assertEqual(board.decode(b'\x00noise'+frame)['run'], 0)
             with self.assertRaises(ValueError): board.decode(frame[:-5]+b'0000\n')
+            self.assertEqual(board.decode(frame)['protocol_version'], 1)
+            native.bridge_reset()
+            with patch('builtins.print'):
+                link = board.MotorLink()
+                link.sync()
+                self.assertEqual(link.last['protocol_version'], 2)
+                for left, right in ((800, 800), (-800, -800), (-800, 800),
+                                    (800, -800), (0, 800), (800, 0)):
+                    before = link.drive(left, right, 400)
+                    clock.sleep_ms(200)
+                    state = link.expect('HB')
+                    self.assertEqual(state['left_pwm'], min(abs(left), 640) * (1 if left >= 0 else -1))
+                    self.assertEqual(state['right_pwm'], min(abs(right), 640) * (1 if right >= 0 else -1))
+                    self.assertEqual(state['remaining_ms'], 200)
+                    clock.sleep_ms(200)
+                    after = link.expect('STATUS')
+                    self.assertEqual((after['run'], after['pwm'], after['reason']), (0, 0, 5))
+                    self.assertEqual(after['left_pwm'], 0)
+                    self.assertEqual(after['right_pwm'], 0)
+                    a = after['encoder_a'] - before['encoder_a']
+                    b = after['encoder_b'] - before['encoder_b']
+                    self.assertEqual((a > 0) - (a < 0), (left > 0) - (left < 0))
+                    self.assertEqual((b > 0) - (b < 0), (right < 0) - (right > 0))
+                    self.assertFalse(link.expect('HB')['run'])
+                board.run_drive_once(link, (-400, 400, 300))
+                board.run_drive_once(link, (0, 0, 10))
+                link.last['protocol_version'] = 1
+                with self.assertRaisesRegex(RuntimeError, 'protocol v2'):
+                    link.drive(100, 100, 100)
+                for args in ((1601, 0, 100), (0, -1601, 100), (1, 1, 11), (1, 1, 5001)):
+                    with self.assertRaises(ValueError): board.encode(1, 'DRIVE', args)
+                link.close()
