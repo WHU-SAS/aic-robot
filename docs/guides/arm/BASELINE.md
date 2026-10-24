@@ -1,6 +1,6 @@
 # 当前舵机基线
 
-2026-10-23用户确认暂定本版，结束本轮PID调整：2号P48/I24/D160/积分限幅48，3号P40/I12/D140/积分限幅24。调参写入已分别回读确认，2号限幅56试验已恢复48。随后按用户要求仅将4号P从4改为20做对照，已写入并双读确认；其余参数及速度/加速度不变。
+以配置文件为准，参数调整由用户决定。当前值如下：
 
 | 舵机 | P | I | D | 积分限幅 | 最小启动力 | 死区26/27 | 速度/加速度 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -13,6 +13,6 @@
 
 4号P20是当前对照设置，尚未验证能否改善下探动态；此前发现的多轴行程协调问题仍待处理。
 
-以 `configs/arm/user_selected_pid_demo_baseline.json` 和 `motion_defaults.json` 为准。程序只核对已保存参数，调整由用户决定。正常动作与另行回中立使用相同运动配置；抓取结束不自动回中立。
+以 `configs/arm/user_selected_pid_demo_baseline.json` 和 `motion_defaults.json` 为准。PC入口可核对已保存参数；独立语音入口沿用舵机当前值，不读写PID。正常动作与另行回中立使用相同运动配置；抓取结束不自动回中立。
 
-运行内外参由 `configs/vision/blue_cube.json` 指定，来源见 `configs/vision/runtime/provenance.json`。快照中的 `intrinsics_file` 和配置中的 `inherited_geometry_source_sha256` 是历史来源记录，不是当前加载路径或当前代码哈希。
+正式抓取内外参由 `configs/vision/trials/fixed_tip_top_20261022.json` 指定，第0版使用 `blue_cube.json`；说明见[视觉模块](../vision.md)。配置中的来源路径/哈希是历史记录，不是当前代码或加载位置。
