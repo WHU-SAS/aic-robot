@@ -19,9 +19,9 @@ from host.transport.download_calibration import CameraLink, PORT
 from tools.diagnostics.replay_k230_car_tracker import restore_listener
 
 
-def build_script(config, geometry, duration_ms, interval_ms):
+def build_script(config, geometry, duration_ms, interval_ms, record_directory=None):
     paths = ['device/k230/car/ground_projection.py', 'device/k230/car/blue_tracker.py',
-             'device/k230/car/live_preview.py']
+             'device/k230/car/live_recording.py', 'device/k230/car/live_preview.py']
     sources = [(ROOT / p).read_text() for p in paths]
     sources[0] = sources[0].replace('from ..pick.pose import undistort, project',
                                   'from pose import undistort, project', 1)
@@ -32,11 +32,11 @@ try:
  with open('/sdcard/aic/pick/current.json') as f:release=json.load(f)['release']
  sys.path.insert(0,release)
  for source in %r:exec(source,globals())
- run_live(%r,%r,%d,%d)
+ run_live(%r,%r,%d,%d,%r)
 except BaseException as exc:
  sys.print_exception(exc)
 finally:print('EXPORT_DONE')
-''' % (sources, config['tracking'], model, duration_ms, interval_ms)
+''' % (sources, config['tracking'], model, duration_ms, interval_ms, record_directory)
 
 
 def read_preview(link):
@@ -81,6 +81,7 @@ def main(argv=None):
     parser.add_argument('--port', default=PORT)
     parser.add_argument('--http-port', type=int, default=0)
     parser.add_argument('--no-browser', action='store_true')
+    parser.add_argument('--no-record', action='store_true', help='Explicitly disable SD demonstration recording')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args(argv)
     if not 1 <= args.duration <= 1800: parser.error('--duration must be 1..1800 seconds')
@@ -91,12 +92,14 @@ def main(argv=None):
     output = args.output or ROOT / 'data/car/live_tracking' / stamp
     output.mkdir(parents=True, exist_ok=True)
     if (output / 'result.json').exists(): parser.error('Choose a new output directory')
-    source = build_script(config, geometry, args.duration * 1000, args.interval_ms)
+    record_directory = None if args.no_record else '/sdcard/car_live/' + stamp
+    source = build_script(config, geometry, args.duration * 1000, args.interval_ms, record_directory)
     (output / 'board_script.py').write_text(source)
     (output / 'tracking_config.json').write_text(json.dumps(config['tracking'], indent=2) + '\n')
     result = {'status': 'built_no_hardware_access', 'motion_performed': False,
         'duration_requested_s': args.duration, 'listener_restored': False,
-        'observations': 0, 'preview_frames': 0, 'state_counts': {}, 'state_transitions': []}
+        'observations': 0, 'preview_frames': 0, 'state_counts': {}, 'state_transitions': [],
+        'SD_recording_directory': record_directory, 'recording_format': 'JPEG sequence; export to video on PC'}
     link = None; viewer = None; last_jpeg = None
     native_done = False; old_status = None; native_ready = False
     started = time.monotonic(); last_preview = started; last_observation = started
@@ -112,6 +115,8 @@ def main(argv=None):
             viewer = LiveView(args.http_port); viewer.start()
             print('实时画面：' + viewer.url, flush=True)
             print('小车保持静止；等待画面后移动方块。测试%d秒，Ctrl+C或网页按钮结束。' % args.duration, flush=True)
+            if record_directory:
+                print('演示录像素材直接写入SD卡：' + record_directory + '（结束后可用读卡器复制）', flush=True)
             if not args.no_browser:
                 try: webbrowser.open(viewer.url)
                 except Exception as exc: print('请手动打开上方网址：' + str(exc), flush=True)
@@ -161,6 +166,7 @@ def main(argv=None):
     except Exception as exc:
         result.update(status='failed', error=repr(exc)); print(str(exc), file=sys.stderr)
     finally:
+        result['test_status_before_listener_restore'] = result['status']
         if link is not None:
             try:
                 print('正在恢复原语音监听……', flush=True)

@@ -57,19 +57,37 @@ def restore_listener(link):
     # No saved file is replaced and there is no startup motion. Do not use reset
     # or execute any old pick script; run the user's current startup as saved.
     source = "exec(open('/sdcard/main.py').read(),globals())\n".encode()
-    link.command(0x06); time.sleep(.15); link.output()
+    link.command(0x06)
+    # Live preview owns video resources. Wait for its finally/close instead of
+    # uploading the audio listener while camera cleanup is still in progress.
+    deadline = time.monotonic() + 8
+    while True:
+        time.sleep(.1)
+        link.output()
+        link.command(0x87, 4)
+        if struct.unpack('<I', link.read(4))[0] == 0: break
+        if time.monotonic() >= deadline:
+            raise TimeoutError('Previous K230 script did not stop before listener restore')
+    link.command(0x0D, 4)
+    link.port.write(struct.pack('<I', 0)); link.port.flush()
     link.command(0x05, len(source)); time.sleep(.06)
     link.port.write(source); link.port.flush()
     lines = []; pending = b''; started = time.monotonic()
+    failure = False; last_output = started
     while time.monotonic() - started < 50:
-        pending += link.output()
+        chunk = link.output()
+        if chunk: last_output = time.monotonic()
+        pending += chunk
         while b'\n' in pending:
             raw, pending = pending.split(b'\n', 1)
             line = raw.decode(errors='replace').strip(); lines.append(line)
             if '"event": "voice_ready"' in line or '"event":"voice_ready"' in line:
                 return lines
             if 'Traceback' in line or 'voice_failed' in line:
-                raise RuntimeError('Listener failed: ' + line)
+                failure = True
+        if failure and time.monotonic() - last_output >= .5:
+            if pending: lines.append(pending.decode(errors='replace'))
+            raise RuntimeError('Listener failed:\n' + '\n'.join(lines))
         time.sleep(.05)
     raise TimeoutError('Listener did not report voice_ready')
 

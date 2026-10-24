@@ -21,7 +21,7 @@ class LiveCarTrackerTests(unittest.TestCase):
         _, config, geometry = load()
         script = build_script(config, geometry, 800, 100)
         ast.parse(script)
-        for token in ('UART(', 'run_pick', 'run_ready', 'image.save(', 'MotorLink'):
+        for token in ('UART(', 'run_pick', 'run_ready', 'MotorLink'):
             self.assertNotIn(token, script)
         clock = SimpleNamespace(ms=0)
         fake_time = SimpleNamespace(ticks_ms=lambda: clock.ms,

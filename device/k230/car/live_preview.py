@@ -2,7 +2,7 @@
 import time
 
 
-def run_live(tracking, model, duration_ms, interval_ms):
+def run_live(tracking, model, duration_ms, interval_ms, record_directory=None):
     import os
     import json
     from camera import CameraSession
@@ -19,7 +19,15 @@ def run_live(tracking, model, duration_ms, interval_ms):
     camera = CameraSession(vision, preview=True)
     frames = 0
     previous_stamp = None
+    recorder = None
     try:
+        if record_directory is not None:
+            recorder = SDFrameRecorder(record_directory, {'tracking': tracking,
+                'calibration': model, 'duration_requested_ms': duration_ms,
+                'interval_requested_ms': interval_ms, 'image_size_px': [1280, 960],
+                'annotated': True, 'timestamp_source': 'software_snapshot_call',
+                'installed_vision_release': release})
+            print('CAR_RECORDING ' + record_directory)
         camera.open()
         started = time.ticks_ms()
         print('CAR_LIVE_READY')
@@ -50,6 +58,8 @@ def run_live(tracking, model, duration_ms, interval_ms):
             # Draw only after detecting on the unmarked frame. The native box
             # and cross therefore belong to this actual preview frame.
             camera.show(image)
+            if recorder is not None:
+                row = recorder.write(image, row)
             print('CAR_LIVE ' + json.dumps(row))
             remaining = interval_ms - time.ticks_diff(time.ticks_ms(), stamp)
             if remaining > 0:
@@ -57,4 +67,7 @@ def run_live(tracking, model, duration_ms, interval_ms):
         print('CAR_LIVE_DONE ' + json.dumps({'frames': frames,
             'elapsed_ms': time.ticks_diff(time.ticks_ms(), started)}))
     finally:
-        camera.close()
+        try:
+            camera.close()
+        finally:
+            if recorder is not None: recorder.close()
