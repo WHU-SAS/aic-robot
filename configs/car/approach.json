@@ -1,0 +1,34 @@
+{
+  "schema": "aic.car.approach.v1",
+  "status": "offline_candidate_not_hardware_validated",
+  "vision_config": "configs/vision/trials/fixed_tip_top_20261022.json",
+  "workspace_config": "configs/car/workspace_definition.json",
+  "tracking": {
+    "image_size_px": [1280, 960],
+    "lab_thresholds": [[0, 100, -20, 127, -128, -8]],
+    "min_pixels": 25,
+    "min_area_px2": 25,
+    "max_aspect_ratio": 4,
+    "min_fill_ratio": 0.2,
+    "forward_range_mm": [150, 1200],
+    "height_ratio_range": [0.4, 2.5],
+    "confirmation_frames": 3,
+    "max_age_ms": 500,
+    "max_center_jump_fraction": 0.15,
+    "max_size_ratio": 3
+  },
+  "coarse_center_tolerance_px": 48,
+  "near_localization_start_Base_X_mm": 315.6895618835043,
+  "preferred_stop_fraction_of_inset_depth": 0.25,
+  "motion_profiles": {
+    "forward_coarse": null,
+    "turn_left_coarse": null,
+    "turn_right_coarse": null,
+    "forward_fine": null,
+    "reverse_fine": null,
+    "turn_left_fine": null,
+    "turn_right_fine": null
+  },
+  "automatic_arm_action": false,
+  "notes": "Image thresholds are initial offline candidates. Actual wheel PWM and pulse durations await user selection/bench observation; no motion defaults or startup integration are installed."
+}
