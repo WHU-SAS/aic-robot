@@ -74,7 +74,8 @@ class VoiceDispatchTests(unittest.TestCase):
     def app(self):
         spec=importlib.util.spec_from_file_location('test_board_app',BOARD/'app.py');module=importlib.util.module_from_spec(spec)
         mocks={'time':SimpleNamespace(ticks_ms=lambda:0,ticks_diff=lambda a,b:a-b),'camera':SimpleNamespace(CameraSession=None),'vision':SimpleNamespace(localize=None),
-               'control':SimpleNamespace(run_pick_stage_direct=None,run_ready_direct=None)}
+               'control':SimpleNamespace(run_pick_stage_direct=None,run_ready_direct=None),
+               'vision_runtime':__import__('device.k230.vision.runtime',fromlist=['localize_precise'])}
         with patch.dict(sys.modules,mocks):spec.loader.exec_module(module)
         return module
     def test_control_log_interceptor_preserves_both_event_prefixes(self):
@@ -416,7 +417,7 @@ class DirectPickTests(unittest.TestCase):
         class Camera:
             def __init__(self,*args):pass
             def open(self):pass
-            def snapshot(self):return SimpleNamespace(save=lambda *a,**kw:None)
+            def capture(self):return SimpleNamespace(save=lambda *a,**kw:None),{'frame_id':1,'capture_timestamp_ms':0,'clock_domain':'k230_ticks_ms','image_size_px':[1280,960]}
             def close(self):pass
         plan={name:[2048]*6 for name in ('hover','descend','close','lift')}
         class Model:
@@ -431,7 +432,7 @@ class DirectPickTests(unittest.TestCase):
                 return sample
         with patch.dict(sys.modules,{'cv2':SimpleNamespace(imread=lambda p:object()),'control':SimpleNamespace()}), \
              patch.object(app,'CameraSession',Camera),patch.object(app,'Geometry',Model), \
-             patch.object(app,'localize',return_value={'cube_center_Base_mm':[240,0,-60]}), \
+             patch.object(app,'localize',return_value={'status':'complete_face_candidate','poses':[{'face_reprojection_rms_px':.5}],'cube_center_Base_mm':[240,0,-60]}), \
              patch.object(app,'arm_snapshot',return_value=[{'position':2048} for i in range(6)]) as snapshot, \
              patch.object(app,'log') as logs,patch.object(app,'run_pick_stage_direct',side_effect=stage):
             if fail_read:

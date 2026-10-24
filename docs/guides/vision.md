@@ -9,6 +9,32 @@
 - 板端OpenCV识别、位姿、FK/IK及语音单次抓取入口见[独立抓取](arm/K230_STANDALONE_PICK.md)，同图数值对照已通过；整车任务与媒体并行调度尚未实现。`CameraSession`当前由单次视觉任务独占管理，不与其他媒体任务同时启停。
 - 第0版拆分保持原样；独立抓取另行移植当前PC识别链到`device/k230/pick/`，已在K230上回放保存图像，不把两套识别实现混称为同一模块。
 
+## 小车与机械臂共用接口
+
+共用相机、标定和精定位实现；远处粗跟踪与近处精定位保留不同算法。小车负责接近/停车，机械臂负责逆解/抓取；共用层不调度动作、音频或模式切换。
+
+- `device/k230/vision/camera.py`：同一运行进程只允许一个活动 `CameraSession`。任务复用该实例，不能另建实例重置相机；旧 `snapshot()` 接口保留。
+- `session.capture()` 返回 `(image, frame)`。`image` 是借用的原生RGB565帧，只保证在下一次拍摄或关闭之前有效，需在此期间完成检测或JPEG保存。
+- `device/k230/vision/runtime.py` 的 `track_coarse(image, frame, detector)` 调用注入的粗跟踪器，如 `tracker.detect_frame`；不依赖小车控制模块。
+- `localize_precise(bgr, frame, intrinsics, extrinsics, table_plane=None)` 复用 `pick/vision.py` 的物理面算法及Camera→Base变换。输入保持现有1280×960 RGB565→JPEG95→BGR路径，不另改颜色、阈值或标定。
+
+两种结果共用 `aic.vision_observation.v1`：
+
+| 字段 | 含义 |
+| --- | --- |
+| `mode`、`status` | `coarse`：`tracking/confirming/lost/no_target`；`precise`：`localized/no_complete_face` |
+| `frame_id`、`image_size_px` | 当前帧标识与尺寸；板端帧号仅用于本次运行 |
+| `capture_timestamp_ms`、`timestamp_ms` | 同一个采集调用时间，后者为兼容别名；不是定位完成时间 |
+| `clock_domain`、`timestamp_source` | 板端为 `k230_ticks_ms`、`software_snapshot_call`；时间记录于 `snapshot` 调用前，不是硬件曝光时间 |
+| `quality` | 精定位的重投影误差、选面及识别路径，或粗跟踪的像素数/确认次数；不是概率置信度 |
+| `payload` | 原检测器成功结果，供兼容和诊断；精定位失败不携带旧坐标 |
+
+精定位成功才有未补偿的 `cube_center_Base_mm`，参考为方块几何中心，单位mm。粗跟踪可提供 `ground_contact_proxy_Base_mm`，不得冒充方块中心；`lost/no_target` 不保留上一帧所选目标。机械臂45mm抓取偏移仍由抓取层处理，不进入视觉坐标。
+
+旧照片未知采集时间时保持 `None`，不能用处理时间冒充新鲜帧。跨PC/板端或重启不能直接相减；板端时间差使用 `time.ticks_diff`。有效期、更新频率、切换距离与重试次数由任务层决定，本接口不新增默认值。
+
+PC单图入口和独立抓取已接入精定位接口；部署时共享层打包为 `vision_runtime.py`，相机为 `camera.py`。小车通过 `device/k230/car/observations.py` 消费同一结果，检查模式、坐标含义与采集时钟，保留原停车策略。尚未新增整车启动器或自动切换策略。检测函数本身不打开串口、不初始化相机、不发送动作。
+
 ## 代码职责
 
 | 文件 | 职责 |

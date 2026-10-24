@@ -5,6 +5,7 @@ commands, PID writes, automatic return, release or queued extra pick actions.
 import os,gc,json,time
 from camera import CameraSession
 from vision import localize
+from vision_runtime import localize_precise
 from kinematics import Geometry
 from control import run_pick_stage_direct,run_ready_direct
 from voice_commands import registered_commands,resolve_events
@@ -90,13 +91,12 @@ def arm_snapshot(config):
 
 
 def run_once(config,execute=False):
-    vision=config['vision'];intr=config['intrinsics'];K=[list(row) for row in intr['camera_matrix']]
-    for j in range(3):K[0][j]*=1280/intr['image_width'];K[1][j]*=960/intr['image_height']
+    vision=config['vision'];intr=config['intrinsics']
     session=CameraSession(vision,False);timing={};perception_started=time.ticks_ms()
     try:
         phase=time.ticks_ms();session.open()
         timing['camera_open_warmup']=time.ticks_diff(time.ticks_ms(),phase)
-        phase=time.ticks_ms();img=session.snapshot()
+        phase=time.ticks_ms();img,frame=session.capture()
         timing['snapshot']=time.ticks_diff(time.ticks_ms(),phase)
         # Preserve RGB565 capture and JPEG95 decoding used by the accepted PC
         # pipeline; only the transfer to the computer has been removed.
@@ -108,8 +108,11 @@ def run_once(config,execute=False):
     import cv2
     phase=time.ticks_ms();im=cv2.imread('/sdcard/aic/pick/last_frame.jpg')
     timing['jpeg_read']=time.ticks_diff(time.ticks_ms(),phase)
-    phase=time.ticks_ms();found=localize(im,K,intr['distortion_coefficients'],config['extrinsics']['T_Base_from_Camera_mm'],
-        vision['localization'].get('table_plane_Base_mm') if vision['localization'].get('table_pose_constraints_enabled') else None)
+    phase=time.ticks_ms();observation=localize_precise(im,frame,intr,config['extrinsics'],
+        vision['localization'].get('table_plane_Base_mm') if vision['localization'].get('table_pose_constraints_enabled') else None,
+        localizer=localize)
+    if observation['status']!='localized':raise ValueError(observation['reason'])
+    found=observation.pop('payload');found['observation']=observation
     timing['visual_localization']=time.ticks_diff(time.ticks_ms(),phase)
     timing['capture_and_localize']=time.ticks_diff(time.ticks_ms(),perception_started)
     found['perception_timing_ms']=timing
