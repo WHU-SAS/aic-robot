@@ -8,6 +8,7 @@ import json
 import math
 import cv2
 from host.car.video_timing import frame_times
+from host.car.video_labels import draw_label
 
 
 def export(directory, output, fps=10):
@@ -49,14 +50,11 @@ def export(directory, output, fps=10):
                 if image is None or image.shape[:2] != (height, width):
                     raise ValueError('Invalid video frame: ' + row['filename'])
                 canvas = cv2.copyMakeBorder(image, 80, 0, 0, 0, cv2.BORDER_CONSTANT, value=(245, 245, 245))
-                center = row.get('center_pixel')
-                center_text = ','.join(str(round(v)) for v in center) if center else '--'
-                distance = row.get('estimated_table_distance_mm')
-                distance_text = '%.0f mm (estimated)' % distance if distance is not None else '--'
-                top = 'K230 | %s | center: %s px | blue area: %s px' % (row['status'], center_text, row.get('pixels') or '--')
-                bottom = 'Table distance: %s | detection: %s ms | frame: %s' % (distance_text, row.get('processing_ms'), row.get('frame_id'))
+                top = 'K230 - BLUE CUBE LIVE TRACKING'
+                bottom = 'Frame %s | %s' % (row.get('frame_id'), row['status'])
                 for y, text in ((29, top), (63, bottom)):
                     cv2.putText(canvas, text, (16, y), cv2.FONT_HERSHEY_SIMPLEX, .65, (60, 40, 20), 1, cv2.LINE_AA)
+                canvas = draw_label(canvas, row)
                 current = selected
             writer.write(canvas)
     finally:
@@ -70,7 +68,8 @@ def export(directory, output, fps=10):
         'output': str(output), 'output_frames': count, 'fps': fps,
         'recorded_duration_s': duration, 'encoded_duration_s': count / fps,
         'timing': 'Actual capture periods resampled; hold preceding frame across gaps',
-        'codec': 'MPEG-4 Part 2 (mp4v)', 'source_frames_modified': False}
+        'codec': 'MPEG-4 Part 2 (mp4v)', 'source_frames_modified': False,
+        'object_labels': 'Box-anchored labels use this exact recorded frame metadata; no labels on lost/no_target'}
     output.with_suffix('.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2) + '\n')
     return summary
 
