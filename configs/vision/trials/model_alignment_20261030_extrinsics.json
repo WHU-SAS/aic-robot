@@ -1,0 +1,150 @@
+{
+  "status": "model_alignment_candidate_pending_field_validation",
+  "T_Base_from_Camera_mm": [
+    [
+      0.04223772631476755,
+      -0.20247133684988694,
+      0.9783768865983997,
+      57.8054249873866
+    ],
+    [
+      -0.9989698332910496,
+      0.007702441881482558,
+      0.04472073974695998,
+      -6.915058061469331
+    ],
+    [
+      -0.016590559068692733,
+      -0.9792578976670459,
+      -0.20193742398700204,
+      16.880318487014158
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "T_Camera_from_Base_mm": [
+    [
+      0.04223772631476693,
+      -0.9989698332910493,
+      -0.016590559068692882,
+      -9.069450198032811
+    ],
+    [
+      -0.20247133684988694,
+      0.007702441881482273,
+      -0.9792578976670454,
+      28.287389700741215
+    ],
+    [
+      0.9783768865984002,
+      0.04472073974696055,
+      -0.20193742398700198,
+      -52.83747718440677
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "intrinsics_sha256": "9bd4426442417c9425f146971464a4946463a3b5704095decc5d2ed7075f0e07",
+  "model_urdf": "models/genkiarm/genkiarm_corrected.urdf",
+  "joint_mapping": "configs/arm/joint_mapping.json",
+  "joint_mapping_sha256": "cacbbd1f01849cc45ec9f2a37d2c170789b9989b1a6f4e169058da239ec5cb22",
+  "source_training_groups": [
+    1,
+    2,
+    4,
+    6,
+    7,
+    8,
+    9,
+    11,
+    13,
+    14,
+    15,
+    16
+  ],
+  "historical_holdout_groups": [
+    3,
+    5,
+    10,
+    12
+  ],
+  "later_check_groups": [
+    17,
+    18,
+    19,
+    20
+  ],
+  "reference_definition": {
+    "fixed_jaw_link": "wan2",
+    "local_point_m": [
+      -0.00021270876859489363,
+      0.012270562537014484,
+      0.10777757316827774
+    ],
+    "method": "mean of maximum local-Z STL vertices; original unsurveyed fixed-tip proxy",
+    "physical_point_surveyed": false,
+    "contact_region_variation_accepted_by_user": true,
+    "center_offset_mm": [
+      -0.5521323795686063,
+      -0.1712656279594587,
+      -9.983276912923511
+    ],
+    "table_up_normal_Base": [
+      0.05521323795686063,
+      0.01712656279594587,
+      0.9983276912923511
+    ],
+    "normal_source": "SVD of original 12 training modeled contacts only",
+    "table_plane_equation": "normal dot Base_mm = offset_mm",
+    "table_plane_offset_mm": -53.54455112077175,
+    "plane_contact_rms_mm": 1.999061777464967,
+    "plane_contact_max_abs_mm": 3.567237584382646,
+    "normal_tilt_from_BaseZ_deg": 3.3140297078917875
+  },
+  "historical_metrics": {
+    "training": {
+      "count": 12,
+      "rms_xyz_mm": 3.641236400158354,
+      "rms_xy_mm": 3.1125189864529985,
+      "rms_z_mm": 1.889663483482646,
+      "max_xyz_mm": 5.261631202215034
+    },
+    "historical_holdout": {
+      "count": 4,
+      "rms_xyz_mm": 3.9493843589917477,
+      "rms_xy_mm": 2.985616560598238,
+      "rms_z_mm": 2.58529119600292,
+      "max_xyz_mm": 4.748380507330357
+    },
+    "later17_20": {
+      "count": 4,
+      "rms_xyz_mm": 5.096382438932543,
+      "rms_xy_mm": 4.306991515985271,
+      "rms_z_mm": 2.724506936142925,
+      "max_xyz_mm": 6.365688640238819
+    }
+  },
+  "provenance": {
+    "session": "formal_fixed_tip_top_20261022",
+    "camera_poses": "saved analysis_robust_final_20261022/vision.json; validation_17_20/vision_17..20.json",
+    "pose_selection": "original lowest image-reprojection pose, unchanged; no FK-based image pose selection",
+    "original_split_reused": true,
+    "new_independent_acceptance": false,
+    "correction": "Rotation origin yaw +pi; Rotation2/3/4 axes -Y; Rotation5 unchanged",
+    "model_selection_evidence": "2026-10-30 front-photo asymmetric wrist comparison and user-assisted joint2/3/4 direction reads"
+  },
+  "limitations": [
+    "Historical contacts and CAD endpoint are approximate, not surveyed TCP ground truth.",
+    "Retrospective replay checks consistency; it is not new independent or powered-grasp validation."
+  ],
+  "canonical_default_replaced": false,
+  "geometry_model_sha256": "69494c69caef885790a67d6fd54a324967fbad29e246cb6c3e0e8d23a01aa231"
+}

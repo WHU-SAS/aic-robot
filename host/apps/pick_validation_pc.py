@@ -8,6 +8,7 @@ bootstrap()
 import argparse
 from datetime import datetime
 import fcntl
+import hashlib
 import json
 import signal
 import subprocess
@@ -23,12 +24,23 @@ from host.vision.config import load_vision_config,table_height_at
 TRIAL=ROOT/'configs/arm/pick_validation_pc.json'
 
 
-def parameters():
-    pick=json.loads(TRIAL.read_text())
+def parameters(pick_config=None):
+    profile=TRIAL if pick_config is None else ROOT/Path(pick_config)
+    pick=json.loads(profile.read_text())
     if pick['extra_closing_counts']!=20 or pick['forward_extension_mm']!=0:
         raise ValueError('Validation profile changed; review the selected trial')
     if pick.get('alignment_reference')!='open_fingertip_midpoint':
         raise ValueError('Expected user-selected open-fingertip alignment')
+    if 'model_urdf' in pick:
+        if not isinstance(pick['model_urdf'],str) or not pick['model_urdf'].strip():
+            raise ValueError('model_urdf must be a nonempty path')
+        localization=load_vision_config(ROOT/pick['vision_config'])['localization']
+        extrinsics=json.loads((ROOT/localization['extrinsics']).read_text())
+        for key,path in (('geometry_model_sha256',ROOT/pick['model_urdf']),
+                         ('joint_mapping_sha256',ROOT/'configs/arm/joint_mapping.json')):
+            actual=hashlib.sha256(path.read_bytes()).hexdigest()
+            if extrinsics.get(key)!=actual:
+                raise ValueError('Model/extrinsics pair mismatch: '+key)
     return pick,Configuration(ROOT)
 
 
@@ -40,9 +52,15 @@ def make_plan(vision,start,pick,config,offset=(0,0,0)):
         hover_tip_height_mm=pick['hover_tip_height_mm']+offset[2],
         descend_tip_height_mm=pick['descend_tip_height_mm']+offset[2],
         lift_tip_height_mm=pick['lift_tip_height_mm']+offset[2],opening_count=pick['opening_count'],
-        cube_offset_toward_moving_finger_mm=pick['cube_offset_toward_moving_finger_mm'])
+        cube_offset_toward_moving_finger_mm=pick['cube_offset_toward_moving_finger_mm'],
+        urdf_path=pick.get('model_urdf'))
     config.check_counts(dict(enumerate(start,1)))
     plan=geometry.plan([v/1000 for v in xy],start)
+    if pick.get('model_urdf'):
+        model_sha=hashlib.sha256((ROOT/pick['model_urdf']).read_bytes()).hexdigest()
+        plan['model_urdf']=pick['model_urdf']
+        plan['geometry_model_sha256']=model_sha
+        plan['model_correction_applied']=model_sha!=hashlib.sha256((ROOT/'models/genkiarm/genkiarm.urdf').read_bytes()).hexdigest()
     for name in ('hover','descend','close','lift'):
         config.check_counts(dict(enumerate(plan[name],1)))
     plan['target_xy_Base_mm']=xy
@@ -58,6 +76,7 @@ def main(argv=None):
     parser.add_argument('--hands-free',action='store_true')
     parser.add_argument('--detect-only',action='store_true')
     parser.add_argument('--camera-port',default=PORT)
+    parser.add_argument('--pick-config',type=Path,help='explicit pick profile; defaults to the accepted profile')
     parser.add_argument('--image',type=Path,help='offline replay; forbidden with execute')
     parser.add_argument('--start-counts',nargs=6,type=int,default=[2048]*6,help='offline start only')
     parser.add_argument('--offset-x-mm',type=float,default=0)
@@ -65,7 +84,7 @@ def main(argv=None):
     parser.add_argument('--offset-z-mm',type=float,default=0,help='operator-selected correction to all three fingertip heights')
     args=parser.parse_args(argv)
     if args.execute and (args.image or args.detect_only):parser.error('execute requires a fresh image and cannot use detect-only')
-    pick,config=parameters()
+    pick,config=parameters(args.pick_config)
     folder=ROOT/'data/logs'/datetime.now(ZoneInfo('Asia/Shanghai')).strftime('pick_pc_%Y%m%d_%H%M%S_%f')
     folder.mkdir(parents=True,exist_ok=False)
     record={'status':'created','execute':args.execute,'motion_performed':False,

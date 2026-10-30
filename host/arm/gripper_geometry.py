@@ -1,4 +1,4 @@
-"""Local FK and STL geometry, unchanged numerically from the arm baseline."""
+"""Local FK and STL geometry for the selected arm model."""
 
 import sys as _sys
 from pathlib import Path as _Path
@@ -31,10 +31,11 @@ def mesh_floor_clearance(fk,angles,mesh_cache):
     return lows
 
 class PickGeometry:
-    def __init__(self,root,mapping):
+    def __init__(self,root,mapping,urdf_path=None):
         self.mapping=mapping
         self.names=[mapping.joint(i)['urdf_joint_name'] for i in range(1,7)]
-        self.fk=URDFForwardKinematics(str(root/'models/genkiarm/genkiarm.urdf'))
+        model_file=Path(urdf_path) if urdf_path is not None else Path('models/genkiarm/genkiarm.urdf')
+        self.fk=URDFForwardKinematics(str(root/model_file))
         self.vertices={link:np.unique(stl_vertices(root/'models/genkiarm/meshes'/name),axis=0)
                        for link,name in [('wan2','EEE.stl'),('zhua','FFF.stl')]}
         self.tip={link:vertices[vertices[:,2]>=vertices[:,2].max()-.002].mean(axis=0)

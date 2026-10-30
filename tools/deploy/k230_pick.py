@@ -30,13 +30,13 @@ run_forever(release)
 def digest(data):return hashlib.sha256(data).hexdigest()
 def encoded(value):return (json.dumps(value,ensure_ascii=False,sort_keys=True,indent=2)+'\n').encode()
 
-def build_bundle():
+def build_bundle(pick_config=None):
     import numpy as np
     from scipy.spatial import ConvexHull
-    pick,config=parameters();vision=load_vision_config(ROOT/pick['vision_config']);loc=vision['localization']
+    pick,config=parameters(pick_config);vision=load_vision_config(ROOT/pick['vision_config']);loc=vision['localization']
     intrpath=ROOT/loc['intrinsics'];intr=json.loads(intrpath.read_text());ext=json.loads((ROOT/loc['extrinsics']).read_text())
     if digest(intrpath.read_bytes())!=ext['intrinsics_sha256']:raise ValueError('Calibration pair mismatch')
-    geometry=PickGeometry(ROOT,config.mapping);model={'joints':[],'points':{}}
+    geometry=PickGeometry(ROOT,config.mapping,urdf_path=pick.get('model_urdf'));model={'joints':[],'points':{}}
     for i in range(1,7):
         item=dict(config.mapping.joint(i));joint=geometry.fk.joints[item['urdf_joint_name']]
         origin=np.eye(4);origin[:3,:3]=geometry.fk._rpy_to_matrix(joint['rpy']);origin[:3,3]=joint['xyz']
@@ -63,6 +63,9 @@ def build_bundle():
     manifest={'schema':'aic.standalone_pick.v1','trigger':'思达思达','voice_commands':[{'word':c['word'],'action':c['action']} for c in commands],'startup_motion':False,
               'pc_runtime_required':False,'cube_offset_toward_moving_finger_mm':pick['cube_offset_toward_moving_finger_mm'],
               'files':{name:{'bytes':len(data),'sha256':digest(data)} for name,data in sorted(files.items())}}
+    if pick.get('model_urdf'):
+        manifest['geometry_model_sha256']=digest((ROOT/pick['model_urdf']).read_bytes())
+        manifest['joint_mapping_sha256']=digest((ROOT/'configs/arm/joint_mapping.json').read_bytes())
     release=digest(encoded(manifest))[:16];manifest['release_id']=release
     files['manifest.json']=encoded(manifest)
     return cfg,files,manifest
@@ -168,9 +171,10 @@ print('RELEASE_VERIFIED '+m['release_id'])
 def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--port',default=PORT)
     p.add_argument('--install',action='store_true');p.add_argument('--activate',action='store_true')
+    p.add_argument('--pick-config',type=Path,help='explicit pick/model/vision profile; default is the accepted baseline')
     a=p.parse_args(argv)
     if a.activate and not a.install:p.error('activate requires install')
-    config,files,manifest=build_bundle();stamp=datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y%m%d_%H%M%S')
+    config,files,manifest=build_bundle(a.pick_config);stamp=datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y%m%d_%H%M%S')
     output=ROOT/'data/deployments'/('k230_pick_'+stamp);output.mkdir(parents=True)
     for name,data in files.items():(output/name).write_bytes(data)
     remote=REMOTE+'/releases/'+manifest['release_id'];record={'remote':remote,'manifest':manifest,'activated':False,'status':'built_no_hardware_access'}

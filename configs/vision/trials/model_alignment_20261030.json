@@ -1,0 +1,57 @@
+{
+  "schema": "aic.blue_cube_config.v1",
+  "status": "model_alignment_candidate_pending_field_validation",
+  "object": {
+    "color": "blue",
+    "edge_mm": 20
+  },
+  "camera": {
+    "width": 1280,
+    "height": 960,
+    "hmirror": false,
+    "vflip": false
+  },
+  "sampling": {
+    "warmup_frames": 30,
+    "warmup_delay_ms": 30,
+    "frame_limit": 9
+  },
+  "detector": {
+    "roi": [
+      0,
+      432,
+      1280,
+      528
+    ],
+    "lab_thresholds": [
+      [
+        0,
+        100,
+        -20,
+        127,
+        -128,
+        -8
+      ]
+    ],
+    "pixels_threshold": 1000,
+    "area_threshold": 6000,
+    "max_blobs": 4,
+    "max_components": 4
+  },
+  "localization": {
+    "intrinsics": "configs/vision/runtime/camera_intrinsics.json",
+    "extrinsics": "configs/vision/trials/model_alignment_20261030_extrinsics.json",
+    "table_z_Base_mm": -53.63424413426565,
+    "table_z_status": "local height evaluated from training-contact plane at target XY",
+    "table_plane_Base_mm": {
+      "normal": [
+        0.05521323795686063,
+        0.01712656279594587,
+        0.9983276912923511
+      ],
+      "offset_mm": -53.54455112077175,
+      "equation": "normal dot Base_mm = offset_mm"
+    },
+    "table_pose_constraints_enabled": true
+  }
+}

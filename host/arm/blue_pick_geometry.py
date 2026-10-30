@@ -12,7 +12,7 @@ from host.arm.urdf_fk import URDFForwardKinematics
 from gripper_geometry import stl_vertices
 
 class PickGeometry:
- def __init__(self,root,mapping,table_z_m=0.,hover_tip_height_mm=80.,descend_tip_height_mm=25.,lift_tip_height_mm=80.,opening_count=2389):
+ def __init__(self,root,mapping,table_z_m=0.,hover_tip_height_mm=80.,descend_tip_height_mm=25.,lift_tip_height_mm=80.,opening_count=2389,urdf_path=None):
   self.table_z_m=float(table_z_m)
   self.hover_height_m=float(hover_tip_height_mm)/1000
   self.descend_height_m=float(descend_tip_height_mm)/1000
@@ -22,7 +22,8 @@ class PickGeometry:
   self.opening_angle_rad=mapping.count_to_radians(6,self.opening_count)
   mapping.radians_to_count(6,self.opening_angle_rad)
   self.mapping=mapping;self.names=[mapping.joint(i)['urdf_joint_name'] for i in range(1,7)]
-  self.fk=URDFForwardKinematics(str(root/'models/genkiarm/genkiarm.urdf'))
+  model_file=_Path(urdf_path) if urdf_path is not None else _Path('models/genkiarm/genkiarm.urdf')
+  self.fk=URDFForwardKinematics(str(root/model_file))
   self.vertices={link:np.unique(stl_vertices(root/'models/genkiarm/meshes'/name),axis=0) for link,name in [('wan2','EEE.stl'),('zhua','FFF.stl')]}
   self.distal={link:v[v[:,2]>=v[:,2].max()-.002] for link,v in self.vertices.items()}
   self.tip={link:v.mean(axis=0) for link,v in self.distal.items()}

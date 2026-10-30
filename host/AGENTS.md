@@ -21,6 +21,7 @@
 ## 视觉与对照入口
 
 - 正式PC及独立抓取使用`pick_validation_pc.json`：张开中点、固定爪侧45mm（moving-side offset=-45）、额外前伸0mm、最低指尖80/15/80mm、夹紧20计数。阶段规则仍以对应入口为准。
+- 2026-10-30装配修复对照通过`--pick-config configs/arm/pick_model_check.json`显式选择；含新URDF、重拟外参、零经验偏移，尚未场测/切换默认。保持原默认与小车坐标不变，说明见`docs/guides/arm/PC_PICK_VALIDATION.md`。
 - 第0版`./scripts/demo-v0-pick`保留PC解算与原时序，专属配置在`demos/v0_blue_pick/`；前伸10mm，不能混入正式视觉坐标。
 - 正式精定位使用`configs/vision/trials/fixed_tip_top_20261022.json`，第0版使用`blue_cube.json`。内外参配对、相机1280×960 RGB565→JPEG95→BGR路径不随意改变。
 - 共用`CameraSession`仅一个活动所有者；粗跟踪代理不是精定位中心。采集时间不以处理时间替代，跨时钟/重启不能直接比较；未知旧图时间保持None。接口见`docs/guides/vision.md`。
