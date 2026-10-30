@@ -9,7 +9,8 @@
  * Request: @M,01234567,START,ABCD\n. CRC covers M,...,START only.
  * An '@' always resynchronizes, including inside an incomplete frame. */
 #define MOTOR_PWM_LIMIT 1600
-typedef enum { CMD_STATUS, CMD_START, CMD_STOP, CMD_HEARTBEAT, CMD_DRIVE } MotorCommand;
+typedef enum { CMD_STATUS, CMD_START, CMD_STOP, CMD_HEARTBEAT, CMD_DRIVE, CMD_MOVE, CMD_TURN,
+               CMD_FOLLOW, CMD_SPEED } MotorCommand;
 typedef struct {
     char data[48];
     size_t used;
@@ -18,6 +19,10 @@ typedef struct {
     MotorCommand command;
     int16_t left_pwm, right_pwm;
     uint16_t duration_ticks;
+    uint16_t distance_mm; /* Absolute distance; direction is separate. */
+    bool reverse_move;
+    int16_t angle_deg; /* Positive left, negative right; single-wheel forward arc. */
+    uint16_t left_speed, right_speed; /* mm/s, physical forward is positive. */
 } MotorParser;
 
 static inline uint16_t motor_crc(const char *text, size_t size)
@@ -72,6 +77,10 @@ static inline bool motor_parse(MotorParser *p)
     const char *name = p->data + 11;
     p->left_pwm = p->right_pwm = 0;
     p->duration_ticks = 0;
+    p->distance_mm = 0;
+    p->reverse_move = false;
+    p->angle_deg = 0;
+    p->left_speed = p->right_speed = 0;
     if (!strcmp(name, "STATUS")) p->command = CMD_STATUS;
     else if (!strcmp(name, "START")) p->command = CMD_START;
     else if (!strcmp(name, "STOP")) p->command = CMD_STOP;
@@ -90,6 +99,28 @@ static inline bool motor_parse(MotorParser *p)
         p->command = CMD_DRIVE;
         p->left_pwm = (int16_t)l; p->right_pwm = (int16_t)r;
         p->duration_ticks = (uint16_t)(ms / 10);
+    }
+    else if (!strncmp(name, "MOVE,", 5)) {
+        int32_t mm;
+        if (!motor_number(name + 5, strlen(name + 5), 65535, true, &mm) || !mm) return false;
+        p->command = CMD_MOVE;
+        p->reverse_move = mm < 0;
+        p->distance_mm = (uint16_t)(mm < 0 ? -mm : mm);
+    }
+    else if (!strncmp(name, "TURN,", 5)) {
+        int32_t degrees;
+        if (!motor_number(name + 5, strlen(name + 5), 30, true, &degrees) || !degrees) return false;
+        p->command = CMD_TURN;
+        p->angle_deg = (int16_t)degrees;
+    }
+    else if (!strncmp(name, "FOLLOW,", 7) || !strncmp(name, "SPEED,", 6)) {
+        bool follow = name[0] == 'F';
+        const char *left = name + (follow ? 7 : 6), *comma = strchr(left, ',');
+        int32_t l, r;
+        if (!comma || !motor_number(left, (size_t)(comma-left), 80, false, &l) ||
+            !motor_number(comma+1, strlen(comma+1), 80, false, &r)) return false;
+        p->command = follow ? CMD_FOLLOW : CMD_SPEED;
+        p->left_speed = (uint16_t)l; p->right_speed = (uint16_t)r;
     }
     else return false;
     return true;

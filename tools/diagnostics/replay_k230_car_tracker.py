@@ -61,11 +61,18 @@ def restore_listener(link):
     # Live preview owns video resources. Wait for its finally/close instead of
     # uploading the audio listener while camera cleanup is still in progress.
     deadline = time.monotonic() + 8
+    idle_since = None
     while True:
         time.sleep(.1)
         link.output()
         link.command(0x87, 4)
-        if struct.unpack('<I', link.read(4))[0] == 0: break
+        if struct.unpack('<I', link.read(4))[0] == 0:
+            if idle_since is None: idle_since = time.monotonic()
+            # Script-done can precede the USB VM's soft-reboot cleanup. Upload
+            # only after it has remained idle, or that cleanup may discard it.
+            if time.monotonic() - idle_since >= .6: break
+        else:
+            idle_since = None
         if time.monotonic() >= deadline:
             raise TimeoutError('Previous K230 script did not stop before listener restore')
     link.command(0x0D, 4)

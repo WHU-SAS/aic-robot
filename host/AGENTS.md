@@ -7,6 +7,12 @@
 - 机械臂Agent维护`device/k230/pick/`、机械臂与共用视觉；小车Agent维护`device/k230/car/`及底盘。共用文件改动按实际需要通知协调，不覆盖对方未提交文件。
 - 本地`AGENT_COMMUNICATION.local.md`不Git，仅收到另一Agent通知时读取，不逐任务打开或轮询。
 
+## Git交付
+
+- 用户已授权将已确认、验证的工作直接提交并推送`origin/main`；无需再要求用户建PR或合并。功能完成包含代码、配置、部署依赖及必要文档的Git交付，板端部署不能代替提交上传。
+- 按明确文件清单暂存，检查暂存内容和`git diff --cached --check`；原图、困难集、运行日志、环境及临时产物留本机。保留其他Agent未提交的改动，Git索引与提交操作先协调由一方完成。
+- 提交后执行`git push origin main`，核对远端main与本地提交，并报告提交号和上传结果。遇到工具权限/网络报错先按现有审批机制处理；不得把未推送表述为已上传，不强推覆盖他人历史。
+
 ## 当前运行规则
 
 - PID与运动参数以`configs/arm/user_selected_pid_demo_baseline.json`、`motion_defaults.json`为准。正常动作及另行回中立默认一次同步最终目标；独立下探采用下述4号提前时序。

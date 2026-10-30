@@ -87,3 +87,28 @@ class BSLTests(unittest.TestCase):
             result = json.loads((Path(tmp)/'result.json').read_text())
             self.assertFalse(result['application_started'])
             self.assertFalse(result['erase_started'])
+
+    def test_verify_only_success_never_erases_programs_or_starts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            image = struct.pack('<II', 0x20208000, 9) + b'\0'*8
+            expected = m.crc32(image + b'\xff'*(1024-len(image)))
+            argv = ['bsl', '--verify-only', '--hex', 'image.hex', '--output', tmp]
+            with patch('sys.argv', argv), patch.object(m, 'load_image', return_value=image), \
+                 patch.object(m.serial, 'Serial'), patch.object(m, 'BSL') as cls, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                bsl = cls.return_value
+                bsl.connect.return_value = {'max_buffer': 16064}
+                bsl.memory_crc.return_value = expected
+                self.assertEqual(m.main(), 0)
+                # Only password + two memory-CRC requests after connection.
+                # Erase/program use status(0x23/0x20); start uses command(0x40).
+                bsl.status.assert_called_once_with(0x21, b'\xff'*32)
+                self.assertEqual(bsl.memory_crc.call_count, 2)
+                for call in bsl.memory_crc.call_args_list:
+                    self.assertEqual(call.args, (0, 1024))
+                bsl.command.assert_not_called()
+            result = json.loads((Path(tmp)/'result.json').read_text())
+            self.assertEqual(result['status'], 'passed')
+            self.assertTrue(result['crc_verified'])
+            self.assertFalse(result['erase_started'])
+            self.assertFalse(result['application_started'])

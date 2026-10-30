@@ -9,4 +9,4 @@ getent group plugdev >/dev/null
 install -m 0644 "$aic_root/configs/mspm0/60-aic-debug.rules" /etc/udev/rules.d/60-aic-debug.rules
 udevadm control --reload-rules
 udevadm trigger --subsystem-match=usb --action=add
-echo 'USB rules installed. Reconnect fireDAP; SWD/flash has not been started.'
+echo 'USB rules installed. Reconnect the debug probe (fireDAP/J-Link); SWD/flash has not been started.'

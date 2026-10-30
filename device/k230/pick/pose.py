@@ -36,7 +36,7 @@ def project(point,K,D):
     return [u*K[0][0]+K[0][2],v*K[1][1]+K[1][2]]
 
 
-def pose_candidates(quad,K,D,refine=False):
+def pose_candidates(quad,K,D,refine=False,refiner=None):
     rays=[undistort(p,K,D) for p in quad];a=[];b=[]
     for obj,(u,v) in zip(OBJECT,rays):
         x,y=obj[:2]
@@ -65,7 +65,7 @@ def pose_candidates(quad,K,D,refine=False):
             rp=matvec(R,obj)
             a.extend([[1.,0.,-u],[0.,1.,-v]]);b.extend([u*rp[2]-rp[0],v*rp[2]-rp[1]])
         t=least_squares(a,b)
-        if refine:R,t=refine_transform(R,t,quad,K,D)
+        if refine:R,t=(refiner or refine_transform)(R,t,quad,K,D)
         predicted=[]
         try:
             for obj in OBJECT:

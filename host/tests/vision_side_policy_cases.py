@@ -162,7 +162,7 @@ class SidePolicyCases(unittest.TestCase):
                           and d.get('pose_reprojection_rms_px',[0])[0]>2.]
                 self.assertTrue(rejected)
             else:
-                self.assertEqual(result['vision_path'],'direct_component_sides')
+                self.assertEqual(result['vision_path'],'shared_bounded_physical_sides')
                 self.assertGreater(result['side_faces'][0]['area_px2'],30000)
                 self.assertTrue(all(edge['support']>=45 for edge in result['physical_edges']))
 

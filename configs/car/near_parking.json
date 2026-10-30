@@ -1,0 +1,16 @@
+{
+  "schema": "aic.car.near_parking.v2",
+  "cruise_mm_s": 60,
+  "finish_mm_s": 40,
+  "max_wheel_mm_s": 80,
+  "heading_gain_per_s": 1.5,
+  "slowdown_gain_per_s": 1.0,
+  "coast_s": 0.12,
+  "center_tolerance_px": 48,
+  "max_age_ms": 500,
+  "track_width_mm": 119.2,
+  "max_candidates": 3,
+  "fine_budget_ms": 200,
+  "notes": "One moving precise image supplies distance; fresh coarse images continue steering. Aim at the centre of the unchanged formal 10mm-inset window and camera image midline. Near cruise60/max80 and finish40 are separate from coarse cruise70; no speed reduction merely to compute vision. After the moving result, the remaining-distance curve uses its60mm/s cap and finish40. Capture at coarse proxy Base X<=500mm is a first field candidate, estimated from native full timing and three saved far-frame coarse/fine pairs, not a camera range or calibrated truth. The 200ms fine budget is soft; native full timings and maximum wheel-update gaps are recorded, not a10Hz promise during fine processing. User allows a faster, smoother near profile: slowdown1.0 gives60mm/s at60mm remaining, continuously falls to40mm/s at40mm, then retains40mm/s. Coast0.12 still uses measured wheel speed; higher final speed requires physical parking revalidation. After stopping, a new precise frame checks the actual window. At most one signed MOVE or TURN correction is followed by another static check; no automatic grasp. Existing FOLLOW20s, lease1s, B21 and pre-handoff coarse500ms remain. After handoff, unavailable/expired coarse heading falls back to the fixed fine anchor plus encoder yaw; distance is not discarded. Original JPEG95 frames, metadata, raw results and exact config/version are archived only after stopping and closing camera/UART. More than95% first-stop success remains an unverified field acceptance target.",
+  "capture_Base_X_mm": 500
+}

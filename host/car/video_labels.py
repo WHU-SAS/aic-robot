@@ -11,12 +11,22 @@ def label_lines(row, chinese=True):
     distance_text = '%.0f mm' % distance if distance is not None else '--'
     if chinese:
         state = '跟踪中' if row['status'] == 'tracking' else '确认中'
-        return ['%s · 帧 %s · 检测 %s ms' % (state, row.get('frame_id'), row.get('processing_ms')),
+        first = ('%s · 原片帧 %s · 电脑离线分析' % (state, row.get('frame_id'))
+                 if row.get('PC_offline_analysis') else
+                 '%s · 帧 %s · 检测 %s ms' % (state, row.get('frame_id'), row.get('processing_ms')))
+        distance_line = ('距离不适用：离桌或桌面接触未确认'
+                         if row.get('table_contact_verified') is False else
+                         '桌面平面距离（估计）%s' % distance_text)
+        return [first,
                 '中心 (%s) px · 蓝色面积 %s px' % (center_text, row.get('pixels')),
-                '桌面平面距离（估计）%s' % distance_text]
-    return ['%s | frame %s | detection %s ms' % (row['status'], row.get('frame_id'), row.get('processing_ms')),
+                distance_line]
+    first = ('%s | source frame %s | PC offline analysis' % (row['status'], row.get('frame_id'))
+             if row.get('PC_offline_analysis') else
+             '%s | frame %s | detection %s ms' % (row['status'], row.get('frame_id'), row.get('processing_ms')))
+    return [first,
             'Center (%s) px | blue area %s px' % (center_text, row.get('pixels')),
-            'Table distance (estimated): %s' % distance_text]
+            ('Distance N/A: table contact not verified' if row.get('table_contact_verified') is False
+             else 'Table distance (estimated): %s' % distance_text)]
 
 
 def label_position(bbox, panel_size, canvas_size, top_margin=80):

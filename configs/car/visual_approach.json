@@ -1,0 +1,6 @@
+{
+  "schema": "aic.car.visual_approach.v1",
+  "max_step_mm": 100,
+  "min_step_mm": 10,
+  "notes": "One action per wake: turn if off-center, otherwise one forward step. Stop near the existing precise-localization handoff; no automatic grasp."
+}

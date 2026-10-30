@@ -5,6 +5,7 @@ robot FK or target residual participates in image selection. Uses ulab rather
 than desktop NumPy, and portable two-pose geometry rather than desktop PnP.
 """
 import math
+import time
 import cv2
 try:
     from ulab import numpy as np
@@ -265,6 +266,33 @@ def gradient_side(im,hsv,K,D):
     return None
 
 def localize(im,K,D,T,table_plane=None):
+    """Shared fast sides first; preserve verified arm recovery and v0 paths."""
+    if table_plane is None:
+        return _localize_legacy(im,K,D,T,table_plane)
+    try:
+        from ..vision.physical_side import localize as fast_side
+    except ImportError:
+        try:
+            from physical_side import localize as fast_side
+        except ImportError:
+            from device.k230.vision.physical_side import localize as fast_side
+    clock=getattr(time,'ticks_ms',None) or (lambda:int(time.monotonic()*1000))
+    difference=getattr(time,'ticks_diff',None) or (lambda a,b:a-b)
+    start=clock()
+    try:
+        result=fast_side(im,K,D,T,table_plane)
+    except ValueError as exc:
+        fast_ms=difference(clock(),start)
+        recovery=clock()
+        result=_localize_legacy(im,K,D,T,table_plane)
+        result['shared_side_recovery']={'fast_side_reason':str(exc),
+            'fast_side_ms':fast_ms,'legacy_recovery_ms':difference(clock(),recovery)}
+        return result
+    result['shared_side_processing_ms']=difference(clock(),start)
+    return result
+
+
+def _localize_legacy(im,K,D,T,table_plane=None):
     if im.shape[:2]!=(960,1280):raise ValueError('Expected 1280x960 BGR frame')
     hsv=cv2.cvtColor(im,cv2.COLOR_BGR2HSV)
     table=table_context(T,table_plane)

@@ -1,0 +1,7 @@
+{
+  "distance_mm": 300,
+  "allowed_error_fraction": 0.05,
+  "heartbeat_interval_ms": 100,
+  "stopped_observation_ms": 200,
+  "notes": "First-run candidate; stopping parameters are in straight_control.h. No physical accuracy acceptance yet."
+}

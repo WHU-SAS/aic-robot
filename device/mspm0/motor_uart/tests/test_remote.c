@@ -132,5 +132,17 @@ int main(void)
     for (unsigned n = 0; n < 3; ++n) remote_step(&drive, true);
     assert(!drive.running && drive.stop_reason == 2 && !drive.left_pwm && !drive.right_pwm);
     assert(remote_request(&drive, &p) == RES_DUPLICATE && !drive.running);
-    puts("PASS: noise/CRC/framing, replay, ramp, stop, watchdog, deadline, B21, wrap");
+    /* Signed distance keeps the original positive magnitude range and frame. */
+    const char *moves[]={"MOVE,65535","MOVE,-65535","MOVE,1","MOVE,-1"};
+    for(unsigned n=0;n<sizeof(moves)/sizeof(moves[0]);++n){
+        frame(motion,1000+n,moves[n]);
+        assert(feed(&p,motion)==1 && p.command==CMD_MOVE);
+        assert(p.distance_mm==(n<2?65535:1) && p.reverse_move==(n%2!=0));
+    }
+    const char *bad_moves[]={"MOVE,0","MOVE,-0","MOVE,65536","MOVE,-65536",
+        "MOVE,+1","MOVE,1.5","MOVE,--1","MOVE,1,2"};
+    for(unsigned n=0;n<sizeof(bad_moves)/sizeof(bad_moves[0]);++n){
+        frame(motion,2000+n,bad_moves[n]);assert(feed(&p,motion)==0);
+    }
+    puts("PASS: noise/CRC/framing, replay, ramp, stop, watchdog, deadline, B21, wrap, signed MOVE");
 }

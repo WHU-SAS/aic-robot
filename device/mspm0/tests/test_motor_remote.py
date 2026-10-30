@@ -8,6 +8,42 @@ ROOT = Path(__file__).resolve().parents[3]
 
 class MotorRemoteTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('gcc'), 'Host gcc unavailable')
+    def test_continuous_controller_models(self):
+        folder = ROOT / 'device/mspm0/motor_uart'
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = str(Path(tmp) / 'follow_test')
+            subprocess.run(['gcc', '-std=c99', '-Wall', '-Wextra', '-Werror',
+                            '-fsanitize=undefined,address', '-I', str(folder),
+                            str(folder/'tests/test_follow.c'), '-lm', '-o', binary],
+                           check=True, capture_output=True)
+            result = subprocess.run([binary], check=True, capture_output=True, text=True)
+            self.assertIn('PASS:', result.stdout)
+
+    @unittest.skipUnless(shutil.which('gcc'), 'Host gcc unavailable')
+    def test_turn_controller_models(self):
+        folder = ROOT / 'device/mspm0/motor_uart'
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = str(Path(tmp) / 'turn_test')
+            subprocess.run(['gcc', '-std=c99', '-Wall', '-Wextra', '-Werror',
+                            '-fsanitize=undefined,address', '-I', str(folder),
+                            str(folder/'tests/test_turn.c'), '-lm', '-o', binary],
+                           check=True, capture_output=True)
+            result = subprocess.run([binary], check=True, capture_output=True, text=True)
+            self.assertIn('PASS:', result.stdout)
+
+    @unittest.skipUnless(shutil.which('gcc'), 'Host gcc unavailable')
+    def test_distance_controller_models(self):
+        folder = ROOT / 'device/mspm0/motor_uart'
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = str(Path(tmp) / 'straight_test')
+            subprocess.run(['gcc', '-std=c99', '-Wall', '-Wextra', '-Werror',
+                            '-fsanitize=undefined,address', '-I', str(folder),
+                            str(folder/'tests/test_straight.c'), '-lm', '-o', binary],
+                           check=True, capture_output=True)
+            result = subprocess.run([binary], check=True, capture_output=True, text=True)
+            self.assertIn('PASS:', result.stdout)
+
+    @unittest.skipUnless(shutil.which('gcc'), 'Host gcc unavailable')
     def test_parser_and_remote_state(self):
         folder = ROOT / 'device/mspm0/motor_uart'
         with tempfile.TemporaryDirectory() as tmp:

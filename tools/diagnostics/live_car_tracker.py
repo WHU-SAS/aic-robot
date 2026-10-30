@@ -81,7 +81,7 @@ def main(argv=None):
     parser.add_argument('--port', default=PORT)
     parser.add_argument('--http-port', type=int, default=0)
     parser.add_argument('--no-browser', action='store_true')
-    parser.add_argument('--no-record', action='store_true', help='Explicitly disable SD demonstration recording')
+    parser.add_argument('--no-record', action='store_true', help='Compatibility flag; live test no longer records JPEGs to SD')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args(argv)
     if not 1 <= args.duration <= 1800: parser.error('--duration must be 1..1800 seconds')
@@ -92,14 +92,16 @@ def main(argv=None):
     output = args.output or ROOT / 'data/car/live_tracking' / stamp
     output.mkdir(parents=True, exist_ok=True)
     if (output / 'result.json').exists(): parser.error('Choose a new output directory')
-    record_directory = None if args.no_record else '/sdcard/car_live/' + stamp
+    # SD JPEG writes measured 261ms/frame and degraded the 100ms tracker loop.
+    # Demonstration capture now has a separate hardware-video recording tool.
+    record_directory = None
     source = build_script(config, geometry, args.duration * 1000, args.interval_ms, record_directory)
     (output / 'board_script.py').write_text(source)
     (output / 'tracking_config.json').write_text(json.dumps(config['tracking'], indent=2) + '\n')
     result = {'status': 'built_no_hardware_access', 'motion_performed': False,
         'duration_requested_s': args.duration, 'listener_restored': False,
         'observations': 0, 'preview_frames': 0, 'state_counts': {}, 'state_transitions': [],
-        'SD_recording_directory': record_directory, 'recording_format': 'JPEG sequence; export to video on PC'}
+        'SD_recording_directory': None, 'recording_format': 'Not recorded; use record_car_video.py for demonstration capture'}
     link = None; viewer = None; last_jpeg = None
     native_done = False; old_status = None; native_ready = False
     started = time.monotonic(); last_preview = started; last_observation = started

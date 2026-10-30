@@ -110,8 +110,50 @@ class InteropTests(unittest.TestCase):
                     self.assertEqual((a > 0) - (a < 0), (left > 0) - (left < 0))
                     self.assertEqual((b > 0) - (b < 0), (right < 0) - (right > 0))
                     self.assertFalse(link.expect('HB')['run'])
+                # New distance request through the real Python encoder/C parser.
+                # This bridge does not model the distance plant; see test_straight.c.
+                for distance in (150, -30, 65535, -65535):
+                    moved = link.move(distance)
+                    self.assertEqual((moved['command'], moved['run']), ('MOVE', 1))
+                    self.assertFalse(link.expect('STOP')['run'])
+                for angle in (15, -15):
+                    turned = link.turn(angle)
+                    self.assertEqual((turned['command'], turned['run']), ('TURN', 1))
+                    self.assertFalse(link.expect('STOP')['run'])
                 board.run_drive_once(link, (-400, 400, 300))
                 board.run_drive_once(link, (0, 0, 10))
+                # Real client/C parser: continuous SPEED updates retain PWM
+                # and the task deadline, including an initial zero-speed probe.
+                follow = link.follow(0, 0)
+                self.assertEqual((follow['run'], follow['pwm'], follow['remaining_ms']), (1, 0, 20000))
+                link.speed(30, 60)
+                clock.sleep_ms(200)
+                updated = link.speed(60, 30)
+                self.assertEqual(updated['remaining_ms'], 19800)
+                self.assertGreater(updated['pwm'], 0)
+                link.expect('FOLLOW', result=3, speeds=(0, 0))
+                link.expect('MOVE,100', result=3)
+                for unused in range(198):
+                    link.speed(60, 30)
+                    clock.sleep_ms(100)
+                ended = link.expect('STATUS')
+                self.assertEqual((ended['run'], ended['pwm'], ended['reason']), (0, 0, 3))
+                self.assertFalse(link.expect('SPEED', result=3, speeds=(40, 40))['run'])
+                link.follow(40, 40)
+                clock.sleep_ms(1000)
+                ended = link.expect('STATUS')
+                self.assertEqual((ended['run'], ended['pwm'], ended['reason']), (0, 0, 4))
+                self.assertFalse(link.expect('SPEED', result=3, speeds=(40, 40))['run'])
+                # Explicit zero FOLLOW retains task state without energizing.
+                link.follow(0, 0)
+                for unused in range(10):
+                    clock.sleep_ms(100)
+                    zero = link.speed(0, 0)
+                    self.assertEqual((zero['run'], zero['pwm']), (1, 0))
+                self.assertFalse(link.expect('STOP')['run'])
+                for command in ('FOLLOW', 'SPEED'):
+                    for speeds in ((-1, 0), (0, 81), (True, 1), (1.5, 0), (1,), (1, 1, 1)):
+                        with self.assertRaises(ValueError): board.encode(1, command, speeds=speeds)
                 link.last['protocol_version'] = 1
                 with self.assertRaisesRegex(RuntimeError, 'protocol v2'):
                     link.drive(100, 100, 100)

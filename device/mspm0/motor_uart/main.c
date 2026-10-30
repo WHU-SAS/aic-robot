@@ -2,11 +2,16 @@
  * Startup has no drive. No mechanical-arm commands are sent by this firmware. */
 #include "../motor_encoder/ti_msp_dl_config.h"
 #include "remote_control.h"
+#include "turn_control.h"
+#include "follow_control.h"
 #include <stdio.h>
 
 #define MOTOR_A_REVERSE 0
 #define MOTOR_B_REVERSE 0
 static RemoteControl control;
+static StraightControl straight;
+static TurnControl turn;
+static FollowControl follow;
 static volatile int32_t pending_a, pending_b;
 static volatile uint32_t elapsed_ms, encoder_a_total, encoder_b_total;
 
@@ -63,12 +68,17 @@ void GROUP1_IRQHandler(void)
 void TIMER_0_INST_IRQHandler(void)
 {
     if (DL_TimerG_getPendingInterrupt(TIMER_0_INST) != DL_TIMER_IIDX_ZERO) return;
-    /* Same priority as encoder IRQ: atomic read/reset, no serial in ISRs. */
+    /* Transfer counts briefly; encoder IRQ may preempt the speed calculation. */
+    __disable_irq();
     encoder_a_total += (uint32_t)pending_a;
     encoder_b_total += (uint32_t)pending_b;
     pending_a = pending_b = 0;
+    __enable_irq();
     elapsed_ms += 10;
     remote_step(&control, DL_GPIO_readPins(KEY_PORT, KEY_key_PIN) == 0);
+    if (control.follow_mode) follow_step(&follow, &control, encoder_a_total, encoder_b_total);
+    else if (control.angle_deg) turn_step(&turn, &control, encoder_a_total, encoder_b_total);
+    else straight_step(&straight, &control, encoder_a_total, encoder_b_total);
     motor_output(control.running, control.left_pwm, control.right_pwm);
 }
 
@@ -107,11 +117,17 @@ static void put_string(UART_Regs *uart, const char *text)
 static void respond(const MotorParser *request)
 {
     char body[160], frame[180];
-    static const char *const names[] = {"STATUS", "START", "STOP", "HB", "DRIVE"};
+    static const char *const names[] = {"STATUS", "START", "STOP", "HB", "DRIVE", "MOVE", "TURN", "FOLLOW", "SPEED"};
     RemoteControl snapshot;
     uint32_t ms, a, b;
     __disable_irq();
     MotorResult result = remote_request(&control, request);
+    if (request->command == CMD_MOVE && result == RES_OK)
+        straight_begin(&straight, encoder_a_total, encoder_b_total);
+    if (request->command == CMD_TURN && result == RES_OK)
+        turn_begin(&turn, encoder_a_total, encoder_b_total);
+    if (request->command == CMD_FOLLOW && result == RES_OK)
+        follow_begin(&follow, encoder_a_total, encoder_b_total);
     motor_output(control.running, control.left_pwm, control.right_pwm); /* STOP before ACK. */
     snapshot = control;
     ms = elapsed_ms; a = encoder_a_total; b = encoder_b_total;
@@ -141,14 +157,14 @@ int main(void)
         DL_TIMER_CC_ZACT_CCP_HIGH | DL_TIMER_CC_CUACT_CCP_LOW, GPIO_PWM_0_C1_IDX);
     DL_Timer_startCounter(PWM_0_INST);
     NVIC_SetPriority(ENCODERA_INT_IRQN, 0);
-    NVIC_SetPriority(TIMER_0_INST_INT_IRQN, 0);
+    NVIC_SetPriority(TIMER_0_INST_INT_IRQN, 1);
     NVIC_ClearPendingIRQ(ENCODERA_INT_IRQN);
     NVIC_ClearPendingIRQ(TIMER_0_INST_INT_IRQN);
     NVIC_EnableIRQ(ENCODERA_INT_IRQN);
     NVIC_EnableIRQ(TIMER_0_INST_INT_IRQN);
     DL_Timer_startCounter(TIMER_0_INST);
     __enable_irq();
-    put_string(UART0, "AIC_MOTOR_UART_READY v2 115200 PWM=0 STBY=0\r\n");
+    put_string(UART0, "AIC_MOTOR_UART_READY v2+MOVE+TURN+FOLLOW 115200 PWM=0 STBY=0\r\n");
     for (;;) {
         if (!DL_UART_Main_isRXFIFOEmpty(UART1) &&
             motor_feed(&parser, DL_UART_Main_receiveData(UART1))) respond(&parser);

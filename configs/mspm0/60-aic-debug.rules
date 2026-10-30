@@ -1,3 +1,5 @@
-# CMSIS-DAP and fireDAP USB access for the local plugdev group.
+# CMSIS-DAP, fireDAP, and the project's J-Link USB access for the local plugdev group.
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{product}=="*CMSIS-DAP*", MODE="0660", GROUP="plugdev", TAG+="uaccess"
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{product}=="*[Ff][Ii][Rr][Ee]*DAP*", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+# J-Link V9.3 Plus (USB debug + virtual serial); do not let ModemManager probe it.
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="1366", ATTR{idProduct}=="0105", MODE="0660", GROUP="plugdev", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"

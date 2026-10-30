@@ -1,0 +1,8 @@
+{
+  "schema": "aic.car.visual_align.v1",
+  "max_turn_deg": 15,
+  "turn_gain": 0.75,
+  "observation_frames": 12,
+  "frame_interval_ms": 50,
+  "notes": "One visual turn per voice trigger. Gain0.75 is an empirical task-level compensation from12 stationary-cube trials, pending new-scene verification. No forward motion or automatic second turn."
+}

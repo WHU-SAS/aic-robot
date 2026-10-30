@@ -3,7 +3,7 @@
 from machine import UART, FPIOA
 import time
 
-MODE = "status"  # moving modes require host --execute --wheels-lifted
+MODE = "status"  # Moving modes require explicit host --execute and declared setup.
 DRIVE = None  # Explicit (left_pwm, right_pwm, duration_ms), never a default move.
 
 def crc16(data):
@@ -14,7 +14,7 @@ def crc16(data):
             crc = (((crc << 1) ^ 0x1021) if crc & 0x8000 else (crc << 1)) & 0xFFFF
     return crc
 
-def encode(sequence, command, drive=None):
+def encode(sequence, command, drive=None, speeds=None):
     suffix = command
     if command == 'DRIVE':
         if drive is None or len(drive) != 3 or any(type(v) is not int for v in drive):
@@ -25,6 +25,12 @@ def encode(sequence, command, drive=None):
         suffix += ',%d,%d,%d' % (left, right, duration)
     elif drive is not None:
         raise ValueError('Wheel parameters require DRIVE')
+    if command in ('FOLLOW', 'SPEED'):
+        if speeds is None or len(speeds) != 2 or any(type(v) is not int or not 0 <= v <= 80 for v in speeds):
+            raise ValueError('FOLLOW/SPEED require two integer wheel speeds within 0..80 mm/s')
+        suffix += ',%d,%d' % tuple(speeds)
+    elif speeds is not None:
+        raise ValueError('Wheel speeds require FOLLOW or SPEED')
     body = ('M,%08X,%s' % (sequence, suffix)).encode()
     return b'@' + body + (',%04X\n' % crc16(body)).encode()
 
@@ -50,7 +56,7 @@ def decode(raw):
         state.update(protocol_version=int(parts[11]), left_pwm=int(parts[12]),
                      right_pwm=int(parts[13]), target_left=int(parts[14]),
                      target_right=int(parts[15]), remaining_ms=int(parts[16]))
-        if state['protocol_version'] != 2 or not 0 <= state['remaining_ms'] <= 5000 or any(
+        if state['protocol_version'] != 2 or not 0 <= state['remaining_ms'] <= 20000 or any(
                 abs(state[k]) > 1600 for k in ('left_pwm', 'right_pwm', 'target_left', 'target_right')):
             raise ValueError('Invalid independent-wheel state')
     return state
@@ -66,13 +72,13 @@ class MotorLink:
         self.buffer = b''
         self.last = None
 
-    def request(self, command, replay=None, drive=None):
+    def request(self, command, replay=None, drive=None, speeds=None):
         if replay is None:
             self.sequence = (self.sequence + 1) & 0xFFFFFFFF
             sequence = self.sequence
         else:
             sequence = replay
-        tx = encode(sequence, command, drive)
+        tx = encode(sequence, command, drive, speeds)
         if self.uart.write(tx) != len(tx):
             raise RuntimeError('Short UART write')
         started = time.ticks_ms()
@@ -86,7 +92,7 @@ class MotorLink:
                         state = decode(raw + b'\n')
                     except (ValueError, UnicodeError):
                         continue
-                    if state['seq'] == sequence and state['command'] == command:
+                    if state['seq'] == sequence and state['command'] == command.split(',')[0]:
                         self.last = state
                         print('MOTOR_STATE', state)
                         return state
@@ -100,8 +106,8 @@ class MotorLink:
         self.sequence = state['last_seq']
         return state
 
-    def expect(self, command, result=0, replay=None, drive=None):
-        state = self.request(command, replay, drive)
+    def expect(self, command, result=0, replay=None, drive=None, speeds=None):
+        state = self.request(command, replay, drive, speeds)
         if state['result'] != result:
             raise RuntimeError('Unexpected command result: ' + str(state))
         return state
@@ -118,6 +124,20 @@ class MotorLink:
         if state['run'] or state['pwm'] or state['reason'] != reason:
             raise RuntimeError('Stop verification failed: ' + str(state))
         return state
+
+    def move(self, distance_mm):
+        return self.expect('MOVE,%d' % distance_mm)
+
+    def turn(self, angle_deg):
+        return self.expect('TURN,%d' % angle_deg)
+
+    def follow(self, left_mm_s, right_mm_s):
+        # v2 framing alone does not imply FOLLOW support; deployment verifies
+        # the installed image plus a stationary FOLLOW,0,0 / STOP exchange.
+        return self.expect('FOLLOW', speeds=(left_mm_s, right_mm_s))
+
+    def speed(self, left_mm_s, right_mm_s):
+        return self.expect('SPEED', speeds=(left_mm_s, right_mm_s))
 
     def heartbeat_run(self, duration_ms):
         started = time.ticks_ms()
