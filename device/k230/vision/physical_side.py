@@ -458,6 +458,54 @@ def _seam_seed_steps(im, hsv, bbox, vertices):
         yield {'stage': 'seam_proposal'}
 
 
+def _contour_side_seed(seed, edge_index, vertices):
+    """Recover a rounded endpoint using a measured-outline search initialisation.
+
+    Only a long, parallel contour segment alongside the failed side can seed
+    this bounded retry. Component extrema alone cannot supply a missing edge.
+    Every retry still measures all four sides and passes normal face checks.
+    """
+    if edge_index not in (1, 3):
+        return None
+    a, b = seed[edge_index], seed[(edge_index+1) % 4]
+    length = distance(a, b)
+    if length < 25:
+        return None
+    u = [(b[k]-a[k])/length for k in (0, 1)]
+    n = [-u[1], u[0]]
+    center = [sum(p[k] for p in seed)/4 for k in (0, 1)]
+    middle = [(a[k]+b[k])/2 for k in (0, 1)]
+    inward = sum((center[k]-middle[k])*n[k] for k in (0, 1))
+    limit = max(18., .25*distance(seed[0], seed[1]))
+    proposals = []
+    for c, d in zip(vertices, vertices[1:]+vertices[:1]):
+        other = distance(c, d)
+        if other < .5*length or abs(sum((d[k]-c[k])*u[k] for k in (0, 1)))/other < .94:
+            continue
+        along = [sum((p[k]-a[k])*u[k] for k in (0, 1)) for p in (c, d)]
+        overlap = max(0., min(length, max(along))-max(0., min(along)))
+        if overlap < .5*length:
+            continue
+        line = fit([c, d])
+        denominator = sum(line[k]*n[k] for k in (0, 1))
+        if abs(denominator) < 1e-6:
+            continue
+        gap = -(sum(line[k]*middle[k] for k in (0, 1))+line[2])/denominator
+        if gap*inward >= 0 or not 3. < abs(gap) <= limit:
+            continue
+        candidate = [list(p) for p in seed]
+        try:
+            before = fit([seed[(edge_index-1) % 4], a])
+            after = fit([b, seed[(edge_index+2) % 4]])
+            candidate[edge_index] = intersect(before, line)
+            candidate[(edge_index+1) % 4] = intersect(line, after)
+        except ValueError:
+            continue
+        if corner_distance(seed, candidate) <= limit:
+            proposals.append((overlap, -abs(gap), candidate))
+    return max(proposals, key=lambda item: item[:2])[2] if proposals else None
+
+
 def localize_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
                    max_candidates=3, roi_padding_px=24, stations_per_step=8,
                    side_search_height_ratio=1.6, include_range=False):
@@ -605,7 +653,10 @@ def localize_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
         seeds.sort(key=lambda q: -area(q))
         seeds = priority+[q for q in seeds if not any(corner_distance(q, old) < 3 for old in priority)]
         measured = 0
+        contour_retry = None
         for seed in seeds:
+            if seed is contour_retry and faces:
+                continue  # Any original strict result keeps its old priority.
             full_seed = [[p[0]+x0, p[1]+y0] for p in seed]
             if any(corner_distance(full_seed, f['face_quad_px']) < 18 for f in faces):
                 # A verified side already owns this proposal's edge-search
@@ -626,16 +677,19 @@ def localize_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
             index, measured = measured, measured+1
             try:
                 edges = []
+                failed_edge = None
                 for edge_index, (a, b) in enumerate(zip(seed, seed[1:]+seed[:1])):
                     if edge_index == 0 and id(seed) in cached_edges:
                         edges.append(cached_edges[id(seed)])
                         yield {'stage': 'edge_reused', 'candidate': index, 'edge_index': 0}
                         continue
+                    failed_edge = edge_index
                     for step in _edge_steps(smooth, a, b, stations_per_step, hsv=hsv):
                         if step['stage'] == 'edge_complete':
                             edges.append(step['edge'])
                         yield {'stage': step['stage'], 'candidate': index,
                                'edge_index': edge_index, 'stations': step.get('stations')}
+                    failed_edge = None
                 q = [intersect(edges[i-1][0], edges[i][0]) for i in range(4)]
                 for half in (0, 1):
                     check = [intersect(edges[i-1][2][half], edges[i][2][half]) for i in range(4)]
@@ -673,6 +727,14 @@ def localize_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
                 yield {'stage': 'side_pose', 'candidate': index}
             except (ValueError, ZeroDivisionError) as exc:
                 rejected.append({'candidate': index, 'reason': str(exc)})
+                if not include_range and contour_retry is None and failed_edge in (1, 3):
+                    retry = _contour_side_seed(seed, failed_edge, vertices)
+                    if retry is not None and component_support(retry, anchor) and not any(
+                            corner_distance(retry, old) < 3 for old in seeds):
+                        # Original proposals stay first, and the existing max3
+                        # attempt limit remains. No cached edge is reused.
+                        seeds.append(retry)
+                        contour_retry = retry
                 yield {'stage': 'candidate_rejected', 'candidate': index, 'reason': str(exc)}
     try:
         selected = select_sides(faces, K, D, table)

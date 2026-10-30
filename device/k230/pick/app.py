@@ -2,7 +2,7 @@
 No motion at boot: an accepted wake event is required for each run. No chassis
 commands, PID writes, automatic return, release or queued extra pick actions.
 """
-import os,gc,json,time
+import os,gc,json,time,math
 from camera import CameraSession
 from vision import localize
 from vision_runtime import localize_precise
@@ -163,17 +163,79 @@ def perceive(config):
             except Exception as exc:log('vision_archive_error',str(exc))
 
 
-def run_once(config,execute=False):
-    found=perceive(config)
+def _table_plane(config):
+    if 'table_plane' in config:return config['table_plane']
+    return config['vision']['localization']['table_plane_Base_mm']
+
+
+def _same_calibration(config,source):
+    if not isinstance(source,dict):
+        raise ValueError('Pick handoff requires source_config calibration')
+    try:
+        for key in ('camera_matrix','distortion_coefficients','image_width','image_height'):
+            if config['intrinsics'][key]!=source['intrinsics'][key]:
+                raise ValueError('Pick handoff intrinsics mismatch: '+key)
+        if config['extrinsics']['T_Base_from_Camera_mm']!=source['extrinsics']['T_Base_from_Camera_mm']:
+            raise ValueError('Pick handoff extrinsics mismatch')
+        if _table_plane(config)!=_table_plane(source):
+            raise ValueError('Pick handoff table plane mismatch')
+        for key in ('width','height','hmirror','vflip'):
+            if config['vision']['camera'][key]!=source['vision']['camera'][key]:
+                raise ValueError('Pick handoff camera mode mismatch: '+key)
+    except (KeyError,TypeError):
+        raise ValueError('Pick handoff calibration is incomplete')
+
+
+def _handoff_target(observation):
+    """Check capability and units; the task owns stopped/fresh/window attestation.
+
+    A long static solve retains its capture time. This consumer does not renew
+    it or impose a second generic capture-age limit after parking acceptance.
+    """
+    expected={'schema':'aic.vision_observation.v1','mode':'precise','status':'localized',
+              'coordinate_frame':'Base','units':'mm','reference_point':'cube_geometric_center'}
+    if not isinstance(observation,dict) or any(observation.get(k)!=v for k,v in expected.items()):
+        raise ValueError('Pick handoff requires a complete precise Base observation')
+    if (observation.get('xy_compensation_applied') is not False or
+            observation.get('odometry_predicted') is True or observation.get('range_only') is True):
+        raise ValueError('Pick handoff cannot use compensated, predicted or range-only targets')
+    stamp=observation.get('capture_timestamp_ms')
+    if (observation.get('image_size_px')!=[1280,960] or observation.get('frame_id') is None or
+            type(stamp) is not int or stamp<0 or observation.get('timestamp_ms',stamp)!=stamp or
+            observation.get('clock_domain')!='k230_ticks_ms'):
+        raise ValueError('Pick handoff requires the original board capture identity')
+    center=observation.get('cube_center_Base_mm')
+    if (not isinstance(center,(list,tuple)) or len(center)!=3 or
+            any(type(v) not in (int,float) or not math.isfinite(v) for v in center)):
+        raise ValueError('Pick handoff requires finite raw cube XYZ')
+    quality=observation.get('quality') or {}
+    rms=quality.get('reprojection_rms_px')
+    if type(rms) not in (int,float) or not math.isfinite(rms) or not 0<=rms<=2:
+        raise ValueError('Pick handoff does not meet the existing 2px face criterion')
+    raw=observation.get('payload') or {}
+    if not isinstance(raw,dict):raise ValueError('Pick handoff payload must be a result object')
+    found=dict(raw);found['cube_center_Base_mm']=list(center);found['observation']=observation
+    return found
+
+
+def _run_target(config,found,execute,start_counts=None):
     vision=config['vision']
-    if not execute:return found
-    import control as arm_control
-    arm_control.print=record_arm_event
-    control=config['control'];rows=arm_snapshot(control);start=[r['position'] for r in rows]
+    control=config['control']
+    if execute:
+        if start_counts is not None:raise ValueError('Live pick requires current arm feedback')
+        import control as arm_control
+        arm_control.print=record_arm_event
+        rows=arm_snapshot(control);start=[r['position'] for r in rows]
+    else:
+        if (not isinstance(start_counts,(list,tuple)) or len(start_counts)!=6 or
+                any(type(v) is not int for v in start_counts)):
+            raise ValueError('Offline pick planning requires six start_counts')
+        start=list(start_counts)
     xy=found['cube_center_Base_mm'][:2];plane=vision['localization']['table_plane_Base_mm'];n=plane['normal']
     table_z=(plane['offset_mm']-n[0]*xy[0]-n[1]*xy[1])/n[2]
     geometry=Geometry(config['model'],config['pick'],table_z)
     plan=geometry.plan([v/1000 for v in xy],start);log('planned',plan)
+    if not execute:return plan
     for name in ('hover','descend','close','lift'):
         action=dict(control);action['goals']=plan[name]
         stage={'name':name,'duration_s':config['pick']['stage_durations_s'].get(name,0),
@@ -184,6 +246,29 @@ def run_once(config,execute=False):
         if name=='descend':log('descend_position_sample',arrival)
     log('complete_torque_on',{'actual_grasp_success':'requires observation','torque_state':'unchanged_not_checked'})
     return plan
+
+
+
+def run_from_observation(config,observation,execute=False,start_counts=None,source_config=None):
+    """Plan/pick the exact final static result, without camera or localization.
+
+    Caller must already accept this frame as parked, retain its original capture
+    identity and prevent further chassis movement until the pick is dispatched.
+    Live mode reads current joints; dry planning requires explicit start counts.
+    No PID, torque, stage policy, correction or return behavior is added here.
+    """
+    _same_calibration(config,source_config)
+    found=_handoff_target(observation)
+    log('handoff_localized',{'frame_id':observation['frame_id'],
+        'capture_timestamp_ms':observation['capture_timestamp_ms'],
+        'cube_center_Base_mm':found['cube_center_Base_mm'],'source':'accepted_static_observation'})
+    return _run_target(config,found,execute,start_counts)
+
+
+def run_once(config,execute=False):
+    found=perceive(config)
+    if not execute:return found
+    return _run_target(config,found,True)
 
 
 def run_ready(config):
