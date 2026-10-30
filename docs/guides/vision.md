@@ -89,3 +89,17 @@ PC单图入口、独立抓取及小车`observations.py`已接入该协议。部�
 第0版特征回放用`tools/analysis/replay_onboard_detector.py`；其`--source image`是PC图像适配，不能证明真实多帧稳定性。
 
 历史原图、修复对照、旧部署和报告素材仅保存在本机`data/`。报告入口为`data/arm/report_assets/LATEST.txt`；不上传原图，也不在操作指南逐轮追加调试记录。
+
+## 困难数据集（本机）
+
+新版精定位逐轮保留原始JPEG95、采集元数据、识别结果、内外参快照及源码/部署版本，成功图也保留，供事后标记“识别成功但位置不准”。板端目录为`/sdcard/aic/vision/evidence/`：机械臂直接使用唯一文件完成识别；小车最多暂存3张精定位图，停车并关闭相机后落盘。原图不覆盖、不自动清理；写入失败明确报告`vision_archive_error`，不额外改变动作条件。留档代码需随相应板端入口部署才生效。
+
+汇总目录为`data/vision/hard_cases/`，只留本机，不Git。PC流程的精定位拒绝样本自动入集；板端目录导出后批量导入，定位成功但不准的轮次追加人工标签。已有历史失败与人工复查图；原标定缺失的旧图使用明确标注的对比配置，不计算跨标定坐标误差。旧预测不是实测真值，标记`selected`的待复查图不自动当作失败。
+
+```bash
+./scripts/vision-hard-cases add --source data/logs/某轮目录 --reason inaccurate --note "偏底座侧"
+./scripts/vision-hard-cases import-evidence --source /已导出的板端目录/manifest.json
+./scripts/vision-hard-cases replay
+```
+
+视觉算法更新后运行回放，检查识别恢复、选面、坐标变化和耗时；报告每次另存`reports/`。只有人工明确标注的预期结果才判通过/失败，未标注样本保持待复核；原图、旧结果和标签历史不随回放改写。

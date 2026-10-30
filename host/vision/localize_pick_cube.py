@@ -13,8 +13,18 @@ from host.vision.config import load_vision_config,table_height_at
 ROOT=REPO_ROOT
 
 def localize(image,output,vision_config=None):
- output=Path(output);output.mkdir(parents=True,exist_ok=True);cfg=load_vision_config(vision_config)['localization'];ip=ROOT/cfg['intrinsics'];ep=ROOT/cfg['extrinsics'];intr=json.loads(ip.read_text());ext=json.loads(ep.read_text())
+ output=Path(output);output.mkdir(parents=True,exist_ok=True);profile=load_vision_config(vision_config);cfg=profile['localization'];ip=ROOT/cfg['intrinsics'];ep=ROOT/cfg['extrinsics'];intr=json.loads(ip.read_text());ext=json.loads(ep.read_text())
  if hashlib.sha256(ip.read_bytes()).hexdigest()!=ext['intrinsics_sha256']:raise RuntimeError('Candidate intrinsics and extrinsics do not match')
+ # Freeze the actual calibration and source fingerprints before attempting
+ # detection, so rejected images remain reproducible after config updates.
+ sources=sorted((ROOT/'device/k230/pick').glob('*.py'))+sorted((ROOT/'device/k230/vision').glob('*.py'))
+ context={'schema':'aic.vision_context.v1','vision':profile,'intrinsics':intr,'extrinsics':ext,
+          'table_plane':cfg.get('table_plane_Base_mm') if cfg.get('table_pose_constraints_enabled') else None,
+          'version':{'source_sha256':{str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}},
+          'calibration_sources':{'intrinsics':str(ip),'extrinsics':str(ep),
+            'intrinsics_sha256':hashlib.sha256(ip.read_bytes()).hexdigest(),
+            'extrinsics_sha256':hashlib.sha256(ep.read_bytes()).hexdigest()}}
+ (output/'vision_context.json').write_text(json.dumps(context,ensure_ascii=False,indent=2)+'\n')
  im=cv2.imread(str(image))
  if im is None or im.shape[:2]!=(960,1280):raise RuntimeError('Expected a completed1280x960 K230 frame')
  from device.k230.vision.runtime import localize_precise

@@ -12,7 +12,14 @@ from voice_commands import registered_commands,resolve_events
 
 
 def load(root):
-    with open(root+'/config.json') as f:return json.load(f)
+    with open(root+'/config.json') as f:config=json.load(f)
+    # Manifest fingerprints identify the exact deployed source, including local builds.
+    try:
+        with open(root+'/manifest.json') as f:version=json.load(f)
+        config['_evidence_version']={'release_path':root,'manifest':version}
+    except OSError as exc:
+        config['_evidence_version']={'release_path':root,'manifest_error':str(exc)}
+    return config
 
 def log(event,details=None,persist=True):
     record={'event':event,'ticks_ms':time.ticks_ms(),'details':details}
@@ -90,7 +97,7 @@ def arm_snapshot(config):
     finally:uart.deinit()
 
 
-def run_once(config,execute=False):
+def _perceive(config,evidence=None):
     vision=config['vision'];intr=config['intrinsics']
     session=CameraSession(vision,False);timing={};perception_started=time.ticks_ms()
     try:
@@ -100,23 +107,65 @@ def run_once(config,execute=False):
         timing['snapshot']=time.ticks_diff(time.ticks_ms(),phase)
         # Preserve RGB565 capture and JPEG95 decoding used by the accepted PC
         # pipeline; only the transfer to the computer has been removed.
-        phase=time.ticks_ms();img.save('/sdcard/aic/pick/last_frame.jpg',quality=95)
+        image_path='/sdcard/aic/pick/last_frame.jpg'
+        if evidence is not None:
+            try:image_path=evidence.new_frame('pick',frame)
+            except Exception as exc:log('vision_archive_error',str(exc))
+        phase=time.ticks_ms();img.save(image_path,quality=95)
         timing['jpeg_save']=time.ticks_diff(time.ticks_ms(),phase)
     finally:
         phase=time.ticks_ms();session.close()
         timing['camera_close']=time.ticks_diff(time.ticks_ms(),phase)
     import cv2
-    phase=time.ticks_ms();im=cv2.imread('/sdcard/aic/pick/last_frame.jpg')
+    phase=time.ticks_ms();im=cv2.imread(image_path)
     timing['jpeg_read']=time.ticks_diff(time.ticks_ms(),phase)
     phase=time.ticks_ms();observation=localize_precise(im,frame,intr,config['extrinsics'],
         vision['localization'].get('table_plane_Base_mm') if vision['localization'].get('table_pose_constraints_enabled') else None,
         localizer=localize)
+    if evidence is not None:
+        try:evidence.record_observation('pick',observation)
+        except Exception as exc:log('vision_archive_error',str(exc))
     if observation['status']!='localized':raise ValueError(observation['reason'])
     found=observation.pop('payload');found['observation']=observation
     timing['visual_localization']=time.ticks_diff(time.ticks_ms(),phase)
     timing['capture_and_localize']=time.ticks_diff(time.ticks_ms(),perception_started)
     found['perception_timing_ms']=timing
     del im;gc.collect();log('localized',found)
+    return found
+
+
+def perceive(config):
+    # Save the same JPEG used for inference once, retaining successful images too:
+    # a later human report may identify an inaccurate but accepted localization.
+    evidence=None;status='perception_error';error=None
+    try:
+        from evidence import EvidenceRun
+        snapshot={key:config[key] for key in ('vision','intrinsics','extrinsics')}
+        evidence=EvidenceRun('/sdcard/aic/vision/evidence','arm_pick',snapshot,
+                             version=config.get('_evidence_version'))
+    except Exception as exc:log('vision_archive_error',str(exc))
+    try:
+        result=_perceive(config,evidence)
+        status='localized'
+        return result
+    except BaseException as exc:
+        error=str(exc)
+        raise
+    finally:
+        # Finalize BEFORE arm dispatch; keep all stage rules and the post-lift
+        # one-second voice-resume policy untouched by archive I/O.
+        if evidence is not None:
+            try:
+                saved=evidence.finish(status,error)
+                log('vision_evidence_saved',{'directory':evidence.directory,
+                    'manifest':evidence.manifest_path,'status':saved['status'],
+                    'archive_complete':saved['archive_complete']})
+            except Exception as exc:log('vision_archive_error',str(exc))
+
+
+def run_once(config,execute=False):
+    found=perceive(config)
+    vision=config['vision']
     if not execute:return found
     import control as arm_control
     arm_control.print=record_arm_event

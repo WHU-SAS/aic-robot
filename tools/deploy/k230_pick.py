@@ -53,6 +53,7 @@ def build_bundle(pick_config=None):
     files={p.name:p.read_bytes() for p in (ROOT/'device/k230/pick').glob('*.py')}
     files['camera.py']=(ROOT/'device/k230/vision/camera.py').read_bytes()
     files['vision_runtime.py']=(ROOT/'device/k230/vision/runtime.py').read_bytes()
+    files['evidence.py']=(ROOT/'device/k230/vision/evidence.py').read_bytes()
     files['wake_word.py']=(ROOT/'device/k230/audio/wake_word.py').read_bytes()
     read=(ROOT/'device/k230/diagnostics/uart1_servo_read.py').read_text().split('\nif __name__ == "__main__":')[0]
     ready=(ROOT/'device/k230/arm/ready_pose.py').read_text()
@@ -135,7 +136,7 @@ def verify(link,remote,manifest,config):
     # Imports/pose/IK and saved registration checks only: no camera/UART init.
     source="""import os,sys,json,binascii,uhashlib
 sys.path.insert(0,%r)
-for name in ['app','pose','numeric','kinematics','vision','reflection_faces','face_selection','side_faces','table_pose','top_boundaries','camera','vision_runtime','wake_word','control','voice_commands']:
+for name in ['app','pose','numeric','kinematics','vision','reflection_faces','face_selection','side_faces','table_pose','top_boundaries','camera','vision_runtime','evidence','wake_word','control','voice_commands']:
  if name in sys.modules:del sys.modules[name]
 with open(%r+'/manifest.json') as f:m=json.load(f)
 for name,item in m['files'].items():

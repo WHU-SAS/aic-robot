@@ -33,4 +33,5 @@
 
 - `scripts/host`用于串口/FK/IK，`scripts/vision`用于PC OpenCV；板端不导入PC pyserial/SciPy。
 - 原图、编码、失败素材、历史分析和部署记录仅留本机`data/`，当前运行标定纳入Git。旧PID实验与`.local_archive/`不复制、恢复或上传。
+- 视觉精定位逐轮保留成功/失败原图及原配置；人工报告识别不准后加入本机`data/vision/hard_cases/`。更新视觉前后用`./scripts/vision-hard-cases replay`对照，保留报告并审查退化；旧预测不当真值，不覆盖或自动删除困难集。
 - 人读指南只写当前用法、关键边界和未解决问题，不逐轮追加调试日志；报告素材入口为`data/arm/report_assets/LATEST.txt`。不删除已归档原图和失败证据。

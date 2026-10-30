@@ -172,7 +172,15 @@ def main(argv=None):
         else:print(str(exc),file=sys.stderr)
         save();print('已停止后续阶段；不自动回位或关闭扭矩。',file=sys.stderr)
         return 1
-    finally:print('RECORD',folder/'execution.json',flush=True)
+    finally:
+        if (folder/'frame.jpg').is_file() and (folder/'vision_candidates.json').is_file():
+            try:
+                from host.vision.hard_dataset import add_case
+                record['hard_case_id']=add_case(folder,'recognition_failure',
+                    'PC精定位拒绝，自动保留原图与当轮配置；未赋予实测坐标真值。')
+                save()
+            except Exception as exc:print('VISION_ARCHIVE_ERROR '+str(exc),file=sys.stderr,flush=True)
+        print('RECORD',folder/'execution.json',flush=True)
 
 
 if __name__=='__main__':raise SystemExit(main())
