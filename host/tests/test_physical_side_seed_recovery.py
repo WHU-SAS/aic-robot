@@ -160,6 +160,50 @@ class PhysicalSideSeedRecoveryTests(unittest.TestCase):
             self.assertEqual(out['cube_center_Base_mm'], old['cube_center_Base_mm'])
             self.assertEqual(out['payload']['face_quad_px'], old['payload']['face_quad_px'])
 
+    def test_static_side_shadow_reuses_profiles_after_failed_pose(self):
+        folder = ROOT/'data/logs/robot_startup_delay_20261031_181627/evidence/robot_task_329851_0'
+        if not (folder/'stopped_verify.jpg').exists():
+            self.skipTest('Original parking images are local-only evidence')
+        cfg = json.loads((folder/'config.json').read_text())['car']
+        original = vision._coherent_internal_edge
+        for label in ('stopped_verify', 'corrected_verify'):
+            image = cv2.imread(str(folder/(label+'.jpg')))
+            predictions = []
+            for native in (True, False):
+                recovered = []
+                with self.subTest(label=label, native=native), patch.object(
+                        vision, '_BATCH_EDGES', native), patch.object(
+                        vision, '_native_contrasts', wraps=vision._native_contrasts) as contrasts, patch.object(
+                        vision, 'pose_candidates', wraps=vision.pose_candidates) as poses:
+                    def same_profiles(*args, **kwargs):
+                        before = contrasts.call_count
+                        result = original(*args, **kwargs)
+                        if kwargs.get('outline'):
+                            self.assertEqual(contrasts.call_count, before)
+                            recovered.append(result)
+                        return result
+                    with patch.object(vision, '_coherent_internal_edge', side_effect=same_profiles):
+                        steps = self.solve(image, cfg)
+                out = steps[-1]['observation']
+                self.assertEqual(out['status'], 'localized', out)
+                self.assertEqual(poses.call_count, 2)
+                self.assertLessEqual(out['search']['measured_seed_count'], 3)
+                self.assertEqual(len(recovered), 1)
+                self.assertTrue(any(step['stage']=='outline_profile_recovered' for step in steps))
+                self.assertEqual(sum(step['stage']=='seam_samples' for step in steps), 8)
+                self.assertLessEqual(out['quality']['reprojection_rms_px'], 2.)
+                face = out['payload']
+                self.assertEqual(face['side_selection'], 'single_verified_side')
+                self.assertTrue(face['side_faces'])
+                self.assertEqual(face['physical_edges'][1]['edge_ownership'], 'coherent_blue_outline')
+                self.assertTrue(face['poses'][0]['table_geometry']['accepted'])
+                for edge in face['physical_edges']:
+                    self.assertEqual(edge['sampled_stations'], 64)
+                    self.assertGreaterEqual(edge['support'], 45)
+                    self.assertLessEqual(edge['rms_px'], 3.)
+                predictions.append(out['cube_center_Base_mm'])
+            np.testing.assert_allclose(predictions[0], predictions[1], atol=.05, rtol=0.)
+
     def test_uniform_blue_rectangle_has_no_internal_top_side_separator(self):
         fixture = fixtures.NearVisionTests()
         image, intr, ext, plane = fixture.scene()
@@ -205,6 +249,8 @@ class PhysicalSideSeedRecoveryTests(unittest.TestCase):
         self.assertTrue(all(call.args[1] != 2 for call in retries.call_args_list))
         recovered.assert_not_called()
         self.assertTrue(all(not call.kwargs.get('coherent', False) for call in edges.call_args_list))
+        self.assertTrue(all(call.kwargs.get('profile') is None for call in edges.call_args_list))
+        self.assertFalse(any(step['stage']=='outline_profile_recovered' for step in steps))
 
 
 if __name__ == '__main__':

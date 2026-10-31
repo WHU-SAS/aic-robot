@@ -184,7 +184,7 @@ def _fit_edge(points, stations):
     return line, {'support': len(inliers), 'sampled_stations': 64, 'rms_px': rms}, [fit(g) for g in groups]
 
 
-def _blue_grid(hsv, a, b, normal, radius):
+def _blue_grid(hsv, a, b, normal, radius, inside_only=False):
     stations = np.arange(64).reshape((64, 1))
     offsets = np.arange(-radius, radius+1).reshape((1, 2*radius+1))
     along = .15+.7*stations/63
@@ -192,7 +192,7 @@ def _blue_grid(hsv, a, b, normal, radius):
     my = a[1]+(b[1]-a[1])*along+normal[1]*offsets
     kind = getattr(np, 'float32', FLOAT)
     both = np.ones(mx.shape, dtype=FLOAT)
-    for sign in (1, -1):
+    for sign in ((1,) if inside_only else (1, -1)):
         values = cv2.remap(hsv, np.array(mx+sign*2*normal[0], dtype=kind),
             np.array(my+sign*2*normal[1], dtype=kind), cv2.INTER_NEAREST)
         both = both*(values[:, :, 0]>=90)*(values[:, :, 0]<=140)*\
@@ -236,15 +236,18 @@ def _internal_edge(a, b, n, radius, rows, peaks, both, original):
     return internal
 
 
-def _coherent_internal_edge(a, b, n, radius, rows, both, hsv, im):
+def _coherent_internal_edge(a, b, n, radius, rows, both, hsv, im, outline=False):
     """Recover a crease from local peaks in the SAME64 contrast profiles.
 
     A broad highlight has two flanks: independently choosing the strongest
     pixel at each station can mix them. Vote for one observed line instead;
     the normal edge fit and blue/blue separator checks still own acceptance.
+    An outline instead requires a blue interior and prefers the straightest
+    distributed peak line, so a face/shadow mixture cannot win by brightness.
     """
     if sum(bool(row[radius]) for row in both) < 45:
-        raise ValueError('Coherent separator is not internal blue')
+        raise ValueError('Coherent outline lacks blue interior' if outline else
+                         'Coherent separator is not internal blue')
     length = distance(a, b)
     along = [(-.35+.7*j/63)*length for j in range(64)]
     candidates = []
@@ -260,7 +263,8 @@ def _coherent_internal_edge(a, b, n, radius, rows, both, hsv, im):
         for j, offset, score in candidates:
             key = int(round((offset-tilt*along[j])/2))
             bins.setdefault(key, set()).add(j)
-        for key in sorted(bins, key=lambda k: -len(bins[k]))[:2]:
+        keys = sorted(bins, key=(lambda k: (-len(bins[k]), k)) if outline else (lambda k: -len(bins[k])))
+        for key in keys[:2]:
             selected = {}
             for j, offset, score in candidates:
                 if (abs(offset-tilt*along[j]-key*2) <= 2.5 and
@@ -273,21 +277,23 @@ def _coherent_internal_edge(a, b, n, radius, rows, both, hsv, im):
                        for k in (0, 1)] for j in stations]
             try:
                 edge = _fit_edge(points, stations)
-                rank = (len(selected), sum(v[1] for v in selected.values()), -edge[1]['rms_px'])
+                rank = ((-edge[1]['rms_px'], edge[1]['support'], sum(v[1] for v in selected.values()))
+                        if outline else (len(selected), sum(v[1] for v in selected.values()), -edge[1]['rms_px']))
                 if best is not None and rank <= best[0]:
                     continue
-                upper = [intersect(edge[0], [1., 0., -v[0]]) for v in (a, b)]
-                _separator_evidence(hsv, upper, edge, im)
+                if not outline:
+                    upper = [intersect(edge[0], [1., 0., -v[0]]) for v in (a, b)]
+                    _separator_evidence(hsv, upper, edge, im)
             except ValueError:
                 continue
             best = (rank, edge)
     if best is None:
         raise ValueError('No coherent measured internal edge')
-    best[1][1]['edge_ownership'] = 'coherent_internal_blue_blue'
+    best[1][1]['edge_ownership'] = 'coherent_blue_outline' if outline else 'coherent_internal_blue_blue'
     return best[1]
 
 
-def _edge_steps(im, a, b, stations_per_step=8, hsv=None, coherent=False):
+def _edge_steps(im, a, b, stations_per_step=8, hsv=None, coherent=False, profile=None):
     """Same64 stations/edge checks; retain a resolved internal-face crease."""
     length = distance(a, b)
     if length < 25:
@@ -343,6 +349,8 @@ def _edge_steps(im, a, b, stations_per_step=8, hsv=None, coherent=False):
     if hsv is not None and sum(abs(p-radius)>=3 for p in peaks) >= 45:
         both = _blue_grid(hsv, a, b, n, radius) if grid is not None else blue_rows
         edge = _internal_edge(a, b, n, radius, rows, peaks, both, edge)
+    if profile is not None:
+        profile.update(a=a, b=b, normal=n, radius=radius, rows=rows)
     yield {'stage': 'edge_complete', 'edge': edge}
 
 
@@ -860,7 +868,7 @@ def localize_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
             yield {'stage': step['stage']}
         seeds.sort(key=lambda q: -area(q))
         seeds = priority+[q for q in seeds if not any(corner_distance(q, old) < 3 for old in priority)]
-        measured = 0
+        measured, pose_attempts = 0, 0
         contour_retry = None
         # A corrected seed can use only a later same-side slot already in the
         # original list; existing priority, successes and face budget stay put.
@@ -892,37 +900,63 @@ def localize_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
             try:
                 edges = []
                 failed_edge = None
+                outline_profile = {} if not include_range else None
                 for edge_index, (a, b) in enumerate(zip(seed, seed[1:]+seed[:1])):
                     if edge_index == 0 and id(seed) in cached_edges:
                         edges.append(cached_edges[id(seed)])
                         yield {'stage': 'edge_reused', 'candidate': index, 'edge_index': 0}
                         continue
                     failed_edge = edge_index
-                    for step in _edge_steps(smooth, a, b, stations_per_step, hsv=hsv):
+                    profile = outline_profile if edge_index == 1 else None
+                    for step in _edge_steps(smooth, a, b, stations_per_step, hsv=hsv, profile=profile):
                         if step['stage'] == 'edge_complete':
                             edges.append(step['edge'])
                         yield {'stage': step['stage'], 'candidate': index,
                                'edge_index': edge_index, 'stations': step.get('stations')}
                     failed_edge = None
-                q = [intersect(edges[i-1][0], edges[i][0]) for i in range(4)]
-                for half in (0, 1):
-                    check = [intersect(edges[i-1][2][half], edges[i][2][half]) for i in range(4)]
-                    if max(distance(a, b) for a, b in zip(q, check)) > 3:
-                        raise ValueError('Side interleaved corners disagree')
-                if corner_distance(q, seed) > 18:
-                    raise ValueError('Side edges too far from proposal')
-                full_q = [[p[0]+x0, p[1]+y0] for p in q]
-                if any(not (3<p[0]<1277 and 3<p[1]<957) for p in full_q):
-                    raise ValueError('Side clipped')
-                if area(q) < 1000 or not cv2.isContourConvex(np.array(q, dtype=FLOAT)):
-                    raise ValueError('Side not convex')
-                if not component_support(q, anchor) or internal_seam(hsv, q) is not None:
-                    raise ValueError('Side proposal contains another face')
-                yield {'stage': 'side_boundary', 'candidate': index}
-                back = min(range(4), key=lambda i: (q[i][1]+q[(i+1)%4][1])/2)
-                separator = _separator_evidence(hsv, q[back:]+q[:back], edges[back], im)
-                yield {'stage': 'side_seam', 'candidate': index}
-                poses = side_pose(pose_candidates(full_q, K, D, refine=True, refiner=refine_pose))
+                for recovered_outline in (False, True):
+                    if recovered_outline:
+                        # A failed square pose may expose a right-edge profile
+                        # mixing the face crease with its dark side/shadow.
+                        # Reuse its64 samples; choose straightness, never a
+                        # table/target/PnP residual, to assign those peaks.
+                        if (not outline_profile or edges[1][1]['support'] == 64 or
+                                outline_profile['b'][1]-outline_profile['a'][1] <=
+                                2*abs(outline_profile['b'][0]-outline_profile['a'][0])):
+                            break
+                        data = outline_profile
+                        allowed = _blue_grid(hsv, data['a'], data['b'], data['normal'],
+                                             data['radius'], inside_only=True)
+                        repaired = _coherent_internal_edge(data['a'], data['b'], data['normal'],
+                            data['radius'], data['rows'], allowed, hsv, smooth, outline=True)
+                        if repaired[1]['rms_px'] >= edges[1][1]['rms_px']:
+                            break
+                        edges[1] = repaired
+                        yield {'stage': 'outline_profile_recovered', 'candidate': index}
+                    q = [intersect(edges[i-1][0], edges[i][0]) for i in range(4)]
+                    for half in (0, 1):
+                        check = [intersect(edges[i-1][2][half], edges[i][2][half]) for i in range(4)]
+                        if max(distance(a, b) for a, b in zip(q, check)) > 3:
+                            raise ValueError('Side interleaved corners disagree')
+                    if corner_distance(q, seed) > 18:
+                        raise ValueError('Side edges too far from proposal')
+                    full_q = [[p[0]+x0, p[1]+y0] for p in q]
+                    if any(not (3<p[0]<1277 and 3<p[1]<957) for p in full_q):
+                        raise ValueError('Side clipped')
+                    if area(q) < 1000 or not cv2.isContourConvex(np.array(q, dtype=FLOAT)):
+                        raise ValueError('Side not convex')
+                    if not component_support(q, anchor) or internal_seam(hsv, q) is not None:
+                        raise ValueError('Side proposal contains another face')
+                    yield {'stage': 'side_boundary', 'candidate': index}
+                    back = min(range(4), key=lambda i: (q[i][1]+q[(i+1)%4][1])/2)
+                    separator = _separator_evidence(hsv, q[back:]+q[:back], edges[back], im)
+                    yield {'stage': 'side_seam', 'candidate': index}
+                    if pose_attempts >= max_candidates:
+                        raise ValueError('Physical-side pose attempt budget exhausted')
+                    pose_attempts += 1
+                    poses = side_pose(pose_candidates(full_q, K, D, refine=True, refiner=refine_pose))
+                    if poses:
+                        break
                 if not poses:
                     raise ValueError('No accurate vertical-side pose')
                 face = {'face_quad_px': full_q, 'poses': poses, 'physical_edges': [e[1] for e in edges],

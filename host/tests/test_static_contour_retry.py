@@ -101,8 +101,8 @@ class StaticContourRetryTests(unittest.TestCase):
     def test_original_success_after_first_failure_prevents_appended_retry(self):
         image,frame,config = self.near()
         original = sides._seam_seed_steps
-        def original_seeds(*args):
-            for event in original(*args):
+        def original_seeds(*args, **kwargs):
+            for event in original(*args, **kwargs):
                 yield event
                 if event['stage']=='seam_seed':
                     # A second pre-existing proposal lies inside the original

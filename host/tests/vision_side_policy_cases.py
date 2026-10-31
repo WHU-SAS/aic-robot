@@ -155,12 +155,23 @@ class SidePolicyCases(unittest.TestCase):
             result=localize(im,K,D,ext['T_Base_from_Camera_mm'],cfg['localization']['table_plane_Base_mm'])
             self.assertLessEqual(result['poses'][0]['face_reprojection_rms_px'],2.)
             if index==0:
-                # Still inconsistent as a measured square; do not conceal it
-                # with a relaxed limit or force the largest candidate through.
-                self.assertNotIn('side_selection',result)
+                # The old independent peak choices still fail the original
+                # 2px gate. Reusing coherent blue-outline samples can recover
+                # this side, but must retain every measured-edge/pose check.
                 rejected=[d for d in details['attempts'] if d.get('rejection')=='No accurate vertical-side pose'
                           and d.get('pose_reprojection_rms_px',[0])[0]>2.]
                 self.assertTrue(rejected)
+                self.assertEqual(result['side_selection'],'single_verified_side')
+                self.assertTrue(any(edge.get('edge_ownership')=='coherent_blue_outline'
+                                    for edge in result['physical_edges']))
+                for edge in result['physical_edges']:
+                    self.assertEqual(edge['sampled_stations'],64)
+                    self.assertGreaterEqual(edge['support'],45)
+                    self.assertLessEqual(edge['rms_px'],3.)
+                geometry=result['poses'][0]['table_geometry']
+                self.assertTrue(geometry['accepted'])
+                self.assertLessEqual(geometry['normal_deviation_deg'],20.)
+                self.assertLessEqual(abs(geometry['height_error_mm']),8.)
             else:
                 self.assertEqual(result['vision_path'],'shared_bounded_physical_sides')
                 self.assertGreater(result['side_faces'][0]['area_px2'],30000)
