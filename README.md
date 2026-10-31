@@ -42,7 +42,7 @@
 ./scripts/k230-status                      # 纯接收实时状态，不中断K230
 ./scripts/enroll-ready                     # 录三遍“回准备位”；需退出状态监视
 ./scripts/deploy-pick --install --activate  # 更新K230独立语音抓取（下次启动生效）
-./scripts/pick-pc --execute --hands-free    # 新外参：PC全流程验证，额外前伸0mm
+./scripts/pick-pc --execute --hands-free    # K230识别、PC调度，额外前伸0mm
 ./scripts/demo-v0-pick --detect-only        # 第0版：仅识别
 ./scripts/demo-v0-pick --execute --hands-free # 第0版：完整抓取演示
 ./scripts/arm-ready --execute               # 小车行驶前回准备位

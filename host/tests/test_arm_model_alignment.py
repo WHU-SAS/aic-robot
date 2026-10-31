@@ -21,8 +21,8 @@ from kinematics import Geometry
 
 PROFILE = ROOT / 'configs/arm/pick_model_check.json'
 STAGES = ('hover', 'descend', 'close', 'lift')
-# Fixed facts from the original default, captured before introducing an explicit
-# corrected-model profile. These guard the intentionally retained default baseline.
+# Historical30-degree geometry, captured before the explicit corrected model.
+# Preserve these targets while the current user-selected opening changes to25.
 OLD_GOALS = {
     'hover': [2193, 2470, 2825, 2613, 2048, 2389],
     'descend': [2193, 2643, 2922, 2343, 2048, 2389],
@@ -70,10 +70,12 @@ class ArmModelAlignmentTests(unittest.TestCase):
         self.assertEqual(ext['joint_mapping_sha256'], sha(ROOT / 'configs/arm/joint_mapping.json'))
         self.assertEqual(self.pick['alignment_reference'], 'open_fingertip_midpoint')
         self.assertEqual(self.pick['cube_offset_toward_moving_finger_mm'], 0)
+        self.assertEqual(self.pick['opening_angle_deg'],25)
+        self.assertEqual(self.pick['opening_count'],2332)
         self.assertFalse(self.manifest['startup_motion'])
         self.assertFalse(self.manifest['pc_runtime_required'])
 
-    def test_retained_default_configuration_and_targets_remain_unchanged(self):
+    def test_retained_default_model_and_historical_30_degree_targets(self):
         cfg, _, _ = build_bundle()
         self.assertEqual(cfg['pick'], load(ROOT / 'configs/arm/pick_validation_pc.json'))
         self.assertNotIn('model_urdf', cfg['pick'])
@@ -91,7 +93,10 @@ class ArmModelAlignmentTests(unittest.TestCase):
         self.assertAlmostEqual(self.old_fk.joints['Rotation']['rpy'][2], 0.)
         self.assertAlmostEqual(self.old_fk.joints['Rotation5']['rpy'][2], 0.)
         pick, config = parameters()
-        _, plan = make_plan({'cube_center_Base_mm': [245., -28., -65.]}, [2048]*6, pick, config)
+        self.assertEqual((pick['opening_angle_deg'],pick['opening_count']),(25,2332))
+        # Replay the frozen historical opening only in this local profile copy.
+        historical=dict(pick,opening_angle_deg=30,opening_count=2389)
+        _, plan = make_plan({'cube_center_Base_mm': [245., -28., -65.]}, [2048]*6, historical, config)
         self.assertNotIn('model_urdf', plan)
         self.assertFalse(plan['model_correction_applied'])
         for stage in STAGES:

@@ -34,7 +34,8 @@ class K230ReadyTests(unittest.TestCase):
         self.assertEqual(actual[:5],bytes((255,255,254,length+4,0x83)))
         self.assertEqual(actual[5:-1],bytes([address,size]+params))
         self.assertEqual(sum(actual[2:])&255,255)
-        self.assertEqual(self.config['goals'],[2048,1138,2958,2958,2048,2389])
+        self.assertEqual(self.config['goals'],[2048,1138,2958,2958,2048,2332])
+        self.assertEqual(self.config['gripper_opens_deg'],25)
     def test_enable_only_one_byte_sram(self):
         packet=self.board.frame(2,3,(40,1))
         self.assertEqual(packet,bytes((255,255,2,4,3,40,1,205)))

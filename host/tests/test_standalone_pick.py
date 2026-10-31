@@ -206,6 +206,10 @@ class ReadyCommandTests(unittest.TestCase):
         from tools.diagnostics.k230_arm_ready import config_payload
         cfg,_,_=deploy.build_bundle()
         self.assertEqual(cfg['ready_control'],config_payload())
+        self.assertEqual(cfg['ready_control']['goals'][5],2332)
+        self.assertEqual(cfg['ready_control']['gripper_opens_deg'],25)
+        self.assertEqual(cfg['pick']['opening_count'],2332)
+        self.assertEqual(cfg['pick']['opening_angle_deg'],25)
         self.assertEqual(cfg['ready_control']['profiles'],cfg['control']['profiles'])
         self.assertEqual(cfg['ready_control']['registers'],cfg['control']['registers'])
         app=self.app();calls=[]

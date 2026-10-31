@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PC full-pick field validation: fresh K230 photo, candidate extrinsics, existing IK."""
+"""PC pick control with live K230 perception or explicit offline image replay."""
 import sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
@@ -10,6 +10,7 @@ from datetime import datetime
 import fcntl
 import hashlib
 import json
+import math
 import signal
 import subprocess
 import time
@@ -17,7 +18,7 @@ from zoneinfo import ZoneInfo
 from host.arm.task_controller import Configuration
 from host.arm.pick_validation_geometry import OpenTipPickGeometry as PickGeometry
 from host.transport.download_calibration import PORT
-from host.transport.capture_pick_frame import capture
+from host.transport.k230_pick_perception import perceive as perceive_onboard
 from host.transport.k230_pick_stage import payload,run_action
 from host.vision.config import load_vision_config,table_height_at
 
@@ -114,21 +115,35 @@ def main(argv=None):
                 elif event['event']=='board_message' and ('Traceback' in event['text'] or 'Error' in event['text']):
                     print(event['text'],file=sys.stderr,flush=True)
             started=time.monotonic()
-            record['status']='camera_capture';save()
             if args.image:
+                record.update(status='offline_image_replay',perception_backend='pc_offline');save()
                 (folder/'frame.jpg').write_bytes(args.image.resolve().read_bytes())
                 record['offline_image_source']=str(args.image.resolve())
+                command=[str(ROOT/'scripts/vision'),str(ROOT/'host/vision/localize_pick_cube.py'),
+                    '--image',str(folder/'frame.jpg'),'--output',str(folder),
+                    '--config',str(ROOT/pick['vision_config'])]
+                subprocess.run(command,cwd=ROOT,check=True,capture_output=True,text=True)
+                record['timing_s']['vision']=time.monotonic()-started
+                vision=json.loads((folder/'vision_record.json').read_text())
             else:
-                print('K230拍照并回传，PC识图；请保持方块不动，IDE停止并断开。',flush=True)
-                record['capture']=capture(folder,args.camera_port)
-            record['timing_s']['capture']=time.monotonic()-started
-            command=[str(ROOT/'scripts/vision'),str(ROOT/'host/vision/localize_pick_cube.py'),
-                '--image',str(folder/'frame.jpg'),'--output',str(folder),
-                '--config',str(ROOT/pick['vision_config'])]
-            record['status']='vision_localization';save();started=time.monotonic()
-            subprocess.run(command,cwd=ROOT,check=True,capture_output=True,text=True)
-            record['timing_s']['vision']=time.monotonic()-started
-            vision=json.loads((folder/'vision_record.json').read_text());record['vision']=vision
+                record.update(status='onboard_perception',perception_backend='k230');save()
+                print('K230拍照并完成识图，仅回传定位结果；请保持方块不动，IDE停止并断开。',flush=True)
+                vision=perceive_onboard(folder,pick_config=args.pick_config,port=args.camera_port)
+                elapsed=time.monotonic()-started
+                record['timing_s'].update(onboard_perception=elapsed,vision=elapsed)
+                if isinstance(vision,dict):
+                    native_ms=vision.get('perception_timing_ms',{}).get('visual_localization')
+                    if type(native_ms) in (int,float) and math.isfinite(native_ms) and native_ms>=0:
+                        record['timing_s']['vision']=native_ms/1000
+                    for key in ('perception_timing_ms','evidence','release_id','release_path','request_id'):
+                        if key in vision:record[key]=vision[key]
+            record['vision']=vision
+            center=vision.get('cube_center_Base_mm') if isinstance(vision,dict) else None
+            if (not isinstance(vision,dict) or vision.get('status')!='localized' or
+                not isinstance(center,(list,tuple)) or len(center)!=3 or
+                not all(type(v) in (int,float) and math.isfinite(v) for v in center) or
+                vision.get('xy_compensation_applied') is not False):
+                raise RuntimeError('本轮未得到完整、未补偿的方块定位；未访问机械臂')
             print('CUBE_CENTER_Base_mm',json.dumps(vision['cube_center_Base_mm']),flush=True)
             if args.detect_only:
                 record['status']='localized_no_arm_access';save();return 0
@@ -179,6 +194,11 @@ def main(argv=None):
             return 0
     except BaseException as exc:
         record.update(status='error_no_extra_motion',error=repr(exc))
+        if record.get('perception_backend')=='k230':
+            diagnostic=folder/'onboard_perception.json'
+            if diagnostic.is_file():
+                try:record['onboard_perception']=json.loads(diagnostic.read_text())
+                except (OSError,ValueError) as detail:record['onboard_diagnostic_error']=str(detail)
         if isinstance(exc,subprocess.CalledProcessError):
             record['vision_error']=exc.stderr or exc.stdout;print(record['vision_error'],file=sys.stderr)
         else:print(str(exc),file=sys.stderr)

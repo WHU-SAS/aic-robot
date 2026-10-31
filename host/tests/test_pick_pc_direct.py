@@ -153,13 +153,10 @@ class PcDirectFlowTests(unittest.TestCase):
             return {'fixture_observed_positions':list(counts)}
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            def capture(out, port):
-                (out/'frame.jpg').write_bytes(b'image fixture, not physical ground truth')
-                return {}
-            def localize(command, **kwargs):
-                out = Path(command[command.index('--output')+1])
-                self.assertTrue(command[command.index('--config')+1].endswith(pick['vision_config']))
-                (out/'vision_record.json').write_text(json.dumps({'cube_center_Base_mm':[245,-28,-65]}))
+            def perceive(out, pick_config=None, port=None):
+                self.assertEqual(pick_config,PROFILE)
+                return {'status':'localized','cube_center_Base_mm':[245,-28,-65],
+                    'xy_compensation_applied':False}
             def action(payload, kind, stage=None, **kwargs):
                 name = stage['name'] if stage else kind
                 calls.append((kind, name))
@@ -187,8 +184,8 @@ class PcDirectFlowTests(unittest.TestCase):
                 return events
             output = io.StringIO()
             with patch.object(app, 'ROOT', root), patch.object(app, 'parameters', return_value=(pick, config)),\
-                 patch.object(app, 'capture', side_effect=capture),\
-                 patch.object(app.subprocess, 'run', side_effect=localize),\
+                 patch.object(app, 'perceive_onboard', side_effect=perceive),\
+                 patch.object(app.subprocess, 'run', side_effect=AssertionError('live perception must stay on K230')),\
                  patch.object(app, 'make_plan', return_value=(SimpleNamespace(report=report), plan)),\
                  patch.object(app, 'run_action', side_effect=action), patch.object(app.signal, 'signal'),\
                  contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):

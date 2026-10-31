@@ -21,7 +21,7 @@ def config_payload():
     task=ready_task(config,profile)
     if profile.get('model_floor_check_enabled') is not False:
         raise RuntimeError('Ready-only floor exception configuration changed; review entry')
-    return {'goals':task['steps'][0]['positions'],
+    return {'goals':task['steps'][0]['positions'],'gripper_opens_deg':profile['angles_deg'][5],
             'profiles':[config.profiles[i] for i in range(1,7)],
             'registers':[{str(a):config.baseline['parameters'][str(i)][name] for a,name in REGISTERS.items()} for i in range(1,7)],
             'software_limits':[config.mapping.joint(i)['software_count_limits'] for i in range(1,7)]}

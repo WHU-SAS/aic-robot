@@ -104,7 +104,7 @@ class ReadyPoseTests(unittest.TestCase):
             root=Path(folder);(root/'configs/arm').mkdir(parents=True)
             (root/'data/run').mkdir(parents=True)
             for name in ['joint_mapping.json','user_selected_pid_demo_baseline.json',
-                         'motion_defaults.json','task_control_policy.json']:
+                         'motion_defaults.json','task_control_policy.json','ready_pose.json']:
                 (root/'configs/arm'/name).write_bytes((ROOT/'configs/arm'/name).read_bytes())
             task=root/'task.json';task.write_text(json.dumps(self.task))
             self.bus.port=SimpleNamespace(ser=SimpleNamespace(fileno=lambda:0))

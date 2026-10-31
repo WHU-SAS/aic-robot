@@ -275,7 +275,7 @@ def run_ready(config):
     import control as arm_control
     arm_control.print=record_arm_event
     ready=config['ready_control']
-    log('ready_started',{'goals':ready['goals'],'gripper_opens_deg':30})
+    log('ready_started',{'goals':ready['goals'],'gripper_opens_deg':ready.get('gripper_opens_deg')})
     run_ready_direct(ready)
     log('ready_dispatched',{'arrival':'not_checked','torque_state':'unchanged_not_read'})
 

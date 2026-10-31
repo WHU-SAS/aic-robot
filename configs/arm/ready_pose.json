@@ -6,9 +6,9 @@
     80,
     80,
     0,
-    30
+    25
   ],
-  "angle_definition": "Validated project joint mapping, ID order 1..6; joint6 +30 degrees is servo output relative to closed zero, not measured finger opening angle.",
+  "angle_definition": "Validated project joint mapping, ID order 1..6; joint6 angle is servo output relative to closed zero, not measured finger opening angle.",
   "dispatch": "one synchronized final-goal packet; saved per-axis profiles",
   "completion": "exit after target dispatch; no stdin or arrival confirmation; retain torque at ready pose",
   "model_floor_check_enabled": false,

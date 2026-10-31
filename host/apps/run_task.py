@@ -24,14 +24,19 @@ from host.transport.servo_bus import ServoBus
 DEFAULT_PORT = '/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B79033467-if00'
 
 
+def _ready_goals(config):
+    import math
+    profile=json.loads((ROOT/'configs/arm/ready_pose.json').read_text())
+    return {i:config.mapping.radians_to_count(i, math.radians(deg))
+            for i,deg in enumerate(profile['angles_deg'],1)}
+
+
 def select_route_check(config, data, steps, hold_at_last_target,
                        ready_pose_without_model_floor=False, finger_floor_m=.03):
     """The user-approved exception is limited to one held ready-pose stage."""
     if not ready_pose_without_model_floor:
         return FloorCheck(config, finger_floor_m=finger_floor_m)
-    import math
-    expected = {i:config.mapping.radians_to_count(i, math.radians(deg))
-                for i,deg in enumerate([0,-80,80,80,0,30], 1)}
+    expected = _ready_goals(config)
     if (not hold_at_last_target or data.get('name') != 'ready_pose'
             or len(steps) != 1 or steps[0]['name'] != 'ready_pose'
             or steps[0]['goals'] != expected):
@@ -50,9 +55,7 @@ def select_route_check(config, data, steps, hold_at_last_target,
 
 def dispatch_ready_immediately(controller, steps):
     """Command invocation authorizes this one ready goal; no stdin or arrival claim."""
-    import math
-    expected = {i:controller.config.mapping.radians_to_count(i, math.radians(deg))
-                for i,deg in enumerate([0,-80,80,80,0,30], 1)}
+    expected = _ready_goals(controller.config)
     if len(steps) != 1 or steps[0]['name'] != 'ready_pose' or steps[0]['goals'] != expected:
         raise TaskError('immediate dispatch is authorized only for the single user-defined ready pose')
     fresh = controller.sample()

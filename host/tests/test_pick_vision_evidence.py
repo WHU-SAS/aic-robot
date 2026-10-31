@@ -140,16 +140,27 @@ class PcFailureCollectionTests(unittest.TestCase):
         from host.apps import pick_validation_pc as pc
         pick,config=pc.parameters()
         with tempfile.TemporaryDirectory() as folder:
-            def capture(out,port):
-                (out/'frame.jpg').write_bytes(b'captured original')
-                return {}
+            root=Path(folder);image=root/'original.jpg'
+            image.write_bytes(b'original offline JPEG')
             def reject(command,**kwargs):
                 out=Path(command[command.index('--output')+1])
+                self.assertEqual((out/'frame.jpg').read_bytes(),image.read_bytes())
+                self.assertEqual(command[command.index('--config')+1],str(root/pick['vision_config']))
                 (out/'vision_candidates.json').write_text('{"status":"no_complete_face","reason":"edge"}')
                 raise pc.subprocess.CalledProcessError(2,command,stderr='edge rejected')
-            with patch.object(pc,'ROOT',Path(folder)),patch.object(pc,'parameters',return_value=(pick,config)),                 patch.object(pc,'capture',side_effect=capture),patch.object(pc.subprocess,'run',side_effect=reject),                 patch.object(pc,'run_action') as arm,patch.object(pc.signal,'signal'),                 patch('host.vision.hard_dataset.add_case',return_value='archived-case') as collect,                 contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):
-                result=pc.main(['--execute','--hands-free'])
-            record=json.loads(next(Path(folder).glob('data/logs/*/execution.json')).read_text())
+            with patch.object(pc,'ROOT',root),patch.object(pc,'parameters',return_value=(pick,config)), \
+                 patch.object(pc,'perceive_onboard',side_effect=AssertionError('offline replay must not open USB')), \
+                 patch.object(pc.subprocess,'run',side_effect=reject), \
+                 patch.object(pc,'run_action') as arm,patch.object(pc.signal,'signal'), \
+                 patch('host.vision.hard_dataset.add_case',return_value='archived-case') as collect, \
+                 contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):
+                result=pc.main(['--image',str(image)])
+            run=next(root.glob('data/logs/*'))
+            record=json.loads((run/'execution.json').read_text())
+            self.assertEqual((run/'frame.jpg').read_bytes(),image.read_bytes())
+            self.assertEqual(collect.call_args.args[0],run)
+            self.assertEqual(record['vision_config'],pick['vision_config'])
+            self.assertEqual(record['perception_backend'],'pc_offline')
         self.assertEqual(result,1);arm.assert_not_called()
         self.assertEqual(record['hard_case_id'],'archived-case')
         self.assertFalse(record['motion_performed'])

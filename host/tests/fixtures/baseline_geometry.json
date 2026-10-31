@@ -332,7 +332,7 @@
   "protected_sha256": {
     "configs/arm/joint_mapping.json": "cacbbd1f01849cc45ec9f2a37d2c170789b9989b1a6f4e169058da239ec5cb22",
     "configs/arm/motion_defaults.json": "982d015243b5e07f46c5e0b46295d1b868cf7260e4321402e9cc7c9d812d41c4",
-    "configs/arm/ready_pose.json": "f29c60638a57fc8825487a29cfed02237ef6fcc6f3fb222491886e90bdb8b5c4",
+    "configs/arm/ready_pose.json": "918f59e64631a77319783ef3b5197e31f14269cbbcb27996ece219f32bcb6dcc",
     "configs/arm/task_control_policy.json": "54b0f45fc146aec6b14959dbd3a42f91420255dfc34755ac09d8d7228714236a",
     "configs/arm/user_selected_pid_demo_baseline.json": "e10ea75a739e908041947510d5b93726889289bd48cc548ae746201d808bf5f5",
     "configs/vision/runtime/camera_in_base.json": "23c0b00a119b5c78dcbbd7a00b3a9b75828faffef07e5d21a03fe496cfbb75b3",

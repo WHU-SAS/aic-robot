@@ -87,7 +87,8 @@ class TrialConfigTests(unittest.TestCase):
         self.assertEqual(pick['forward_extension_mm'],0)
         self.assertEqual(pick['alignment_reference'],'open_fingertip_midpoint')
         self.assertEqual(pick['cube_offset_toward_moving_finger_mm'],-45)
-        self.assertEqual([pick[k] for k in ('opening_count','descend_tip_height_mm','hover_tip_height_mm','lift_tip_height_mm')],[2389,15,80,80])
+        self.assertEqual([pick[k] for k in ('opening_count','descend_tip_height_mm','hover_tip_height_mm','lift_tip_height_mm')],[2332,15,80,80])
+        self.assertEqual(pick['opening_angle_deg'],25)
         self.assertEqual([config.profiles[i] for i in range(1,7)],
             [{'speed_raw':v,'acceleration_raw':a} for v,a in [(150,5),(600,20),(600,20),(600,20),(150,5),(150,5)]])
         self.assertNotEqual(vision['extrinsics'],load_vision_config()['localization']['extrinsics'])
@@ -135,11 +136,10 @@ class FlowTests(unittest.TestCase):
             pick,config=app.parameters()
             plan={k:[2048]*6 for k in ('hover','descend','close','lift')}
             plan['table_z_Base_mm']=-66
-            def capture(out,port):
-                (out/'frame.jpg').write_bytes(b'offline fixture');return {}
-            def localize(command,**kwargs):
-                out=Path(command[command.index('--output')+1])
-                (out/'vision_record.json').write_text(json.dumps({'cube_center_Base_mm':[220,30,-56]}))
+            def perceive(out,pick_config=None,port=None):
+                return {'status':'localized','cube_center_Base_mm':[220,30,-56],
+                    'xy_compensation_applied':False,'release_id':'fixture-release',
+                    'evidence':{'directory':'/sdcard/fixture','archive_complete':True}}
             def action(config,kind,stage=None,**kwargs):
                 name=stage['name'] if stage else kind;calls.append(name)
                 if name==fail_stage:raise RuntimeError('injected failure')
@@ -157,7 +157,8 @@ class FlowTests(unittest.TestCase):
                 events.append({'event':'stage_complete','name':name,'arrival_checked':name in ('hover','descend')})
                 return events
             with patch.object(app,'ROOT',root),patch.object(app,'parameters',return_value=(pick,config)),\
-                 patch.object(app,'capture',side_effect=capture),patch.object(app.subprocess,'run',side_effect=localize),\
+                 patch.object(app,'perceive_onboard',side_effect=perceive),\
+                 patch.object(app.subprocess,'run',side_effect=AssertionError('live perception must stay on K230')),\
                  patch.object(app,'run_action',side_effect=action),patch.object(app,'make_plan',return_value=(SimpleNamespace(report=lambda c:{}),plan)),\
                  patch.object(app.signal,'signal'),contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):
                 code=app.main(['--detect-only'] if detect_only else ['--execute','--hands-free'])
@@ -206,7 +207,8 @@ class OpenTipGeometryTests(unittest.TestCase):
         self.assertLess(np.linalg.norm(midpoint[:2]-self.target),.002)
         a=points['wan2'][:2]-self.target;b=points['zhua'][:2]-self.target
         self.assertLess(np.dot(a,b),0)
-        self.assertGreater(np.linalg.norm(a),.027)
+        # Both open tip references remain outside the20mm cube's half-diagonal.
+        self.assertGreater(np.linalg.norm(a),.010*np.sqrt(2))
         self.assertAlmostEqual(min(lows.values())-self.g.table_z_m,.015,delta=.002)
         self.assertEqual(self.plan['alignment_reference'],'open_fingertip_midpoint')
 
@@ -215,7 +217,7 @@ class OpenTipGeometryTests(unittest.TestCase):
         q=self.g.angles(self.plan['descend']);closed=q.copy()
         closed[5]=self.g.mapping.count_to_radians(6,self.plan['close'][5])
         np.testing.assert_allclose(self.g.alignment_midpoint(q),self.g.alignment_midpoint(closed))
-        self.assertEqual(self.plan['descend'][5],2389)
+        self.assertEqual(self.plan['descend'][5],2332)
         self.assertEqual(self.plan['close'][:5],self.plan['descend'][:5])
         self.assertEqual(self.plan['closing_count'],self.plan['nominal_closing_count']-20)
 
@@ -224,7 +226,7 @@ class OpenTipGeometryTests(unittest.TestCase):
         import numpy as np
         from host.arm.pick_validation_geometry import OpenTipPickGeometry
         unused,cfg=app.parameters()
-        shifted=OpenTipPickGeometry(ROOT,cfg.mapping,opening_count=2389,
+        shifted=OpenTipPickGeometry(ROOT,cfg.mapping,opening_count=self.g.opening_count,
                                     cube_offset_toward_moving_finger_mm=-45)
         for yaw in (-.4,0,.4):
             q=self.g.angles(self.plan['descend']);q[0]=yaw

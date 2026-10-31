@@ -68,7 +68,7 @@ class StatusDisplay:
                   'voice_ready':'监听就绪：现在可以说“思达思达”',
                   'voice_listening':'语音监听中：音频采集与识别循环正在运行',
                   'wake':'已识别唤醒词：正在准备拍照识别',
-                  'ready_started':'直接发送准备位：夹爪张开30°，沿用已保存的速度和加速度',
+                  'ready_started':'直接发送准备位，沿用已保存的速度和加速度',
                   'ready_dispatched':'准备位目标已发送，未改扭矩、未复读或等待到位',
                   'ready_complete_torque_on':'准备位目标已发送并完成反馈读取，保持扭矩；实际到位需观察',
                   'planned':'四阶段规划完成，准备执行',
@@ -78,6 +78,8 @@ class StatusDisplay:
             self.state('监听就绪：'+ '、'.join('“'+word+'”' for word in details['words']))
         elif event=='wake' and isinstance(details,dict) and details.get('action')=='ready':
             self.state('已识别“回准备位”：准备执行准备位动作')
+        elif event=='ready_started' and isinstance(details,dict) and isinstance(details.get('gripper_opens_deg'),(int,float)):
+            self.state('直接发送准备位：夹爪张开%g°，沿用已保存的速度和加速度'%details['gripper_opens_deg'])
         elif event=='localized':
             center=details.get('cube_center_Base_mm') if isinstance(details,dict) else None
             text='识别成功'

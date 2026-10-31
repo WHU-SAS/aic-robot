@@ -21,13 +21,13 @@
 - 下探到位样本复用为`descend_position_sample`，不额外读取。抬升目标发送后只等1秒恢复语音，不当作到位确认；运动期间不监听或排队。
 - “思达思达”触发单次抓取；“回准备位”直接同步准备位目标，无舵机前检/读回/到位等待，只保留报文和发送错误处理。两者均不写PID或开/关扭矩；故障不自动归位或卸力。
 - 首次语音预热32段；动作结束重建音频与识别引擎并reset后直接监听，不再次丢弃32段。
-- 小车行驶保持`ready_pose.json`准备位及扭矩；PC入口为`./scripts/arm-ready --execute`，由人确认到位。准备位不是中立位，会张开夹爪30°，不自行增加持物行驶或底盘联动。
+- 小车行驶保持`ready_pose.json`准备位及扭矩；PC入口为`./scripts/arm-ready --execute`，由人确认到位。准备位不是中立位，会张开夹爪25°，不自行增加持物行驶或底盘联动。
 - 用户已授权确认需求的K230修改：验证后自行写入、回读校验、激活并确认监听恢复；部署不触发动作。仅文档/本机清理不部署或访问硬件。
 
 ## 视觉与对照入口
 
-- 正式PC及独立抓取使用`pick_validation_pc.json`：张开中点、固定爪侧45mm（moving-side offset=-45）、额外前伸0mm、最低指尖80/15/80mm、夹紧20计数。阶段规则仍以对应入口为准。
-- 2026-10-30装配修复对照通过`--pick-config configs/arm/pick_model_check.json`显式选择；含新URDF、重拟外参、零经验偏移；2026-10-31单位置实物抓取成功、用户报告对位准确，尚未切换默认。保持原默认与小车坐标不变，说明见`docs/guides/arm/PC_PICK_VALIDATION.md`。
+- 正式PC及独立抓取使用`pick_validation_pc.json`：25°张开中点（2332计数）、固定爪侧45mm（moving-side offset=-45）、额外前伸0mm、最低指尖80/15/80mm、夹紧20计数。阶段规则仍以对应入口为准。
+- 2026-10-30装配修复对照通过`--pick-config configs/arm/pick_model_check.json`显式选择；含新URDF、重拟外参、零经验偏移；2026-10-31以30°开口单位置实物抓取成功、用户报告对位准确；随后开口改25°，尚未实测，尚未切换默认。保持原默认与小车坐标不变，说明见`docs/guides/arm/PC_PICK_VALIDATION.md`。
 - 第0版`./scripts/demo-v0-pick`保留PC解算与原时序，专属配置在`demos/v0_blue_pick/`；前伸10mm，不能混入正式视觉坐标。
 - 正式精定位使用`configs/vision/trials/fixed_tip_top_20261022.json`，第0版使用`blue_cube.json`。内外参配对、相机1280×960 RGB565→JPEG95→BGR路径不随意改变。
 - 共用`CameraSession`仅一个活动所有者；粗跟踪代理不是精定位中心。采集时间不以处理时间替代，跨时钟/重启不能直接比较；未知旧图时间保持None。接口见`docs/guides/vision.md`。
@@ -37,7 +37,7 @@
 
 ## 数据与文档
 
-- `scripts/host`用于串口/FK/IK，`scripts/vision`用于PC OpenCV；板端不导入PC pyserial/SciPy。
+- `scripts/host`用于串口/FK/IK；`scripts/pick-pc`实机由K230识图并回传结果，PC调度，原图留板端证据目录；`--image`与`scripts/vision`仅用于显式PC离线回放。板端不导入PC pyserial/SciPy。
 - 原图、编码、失败素材、历史分析和部署记录仅留本机`data/`，当前运行标定纳入Git。旧PID实验与`.local_archive/`不复制、恢复或上传。
 - 视觉精定位逐轮保留成功/失败原图及原配置；人工报告识别不准后加入本机`data/vision/hard_cases/`。更新视觉前后用`./scripts/vision-hard-cases replay`对照，保留报告并审查退化；旧预测不当真值，不覆盖或自动删除困难集。
 - 人读指南只写当前用法、关键边界和未解决问题，不逐轮追加调试日志；报告素材入口为`data/arm/report_assets/LATEST.txt`。不删除已归档原图和失败证据。
