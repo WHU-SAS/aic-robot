@@ -129,12 +129,7 @@ def run_arm_ready(config,action):
         rows=preflight(uart,config)
         if action=='hold':initialize_hold(uart,config,rows)
         elif action=='ready':
-            # A separate current-hold invocation and hands-free confirmation precede this action.
-            if any(row['torque']!=1 for row in rows):raise RuntimeError('Run hold and confirm hands free before ready')
-            packet=sync_frame(config['goals'],config['profiles'])
-            if uart.write(packet)!=len(packet):raise RuntimeError('Short ready goal write')
-            # Finish the0.56ms packet on the wire, then return without feedback.
-            time.sleep_ms(2)
+            dispatch_ready(uart,config)
             print('ARM_READY_GOAL_SENT: torque remains ON; arrival requires observation')
         print('ARM_ACTION_PASS '+action)
     finally:
@@ -142,23 +137,47 @@ def run_arm_ready(config,action):
         uart.deinit()
 
 
-def run_ready_direct(config):
-    """User-selected voice-ready dispatch: no servo reads or arrival wait.
+def ensure_ready_torque(uart,config):
+    """Enable only unpowered axes, with fresh current goals before torque ON."""
+    disabled=[]
+    for i in range(1,7):
+        torque=read_checked(uart,i,40,1)[0]
+        if torque not in (0,1):raise RuntimeError('ID%d invalid torque state'%i)
+        if torque==0:disabled.append(i)
+    if disabled:
+        hold=list(config['goals'])
+        for i in disabled:
+            raw=read_checked(uart,i,56,2)
+            hold[i-1]=signed_position(raw[0],raw[1])
+        # Do not overwrite goals of axes whose torque is already ON.
+        packet=sync_frame(hold,config['profiles'],disabled)
+        if uart.write(packet)!=len(packet):raise RuntimeError('Short ready current-hold write')
+        time.sleep_ms(2)
+        for i in disabled:enable_torque(uart,i)
+    return {'torque_enabled_ids':disabled,'torque_writes':len(disabled),
+            'servo_reads':6+2*len(disabled),'hold_packet_count':1 if disabled else 0}
 
-    Preserve torque state. Rewriting torque-enable after the goal was observed
-    to leave the goal register updated while the servo stayed at its old pose.
-    Send only the final position/profile packet; do not re-arm or reset motion.
-    """
+
+def dispatch_ready(uart,config):
+    # Encode first: malformed goals must fail before any torque writes.
     goal_packet=sync_frame(config['goals'],config['profiles'])
+    started=time.ticks_ms()
+    result=ensure_ready_torque(uart,config)
+    if uart.write(goal_packet)!=len(goal_packet):raise RuntimeError('Short ready goal write')
+    # 56 bytes at 1Mbps take0.56ms. Drain TX, then return without feedback.
+    time.sleep_ms(2)
+    result.update({'event':'ready_direct_sent','goals':config['goals'],
+                   'goal_packet_count':1,'readback_verified':False,
+                   'dispatch_ms':time.ticks_diff(time.ticks_ms(),started)})
+    print('ARM_EVENT '+ujson.dumps(result))
+    return result
+
+
+def run_ready_direct(config):
+    """Ensure torque is ON, send one final ready goal, then return immediately."""
     pins=FPIOA();pins.set_function(3,FPIOA.UART1_TXD);pins.set_function(4,FPIOA.UART1_RXD)
     uart=UART(UART.UART1,baudrate=1000000,bits=UART.EIGHTBITS,parity=UART.PARITY_NONE,stop=UART.STOPBITS_ONE)
     try:
-        started=time.ticks_ms()
-        if uart.write(goal_packet)!=len(goal_packet):raise RuntimeError('Short ready goal write')
-        # 56 bytes at 1Mbps take 0.56ms on the wire. Allow TX to finish before close.
-        time.sleep_ms(2)
-        print('ARM_EVENT '+ujson.dumps({'event':'ready_direct_sent','goals':config['goals'],
-              'goal_packet_count':1,'torque_writes':0,'servo_reads':0,'readback_verified':False,
-              'dispatch_ms':time.ticks_diff(time.ticks_ms(),started)}))
+        return dispatch_ready(uart,config)
     finally:
         uart.deinit()

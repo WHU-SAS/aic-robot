@@ -276,51 +276,124 @@ class ReadyCommandTests(unittest.TestCase):
 
 
 class DirectReadyTransportTests(unittest.TestCase):
-    def run_direct(self,fail_at=None):
-        writes=[];closed=[]
+    def run_direct(self,torques=None,fail_at=None,fail_read_at=None,fail_enable=None,invalid_goal=False):
+        writes=[];events=[];closed=[];reads=[];states=list([1]*6 if torques is None else torques)
+        positions=[1900+i*11 for i in range(6)]
         class Pins:
             UART1_TXD=1;UART1_RXD=2
             def set_function(self,*args):pass
         class Port:
             UART1=1;EIGHTBITS=8;PARITY_NONE=None;STOPBITS_ONE=1
             def __init__(self,*args,**kwargs):pass
-            def read(self,*args):raise AssertionError('Direct ready must never read servos')
+            def read(self,*args):raise AssertionError('Use checked torque/position reads only')
             def write(self,packet):
-                writes.append(packet)
+                writes.append(packet);events.append(('write',packet))
                 return 0 if len(writes)==fail_at else len(packet)
-            def deinit(self):closed.append(True)
+            def deinit(self):closed.append(True);events.append(('closed',))
         fake_time=SimpleNamespace(ticks_ms=lambda:0,ticks_diff=lambda a,b:a-b,
-                                  sleep_ms=lambda n:self.assertEqual(n,2))
+                                  sleep_ms=lambda n:events.append(('sleep_ms',n)))
         ns={}
         with patch.dict(sys.modules,{'machine':SimpleNamespace(UART=Port,FPIOA=Pins),
                                     'time':fake_time,'ujson':json}):
             exec((ROOT/'device/k230/arm/ready_pose.py').read_text(),ns)
-        cfg,_,_=deploy.build_bundle()
-        error=None
+        def read(uart,i,address,size):
+            event=('read',i,address,size);events.append(event);reads.append(event)
+            if len(reads)==fail_read_at:raise RuntimeError('Read timeout')
+            if (address,size)==(40,1):return bytes((states[i-1],))
+            self.assertEqual((address,size),(56,2))
+            value=positions[i-1];return bytes((value&255,value>>8))
+        def enable(uart,i):
+            # Stub the existing ACK handler, including its torque readback.
+            events.append(('enable_ack',i))
+            if i==fail_enable:raise RuntimeError('Torque ACK failed')
+            states[i-1]=1;self.assertEqual(read(uart,i,40,1),b'\x01')
+        def forbidden(*args,**kwargs):raise AssertionError('No preflight, feedback or recovery')
+        ns.update(read_checked=read,enable_torque=enable,signed_position=lambda lo,hi:lo|(hi<<8),
+                  preflight=forbidden,feedback=forbidden,snapshot=forbidden,send_sync=forbidden)
+        cfg,_,_=deploy.build_bundle();control=cfg['ready_control']
+        if invalid_goal:control['goals'][0]=-1
+        error=None;result=None
         with contextlib.redirect_stdout(io.StringIO()) as output:
-            try:ns['run_ready_direct'](cfg['ready_control'])
-            except RuntimeError as exc:error=exc
-        return cfg,writes,closed,error,output.getvalue()
+            try:result=ns['run_ready_direct'](control)
+            except (RuntimeError,ValueError) as exc:error=exc
+        return SimpleNamespace(config=control,writes=writes,events=events,closed=closed,error=error,
+                               result=result,output=output.getvalue(),positions=positions,encode=ns['sync_frame'])
 
-    def test_exact_final_goals_without_torque_writes_or_servo_reads(self):
-        cfg,writes,closed,error,output=self.run_direct()
-        self.assertIsNone(error);self.assertEqual(closed,[True]);self.assertEqual(len(writes),1)
-        packet=writes[0]
-        self.assertEqual(packet[:7],bytes([255,255,254,52,131,41,7]))
-        self.assertEqual(sum(packet[2:])&255,255)
-        for i in range(6):
-            entry=packet[7+i*8:15+i*8];profile=cfg['ready_control']['profiles'][i]
-            self.assertEqual(entry[0],i+1);self.assertEqual(entry[1],profile['acceleration_raw'])
-            self.assertEqual(entry[2]|entry[3]<<8,cfg['ready_control']['goals'][i])
-            self.assertEqual(entry[4:6],b'\x00\x00')
-            self.assertEqual(entry[6]|entry[7]<<8,profile['speed_raw'])
-        self.assertIn('"torque_writes": 0',output)
-        self.assertIn('"servo_reads": 0',output)
+    def test_all_enabled_reads_only_torque_then_one_final_goal_without_post_reads(self):
+        r=self.run_direct();self.assertIsNone(r.error);self.assertEqual(r.closed,[True])
+        packet=r.encode(r.config['goals'],r.config['profiles'])
+        self.assertEqual(r.events,[('read',i,40,1) for i in range(1,7)]+
+                         [('write',packet),('sleep_ms',2),('closed',)])
+        self.assertEqual(r.result['torque_enabled_ids'],[])
+        self.assertEqual(r.result['servo_reads'],6);self.assertEqual(r.result['torque_writes'],0)
+        self.assertEqual(r.result['goal_packet_count'],1);self.assertFalse(r.result['readback_verified'])
 
-    def test_short_goal_write_never_enables_torque_or_sends_recovery(self):
-        _,writes,closed,error,_=self.run_direct(fail_at=1)
-        self.assertIsInstance(error,RuntimeError);self.assertEqual(len(writes),1);self.assertEqual(closed,[True])
+    def test_disabled_axes_hold_current_before_enable_and_final_goal(self):
+        for torques,disabled in [([1,0,1,0,1,1],[2,4]),([0]*6,list(range(1,7)))]:
+            with self.subTest(torques=torques):
+                r=self.run_direct(torques=torques);self.assertIsNone(r.error)
+                hold=list(r.config['goals'])
+                for i in disabled:hold[i-1]=r.positions[i-1]
+                hold_packet=r.encode(hold,r.config['profiles'],disabled)
+                final_packet=r.encode(r.config['goals'],r.config['profiles'])
+                expected=[('read',i,40,1) for i in range(1,7)]
+                expected += [('read',i,56,2) for i in disabled]
+                expected += [('write',hold_packet),('sleep_ms',2)]
+                for i in disabled:expected += [('enable_ack',i),('read',i,40,1)]
+                expected += [('write',final_packet),('sleep_ms',2),('closed',)]
+                self.assertEqual(r.events,expected)
+                self.assertEqual(list(hold_packet[7:-1:8]),disabled)
+                self.assertEqual(r.result['torque_enabled_ids'],disabled)
+                self.assertEqual(r.result['servo_reads'],6+2*len(disabled))
+                self.assertEqual(r.result['hold_packet_count'],1)
+                self.assertEqual(r.result['torque_writes'],len(disabled));self.assertEqual(r.closed,[True])
 
+    def test_final_target_packet_matches_existing_sdk(self):
+        from host.project_paths import bootstrap
+        bootstrap()
+        from scservo_sdk import sms_sts,COMM_SUCCESS
+        r=self.run_direct();sdk=sms_sts(None);captured=[]
+        def tx(address,size,params,length):
+            captured.append((address,size,list(params),length));return COMM_SUCCESS
+        sdk.syncWriteTxOnly=tx
+        for i in range(1,7):
+            p=r.config['profiles'][i-1]
+            self.assertTrue(sdk.SyncWritePosEx(i,r.config['goals'][i-1],p['speed_raw'],p['acceleration_raw']))
+        sdk.groupSyncWrite.txPacket();address,size,params,length=captured[0];packet=r.writes[-1]
+        self.assertEqual(packet[:5],bytes((255,255,254,length+4,0x83)))
+        self.assertEqual(packet[5:-1],bytes([address,size]+params));self.assertEqual(sum(packet[2:])&255,255)
+
+    def test_short_hold_does_not_enable_or_send_ready(self):
+        r=self.run_direct(torques=[1,0,1,1,1,1],fail_at=1)
+        self.assertIsInstance(r.error,RuntimeError);self.assertEqual(len(r.writes),1)
+        self.assertFalse(any(e[0]=='enable_ack' for e in r.events));self.assertEqual(r.closed,[True])
+
+    def test_enable_ack_or_readback_failure_does_not_send_ready(self):
+        for options in ({'fail_enable':2},{'fail_read_at':9}):
+            with self.subTest(options=options):
+                r=self.run_direct(torques=[1,0,1,0,1,1],**options)
+                self.assertIsInstance(r.error,RuntimeError);self.assertEqual(len(r.writes),1)
+                self.assertNotIn(('enable_ack',4),r.events);self.assertEqual(r.closed,[True])
+
+    def test_invalid_torque_or_failed_initial_read_never_writes(self):
+        for options in ({'torques':[1,1,2,1,1,1]}, {'fail_read_at':3},
+                        {'torques':[1,0,1,1,1,1],'fail_read_at':7}):
+            with self.subTest(options=options):
+                r=self.run_direct(**options);self.assertIsInstance(r.error,RuntimeError)
+                self.assertEqual(r.writes,[]);self.assertEqual(r.closed,[True])
+
+    def test_short_final_goal_does_not_monitor_or_send_recovery(self):
+        for torques,fail_at in [([1]*6,1),([1,0,1,1,1,1],2)]:
+            with self.subTest(torques=torques):
+                r=self.run_direct(torques=torques,fail_at=fail_at)
+                self.assertIsInstance(r.error,RuntimeError);self.assertEqual(len(r.writes),fail_at)
+                self.assertEqual(r.events[-2:],[('write',r.writes[-1]),('closed',)])
+                self.assertEqual(r.closed,[True])
+
+    def test_invalid_final_goal_fails_before_torque_reads_or_writes(self):
+        r=self.run_direct(torques=[0]*6,invalid_goal=True)
+        self.assertIsInstance(r.error,ValueError);self.assertEqual(r.events,[('closed',)])
+        self.assertEqual(r.writes,[])
 
 class DirectPickTests(unittest.TestCase):
     def run_stage(self,name,positions=(),short_at=None,fail_read_at=None):

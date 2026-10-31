@@ -50,11 +50,14 @@ class K230ReadyTests(unittest.TestCase):
             events.append('preflight');return [{'torque':1} for unused in range(6)]
         with patch.object(self.board,'FPIOA',Pins),patch.object(self.board,'UART',Port),\
              patch.object(self.board,'preflight',preflight),\
+             patch.object(self.board,'read_checked',side_effect=lambda u,i,a,n:events.append(('torque_read',i)) or bytes((1,))),\
+             patch.object(self.board.time,'ticks_ms',create=True,return_value=0),\
+             patch.object(self.board.time,'ticks_diff',create=True,side_effect=lambda a,b:a-b),\
              patch.object(self.board,'feedback',side_effect=AssertionError('No post-send feedback')),\
              patch.object(self.board,'snapshot',side_effect=AssertionError('No monitoring')),\
              patch.object(self.board.time,'sleep_ms',create=True,side_effect=lambda ms:events.append(('sleep_ms',ms))):
             self.board.run_arm_ready(self.config,'ready')
-        self.assertEqual(events,['preflight',('packet',self.board.sync_frame(
+        self.assertEqual(events,['preflight']+[('torque_read',i) for i in range(1,7)]+[('packet',self.board.sync_frame(
             self.config['goals'],self.config['profiles'])),('sleep_ms',2),'closed'])
 
     def test_enable_only_one_byte_sram(self):

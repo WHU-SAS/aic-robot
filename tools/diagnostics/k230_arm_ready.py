@@ -35,7 +35,7 @@ def main():
     args=parser.parse_args()
     if args.hold_current and not args.execute:parser.error('--hold-current requires --execute')
     if args.execute and not args.hold_current and not args.hands_free:
-        parser.error('Ready movement requires --hands-free after current-hold confirmation')
+        parser.error('Ready movement requires --hands-free (hands away from the motion area)')
     action='hold' if args.hold_current else 'ready' if args.execute else 'read'
     config=config_payload()
     read_source=(ROOT/'device/k230/diagnostics/uart1_servo_read.py').read_text().split('\nif __name__ == "__main__":')[0]

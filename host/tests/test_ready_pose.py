@@ -93,6 +93,62 @@ class ReadyPoseTests(unittest.TestCase):
         self.assertEqual(self.bus.commands[0][0],self.steps[0]['goals'])
         self.assertEqual(self.bus.releases,[])
 
+    def test_immediate_ready_initializes_only_disabled_torque_before_final_goal(self):
+        # Model torque independently of goal writes: SyncWritePosEx cannot arm
+        # a disabled servo. The regular FakeBus intentionally omits that detail.
+        case = self
+        class TorqueAwareBus(FakeBus):
+            def __init__(self, config, clock, initial_rows, disabled):
+                super().__init__(config, clock)
+                self.rows = copy.deepcopy(initial_rows)
+                for i in disabled:
+                    self.rows[i].update(torque=0, goal=2048)
+                self.trace = []
+                self.final_sent = False
+                self.sdk = SimpleNamespace(write1ByteTxRx=self.enable)
+            def enable(self, servo_id, address, value):
+                case.assertEqual((address, value), (40, 1))
+                case.assertEqual(self.rows[servo_id]['torque'], 0)
+                case.assertEqual(self.rows[servo_id]['goal'], self.rows[servo_id]['position'])
+                self.trace.append(('enable', servo_id))
+                self.rows[servo_id]['torque'] = 1
+                return (0, 0)
+            def _written(self, result, action, servo_id):
+                case.assertEqual(result, (0, 0))
+            def read_control_feedback(self, servo_id):
+                case.assertFalse(self.final_sent, 'Ready dispatch must not monitor after its final goal')
+                return super().read_control_feedback(servo_id)
+            def sync_command_positions_profiled(self, goals, profiles, require_torque=True):
+                torque = {i: row['torque'] for i, row in self.rows.items()}
+                if require_torque:
+                    case.assertTrue(all(value == 1 for value in torque.values()))
+                    self.trace.append(('ready', dict(goals)))
+                    self.final_sent = True
+                else:
+                    case.assertEqual(goals, {i: row['position'] for i, row in self.rows.items()})
+                    self.trace.append(('hold', dict(goals)))
+                stamp = super().sync_command_positions_profiled(goals, profiles, require_torque)
+                for i, value in torque.items():
+                    self.rows[i]['torque'] = value
+                return stamp
+
+        for disabled in ((1, 2, 3, 4, 5, 6), (2, 6)):
+            with self.subTest(disabled=disabled):
+                bus = TorqueAwareBus(self.config, self.clock, self.bus.rows, disabled)
+                controller = TaskController(bus, self.config, self.route,
+                    clock=self.clock.now, sleep=self.clock.sleep)
+                with patch('builtins.input', side_effect=AssertionError('No ready confirmation prompt')):
+                    controller.prepare(self.steps)
+                    result = dispatch_ready_immediately(controller, self.steps)
+                self.assertEqual(result, 'ready_pose_goal_sent_torque_retained')
+                self.assertEqual(bus.trace,
+                    [('hold', {i: row['position'] for i, row in self.bus.rows.items()})]
+                    + [('enable', i) for i in disabled]
+                    + [('ready', self.steps[0]['goals'])])
+                self.assertEqual([command[2] for command in bus.commands], [False, True])
+                self.assertEqual(bus.releases, [])
+                self.assertTrue(all(row['torque'] == 1 for row in bus.rows.values()))
+
     def test_immediate_dispatch_cannot_send_other_targets(self):
         self.controller.prepare(self.steps)
         changed=copy.deepcopy(self.steps);changed[0]['goals'][2]+=1
