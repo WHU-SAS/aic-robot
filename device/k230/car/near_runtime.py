@@ -91,6 +91,7 @@ def _verify(capture, link, projection, config, clock_ms, fine_factory, stopped_a
     # The shared precise detector finds its own current-frame proposals; no
     # coarse tracking state or proxy is involved in the final acceptance point.
     check = fine_factory(config, clock_ms)
+    reference_state, status_samples = dict(state), []
     counts = state['encoder_a'], state['encoder_b']
     stationary = not state['run']
     try:
@@ -98,12 +99,15 @@ def _verify(capture, link, projection, config, clock_ms, fine_factory, stopped_a
         while check.phase:
             check.advance()
             state = link.expect('STATUS')
+            status_samples.append({'received_at_k230_ms': clock_ms(), 'state': dict(state)})
             stationary = stationary and not state['run'] and (state['encoder_a'], state['encoder_b']) == counts
     finally:
         _collect_evidence(check, evidence, label)
     verdict = verify_parked(check.latest, projection, config['workspace'],
         config['near_parking'], clock_ms(), stopped_at, check.latest_ready_ms,
         stationary_since_capture=stationary)
+    verdict['static_check'] = {'reference_state': reference_state,
+        'status_samples': status_samples, 'stationary_since_capture': stationary}
     return verdict, check.latest, check.events
 
 

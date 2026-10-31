@@ -274,6 +274,17 @@ class NearRuntimeTests(unittest.TestCase):
                       result['initial_verification']['observation'])
         self.assertEqual([fine.starts for fine in self.fines], [0, 1])
         self.assertEqual([item['label'] for item in self.evidence], ['initial_verify'])
+        trace = result['verification']['static_check']
+        self.assertTrue(trace['stationary_since_capture'])
+        samples = trace['status_samples']
+        self.assertEqual(len(samples), self.static_steps)
+        self.assertEqual(len(self.link.commands), 1+self.static_steps)
+        self.assertEqual([item['received_at_k230_ms'] for item in samples],
+                         [stamp+23 for stamp, unused in self.link.timeline[1:]])
+        for sample in samples:
+            self.assertEqual(sample['state']['encoder_a'], trace['reference_state']['encoder_a'])
+            self.assertEqual(sample['state']['encoder_b'], trace['reference_state']['encoder_b'])
+            self.assertFalse(sample['state']['run'])
 
     def test_near_start_solves_before_first_follow_and_uses_remaining_distance(self):
         self.coarse_x = [480]
@@ -527,6 +538,33 @@ class NearRuntimeTests(unittest.TestCase):
         self.assertEqual(result['status'],'no_precise_target')
         self.assertFalse(result['verification']['accepted'])
         self.assertNotIn('MOVE',self.names())
+        trace = result['verification']['static_check']
+        self.assertFalse(trace['stationary_since_capture'])
+        self.assertEqual(len(trace['status_samples']), self.static_steps)
+        self.assertEqual(trace['status_samples'][0]['state']['encoder_a']-
+                         trace['reference_state']['encoder_a'], 10)
+
+    def test_static_trace_retains_movement_even_when_counts_return_to_reference(self):
+        self.coarse_x = [500]
+        expect, observed = self.link.expect, []
+        def passive_motion(command):
+            if command == 'STATUS' and len(self.fines) > 1 and self.fines[-1].starts:
+                if len(observed) == 0:
+                    self.link.left += 10
+                elif len(observed) == 1:
+                    self.link.left -= 10
+                observed.append(command)
+            return expect(command)
+        with patch.object(self.link, 'expect', side_effect=passive_motion):
+            result = self.run_task()
+        self.assertEqual(result['status'], 'no_precise_target')
+        trace = result['verification']['static_check']
+        self.assertFalse(trace['stationary_since_capture'])
+        reference = trace['reference_state']['encoder_a']
+        self.assertEqual([sample['state']['encoder_a'] for sample in trace['status_samples']],
+                         [reference+10, reference, reference])
+        self.assertEqual(self.names(), ['STATUS']*(1+self.static_steps))
+        self.assertFalse(result['motion_performed'])
 
     def test_follow_ack_failure_stops_before_first_saved_sample(self):
         self.link.fail_follow=True

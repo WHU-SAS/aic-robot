@@ -293,11 +293,22 @@ class NearControlTests(unittest.TestCase):
         result = self.verify(observation, now=3501, stopped_at=1900, ready=3500)
         self.assertTrue(result['accepted'])
         self.assertEqual(result['capture_timestamp_ms'], 2000)
-        for timing in ({'now': 3501, 'stopped_at': 2100, 'ready': 3500},
-                       {'now': 3501, 'stopped_at': 1900, 'ready': 3500, 'stationary': False},
-                       {'now': 4001, 'stopped_at': 1900, 'ready': 3500},
-                       {'now': 3499, 'stopped_at': 1900, 'ready': 3500}):
-            self.assertFalse(self.verify(observation, **timing)['accepted'])
+        self.assertEqual(result['static_timing'], {'stopped_at_ms': 1900,
+            'capture_timestamp_ms': 2000, 'result_ready_ms': 3500, 'checked_at_ms': 3501})
+        cases = (
+            ({'now': 3501, 'stopped_at': 2100, 'ready': 3500}, 'capture_before_stop'),
+            ({'now': 3501, 'stopped_at': 1900, 'ready': 3500, 'stationary': False}, 'chassis_not_stationary'),
+            ({'now': 4001, 'stopped_at': 1900, 'ready': 3500}, 'static_result_expired'),
+            ({'now': 3499, 'stopped_at': 1900, 'ready': 3500}, 'check_before_result'),
+            ({'now': 3501, 'stopped_at': 1900, 'ready': 1999}, 'result_before_capture'))
+        for timing, reason in cases:
+            with self.subTest(reason=reason):
+                rejected = self.verify(observation, **timing)
+                self.assertFalse(rejected['accepted'])
+                self.assertEqual(rejected['reason_code'], reason)
+                self.assertEqual(rejected['static_timing'], {'stopped_at_ms': timing['stopped_at'],
+                    'capture_timestamp_ms': 2000, 'result_ready_ms': timing['ready'],
+                    'checked_at_ms': timing['now']})
 
     def test_one_delayed_fine_anchor_then_encoder_guidance_stops_once(self):
         for offset in (-15, 0, 15):

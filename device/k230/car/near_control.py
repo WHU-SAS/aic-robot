@@ -193,14 +193,25 @@ def verify_parked(observation, projection, workspace, config, now_ms,
         observation = _precise(observation)
     except (ValueError, TypeError) as exc:
         return {'status': 'no_precise_target', 'accepted': False, 'preferred': False,
-                'reason': str(exc),
+                'reason': str(exc), 'reason_code': 'precise_localization_failed',
                 'automatic_arm_action': False}
     stamp = observation['capture_timestamp_ms']
-    if (stationary_since_capture is not True or age_ms(stamp, stopped_at_ms) < 0 or
-            age_ms(result_ready_ms, stamp) < 0 or
-            not 0 <= age_ms(now_ms, result_ready_ms) <= config['max_age_ms']):
+    timing = {'stopped_at_ms': stopped_at_ms, 'capture_timestamp_ms': stamp,
+              'result_ready_ms': result_ready_ms, 'checked_at_ms': now_ms}
+    failure = None
+    if stationary_since_capture is not True:
+        failure = ('chassis_not_stationary', 'Chassis state or encoder counts changed during static localization')
+    elif age_ms(stamp, stopped_at_ms) < 0:
+        failure = ('capture_before_stop', 'Precise frame was captured before the stopped reference time')
+    elif age_ms(result_ready_ms, stamp) < 0:
+        failure = ('result_before_capture', 'Precise result completion precedes frame capture')
+    elif age_ms(now_ms, result_ready_ms) < 0:
+        failure = ('check_before_result', 'Static result was checked before its completion time')
+    elif not 0 <= age_ms(now_ms, result_ready_ms) <= config['max_age_ms']:
+        failure = ('static_result_expired', 'Static result exceeded the existing completion-to-use age limit')
+    if failure:
         return {'status': 'no_precise_target', 'accepted': False, 'preferred': False,
-                'reason': 'A new static precise frame and its actual completion time are required',
+                'reason_code': failure[0], 'reason': failure[1], 'static_timing': timing,
                 'capture_timestamp_ms': stamp, 'automatic_arm_action': False}
     point = observation['cube_center_Base_mm']
     geometry = _geometry(point, projection, workspace)
@@ -211,7 +222,8 @@ def verify_parked(observation, projection, workspace, config, now_ms,
             'preferred': preferred,
             'frame_id': observation['frame_id'], 'capture_timestamp_ms': stamp,
             'cube_center_Base_mm': list(point), 'target_Base_X_mm': target,
-            'automatic_arm_action': False, 'forward_X_per_mm': forward_x_per_mm(projection)}
+            'automatic_arm_action': False, 'forward_X_per_mm': forward_x_per_mm(projection),
+            'static_timing': timing}
     result.update(geometry)
     return result
 
