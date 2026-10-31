@@ -47,6 +47,13 @@ def roll_candidates(g,xy,tilt,orientation,initial_roll,counts):
             p=[matvec(R,matvec(rollR,v)) for v in local]
             offy=pivot[1]+(p[0][1]+p[1][1])/2
             d=[p[1][i]-p[0][i] for i in range(3)]
+            # Use the same compensated open-midpoint as Geometry.solve.
+            # Its fixed-to-moving direction rotates with the selected wrist.
+            offset=g.pick['cube_offset_toward_moving_finger_mm']/1000
+            if offset:
+                length=norm(d[:2])
+                if length<1e-8:return None
+                offy+=offset*d[1]/length
             cache[roll]=(offy,d,dot(target,target)-offy*offy)
         offy,d,rr=cache[roll]
         if rr<=0:return None
@@ -134,7 +141,7 @@ def _stages(g,xy,start,tilt,roll,orientation,counters):
         'closed_finger_clearances_mm':clearances,
         'closed_finger_height_reference':'table_Base_Z_at_target_XY',
         'alignment_reference':'open_fingertip_midpoint',
-        'cube_offset_toward_moving_finger_mm':0,
+        'cube_offset_toward_moving_finger_mm':g.pick['cube_offset_toward_moving_finger_mm'],
         'target_xy_Base_mm':[v*1000 for v in xy],
         'target_FK':{k:g.report(v) for k,v in [('hover',hover),('descend',low),('close',close),('lift',lift)]}}
 
@@ -157,8 +164,6 @@ def _orientation(value):
 
 
 def plan(g,xy,start,orientation,fallback):
-    if g.pick['cube_offset_toward_moving_finger_mm']!=0:
-        raise ValueError('Wrist alignment requires zero empirical offset')
     counters={'scalar_evaluations':0,'candidate_attempts':0,'ik_calls':0}
     reasons={}
     orientation=_orientation(orientation)

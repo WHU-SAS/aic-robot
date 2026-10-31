@@ -20,8 +20,8 @@
   "automatic_return_or_torque_release": false,
   "alignment_reference": "open_fingertip_midpoint",
   "alignment_authorization": "User 2026-10-31: use a 25-degree opening, retaining open-fingertip midpoint alignment",
-  "cube_offset_toward_moving_finger_mm": 0,
-  "cube_offset_authorization": "User 2026-10-31: integrate corrected model, paired calibration and 0mm empirical offset into the complete robot",
+  "cube_offset_toward_moving_finger_mm": -3,
+  "cube_offset_authorization": "User 2026-10-31: shift the cube 3mm toward the fixed finger from the open-jaw midpoint; preserve the vision coordinates and rotate the compensation with servo5",
   "standalone_stage_policy": {
     "hover_tolerance_counts": 30,
     "descend_tolerance_counts": 10,

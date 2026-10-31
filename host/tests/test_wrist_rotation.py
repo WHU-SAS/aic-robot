@@ -68,7 +68,8 @@ class WristPlanningTests(unittest.TestCase):
 
     def geometry(self,xy,enabled=True,serialized=False):
         cfg=json.loads(json.dumps(self.cfg)) if serialized else self.cfg
-        pick=dict(cfg['pick']);pick['wrist_alignment_enabled']=enabled
+        # Keep the earlier zero-offset geometry assertions as historical checks.
+        pick=dict(cfg['pick'],cube_offset_toward_moving_finger_mm=0);pick['wrist_alignment_enabled']=enabled
         n=self.plane['normal'];z=(self.plane['offset_mm']-n[0]*xy[0]-n[1]*xy[1])/n[2]
         return Geometry(cfg['model'],pick,z)
 
@@ -205,10 +206,45 @@ class WristPlanningTests(unittest.TestCase):
             expected=20.*sum(abs(np.dot(axis,v)) for v in orientation['axes_Base']+[orientation['table_normal_Base']])
             self.assertAlmostEqual(expected,result['nominal_cube_width_mm'],delta=1e-9)
 
-    def test_empirical_offset_is_not_reintroduced_into_rotating_planner(self):
-        g=self.geometry([248,4]);g.pick['cube_offset_toward_moving_finger_mm']=-45
-        with self.assertRaisesRegex(ValueError,'zero empirical offset'):
-            g.plan([.248,.004],[2048]*6,self.orientation(30))
+    def test_authorized_offset_moves_cube_toward_fixed_jaw_after_wrist_rotation(self):
+        # Independent host FK checks sign and length, rather than comparing
+        # two uses of the same compensated midpoint implementation.
+        import numpy as np
+        from host.apps.pick_validation_pc import parameters
+        from host.arm.pick_validation_geometry import OpenTipPickGeometry
+        unused,cfg=parameters()
+        host=OpenTipPickGeometry(ROOT,cfg.mapping,opening_count=2332,
+            urdf_path='models/genkiarm/genkiarm_corrected.urdf',
+            cube_offset_toward_moving_finger_mm=-3)
+        aligned=0
+        for yaw in (0,15,30,45):
+            g=self.geometry([248,4]);g.pick['cube_offset_toward_moving_finger_mm']=-3
+            result=g.plan([.248,.004],[2048]*6,self.orientation(yaw))
+            self.assertEqual(result['cube_offset_toward_moving_finger_mm'],-3)
+            self.assertEqual(result['target_xy_Base_mm'],[248.,4.])
+            if result['wrist_alignment']['status']=='aligned':
+                aligned+=1
+                self.assertLess(result['wrist_alignment']['stage_direction_errors_deg']['descend'],1.)
+            for stage in ('hover','descend','lift'):
+                q=host.angles(result[stage]);q[5]=g.open_angle
+                mid,tips,unused2,unused3=host.metrics(q)
+                direction=np.array(tips['zhua'][:2])-tips['wan2'][:2]
+                direction/=np.linalg.norm(direction)
+                virtual=mid[:2]-.003*direction
+                np.testing.assert_allclose(virtual,host.alignment_midpoint(q)[:2],atol=1e-10)
+                self.assertLess(np.linalg.norm(virtual-[.248,.004]),.002)
+                delta=virtual-mid[:2]
+                self.assertAlmostEqual(float(np.dot(delta,direction)),-.003,places=10)
+        self.assertGreater(aligned,0)
+
+    def test_same_fixed_jaw_offset_is_retained_when_orientation_falls_back(self):
+        g=self.geometry([248,4]);g.pick['cube_offset_toward_moving_finger_mm']=-3
+        start=[2048]*6;start[4]=1707
+        result=g.plan([.248,.004],start,None)
+        expected=g._plan_held([.248,.004],start)
+        self.assertEqual(result['wrist_alignment']['status'],'held_current_fallback')
+        self.assertEqual(result['cube_offset_toward_moving_finger_mm'],-3)
+        for stage in STAGES:self.assertEqual(result[stage],expected[stage])
 
 
 if __name__=='__main__':unittest.main()
