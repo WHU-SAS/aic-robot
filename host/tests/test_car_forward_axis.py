@@ -1,6 +1,7 @@
 """The nominal encoder model is unchanged by a paired rigid Base-frame change."""
 import ast
 import json
+import math
 from pathlib import Path
 import unittest
 
@@ -93,12 +94,14 @@ class ForwardAxisTests(unittest.TestCase):
     def test_MOVE_distance_divides_by_projected_forward_x(self):
         scale = forward_x_per_mm(self.new)
         self.assertAlmostEqual(scale, table_forward(self.new.normal, self.axis)[0])
+        workspace, _, _ = load()
+        config = json.loads((ROOT / 'configs/car/near_parking.json').read_text())
         for distance in (-30, 30):
             verdict = {'status': 'not_parked', 'accepted': False,
                 'window': {'lateral_allowed': True}, 'target_Base_X_mm': 250,
                 'cube_center_Base_mm': [250+distance*scale, 0, 0],
                 'forward_X_per_mm': scale}
-            self.assertEqual(correction_plan(verdict)['distance_mm'], distance)
+            self.assertEqual(correction_plan(verdict, self.new, workspace, config)['distance_mm'], distance)
         # Historical calls without the new axis retain their old X/mm shortcut.
         self.assertEqual(forward_x_per_mm(self.old), 1.)
 
@@ -120,6 +123,23 @@ class ForwardAxisTests(unittest.TestCase):
             'center_pixel': [640, 650],
             'ground_contact_proxy_Base_mm': [config['forward']['near_Base_X_mm']+50.9*scale, 0, 0]}
         self.assertEqual(motion_plan(observation, projection, config, 100)['distance_mm'], 50)
+
+    def test_turn_candidate_prediction_keeps_axis_and_origin_covariance(self):
+        workspace, _, _ = load()
+        config = json.loads((ROOT / 'configs/car/near_parking.json').read_text())
+        old_point = [250, -30, -55]
+        for bearing in (-10, 10):
+            verdict = {'status': 'not_parked', 'accepted': False,
+                'window': {'lateral_allowed': False}, 'bearing_deg': bearing,
+                'cube_center_Base_mm': self.mapped(old_point)}
+            result = correction_plan(verdict, self.new, workspace, config)
+            angle = result['angle_deg']
+            travel = config['track_width_mm']*math.radians(abs(angle))
+            deltas = [(0, travel)] if angle > 0 else [(travel, 0)]
+            expected = self.mapped(predict_center(old_point, deltas,
+                config['track_width_mm'], self.old.normal))
+            np.testing.assert_allclose(result['nominal_predicted_center_Base_mm'],
+                                       expected, atol=1e-10)
 
     def test_refitted_plane_is_an_approximation_separate_from_rigid_covariance(self):
         self.assertGreater(np.linalg.norm(np.array(self.refit.normal)-self.new.normal), 1e-5)

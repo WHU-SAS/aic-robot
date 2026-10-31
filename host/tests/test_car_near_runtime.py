@@ -261,6 +261,109 @@ class NearRuntimeTests(unittest.TestCase):
         self.assertGreater(self.fines[-1].latest_ready_ms-self.fines[-1].frame['capture_timestamp_ms'],500)
         self.assertFalse(result['automatic_arm_action'])
 
+    def test_near_start_inside_window_uses_one_static_frame_without_moving(self):
+        self.coarse_x = [500]
+        result = self.run_task()
+        self.assertEqual(result['status'], 'parked')
+        self.assertFalse(result['motion_performed'])
+        self.assertTrue(all(name == 'STATUS' for name in self.names()))
+        self.assertTrue(all(not running for unused, running in self.captures))
+        self.assertEqual(len(self.captures), 2)  # coarse, then strict static
+        self.assertEqual(len(result['verifications']), 1)
+        self.assertIs(result['verification_observation'],
+                      result['initial_verification']['observation'])
+        self.assertEqual([fine.starts for fine in self.fines], [0, 1])
+        self.assertEqual([item['label'] for item in self.evidence], ['initial_verify'])
+
+    def test_near_start_solves_before_first_follow_and_uses_remaining_distance(self):
+        self.coarse_x = [480]
+        self.static_offsets = [20, 0]
+        result = self.run_task()
+        self.assertEqual(result['status'], 'parked')
+        self.assertEqual(self.names().count('FOLLOW'), 1)
+        first = next(command for command in self.link.commands if command.startswith('FOLLOW,'))
+        self.assertEqual(first, 'FOLLOW,50,50')
+        self.assertNotIn('FOLLOW', [command.split(',')[0]
+                                   for command in self.fine_start_states[0]['commands']])
+        first_plan = result['samples'][0]['plan']
+        self.assertEqual(first_plan['mode'], 'encoder_guided')
+        self.assertEqual(first_plan['heading_source'], 'fine_odometry')
+        self.assertGreater(first_plan['source_capture_age_ms'], 500)
+        initial = result['initial_verification']['observation']
+        self.assertGreater(result['verification_observation']['frame_id'], initial['frame_id'])
+        self.assertEqual([item['label'] for item in self.evidence],
+                         ['initial_verify', 'stopped_verify'])
+        self.assertEqual(self.fines[0].starts, 0)
+        self.assertFalse(result['fine_observations'])
+        self.assertNotIn('MOVE', self.names())
+        self.assertNotIn('TURN', self.names())
+
+    def test_near_start_can_use_cruise_when_strict_remaining_distance_allows_it(self):
+        self.coarse_x = [480]
+        self.static_offsets = [80, 0]
+        result = self.run_task()
+        self.assertEqual(result['status'], 'parked')
+        first = next(command for command in self.link.commands if command.startswith('FOLLOW,'))
+        self.assertEqual(first, 'FOLLOW,70,70')
+        self.assertFalse(self.captures[1][1])
+
+    def test_near_start_too_close_uses_one_reverse_correction_and_new_frame(self):
+        self.coarse_x = [480]
+        self.static_offsets = [-20, 0]
+        result = self.run_task()
+        self.assertEqual(result['status'], 'parked')
+        self.assertNotIn('FOLLOW', self.names())
+        self.assertEqual(self.names().count('MOVE'), 1)
+        self.assertIn('MOVE,-20', self.link.commands)
+        self.assertTrue(result['motion_performed'])
+        self.assertEqual(len(result['verifications']), 2)
+        self.assertEqual([item['label'] for item in self.evidence],
+                         ['initial_verify', 'corrected_verify'])
+        self.assertGreater(result['verification_observation']['frame_id'],
+                           result['initial_verification']['observation']['frame_id'])
+
+    def test_near_start_lateral_correction_is_still_limited_to_one_attempt(self):
+        self.coarse_x = [480]
+        self.static_y_offsets = [25, 25]
+        result = self.run_task()
+        self.assertEqual(result['status'], 'parking_failed')
+        self.assertNotIn('FOLLOW', self.names())
+        self.assertNotIn('MOVE', self.names())
+        self.assertEqual(self.names().count('TURN'), 1)
+        self.assertEqual(len(result['verifications']), 2)
+
+    def test_near_start_range_only_static_result_never_starts_moving(self):
+        self.coarse_x = [480]
+        self.static_range_only = True
+        result = self.run_task()
+        self.assertEqual(result['status'], 'no_precise_target')
+        self.assertFalse(result['verification']['accepted'])
+        self.assertFalse(result['motion_performed'])
+        self.assertTrue(all(name == 'STATUS' for name in self.names()))
+        self.assertEqual(len(self.evidence), 1)
+
+    def test_near_start_movement_during_static_solve_prevents_start(self):
+        self.coarse_x = [480]
+        self.move_during_static = True
+        result = self.run_task()
+        self.assertEqual(result['status'], 'no_precise_target')
+        self.assertFalse(result['verification']['accepted'])
+        self.assertTrue(all(name == 'STATUS' for name in self.names()))
+
+    def test_near_start_forward_motion_requires_new_verdict_and_allows_one_correction(self):
+        self.coarse_x = [480]
+        self.static_offsets = [20, 20, 0]
+        result = self.run_task()
+        self.assertEqual(result['status'], 'parked')
+        self.assertEqual(self.names().count('FOLLOW'), 1)
+        self.assertEqual(self.names().count('MOVE'), 1)
+        self.assertEqual(len(result['verifications']), 2)
+        initial_id = result['initial_verification']['observation']['frame_id']
+        self.assertTrue(all(item['observation']['frame_id'] > initial_id
+                            for item in result['verifications']))
+        self.assertEqual([item['label'] for item in self.evidence],
+                         ['initial_verify', 'stopped_verify', 'corrected_verify'])
+
     def test_t1_is_immediate_snapshot_t2_records_actual_encoder_handoff(self):
         result = self.run_task()
         handoff = result['encoder_handoff']

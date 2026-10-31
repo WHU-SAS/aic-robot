@@ -1,4 +1,4 @@
-"""One moving fine image, coarse steering with encoder-guided distance and at most one correction.
+"""Static near starts or one moving fine anchor, then at most one correction.
 
 No arm actions or SD writes. Camera/UART lifetimes belong to the caller.
 """
@@ -112,6 +112,7 @@ def run_parking(capture, track, link, projection, config, clock_ms, sleep_ms, fi
     """Continuous cruise -> one fine anchor -> encoder prediction -> static check.
 
     The trigger distance is a separately estimated coarse-proxy threshold.
+    A start already inside it stays still for strict localization before moving.
     Original capture times stay intact. `t1_state` is read immediately
     after the trigger image; ordered odometry also accounts approximately for
     capture-to-UART latency. Base-to-axle lever-arm calibration remains absent.
@@ -141,7 +142,7 @@ def run_parking(capture, track, link, projection, config, clock_ms, sleep_ms, fi
     odometry.add(current, sync_at, clock_ms())
     sent = pending = fine_started = False
     attempts = 0
-    anchor = None
+    anchor = initial_verification = None
     l1 = None
 
     def command(text):
@@ -181,7 +182,24 @@ def run_parking(capture, track, link, projection, config, clock_ms, sleep_ms, fi
                 if plan['status'] != 'follow':
                     result['status'], result['last_plan'] = plan['status'], plan
                     break
-                if fine_started:
+                if not sent and plan['coarse_Base_X_mm'] <= distance:
+                    # A near start has no travel budget for moving fine vision.
+                    # Keep still until a strict image supplies the actual gap.
+                    initial_verification = _verify(capture, link, projection, config,
+                        clock_ms, fine_factory, clock_ms(), current, evidence, 'initial_verify')
+                    verdict, observation, events = initial_verification
+                    result['initial_verification'] = {
+                        'verdict': verdict, 'observation': observation, 'steps': events}
+                    if verdict['status'] == 'not_parked':
+                        plan = near_plan(observation, projection, config['workspace'],
+                            config['near_parking'], clock_ms(), wheel_deltas=(), encoder_guided=True)
+                        if plan['status'] == 'follow':
+                            anchor, initial_verification = observation, None
+                    if initial_verification is not None:
+                        result['status'] = 'stop_for_verification'
+                        result['stop_states'] = [current]
+                        break
+                elif fine_started:
                     fine.advance()
                     # The coarse age is not renewed by an expensive fine step.
                     plan = coarse_drive_plan(coarse, projection, config, clock_ms(), speeds())
@@ -266,9 +284,12 @@ def run_parking(capture, track, link, projection, config, clock_ms, sleep_ms, fi
 
     state = result['stop_states'][-1]
     for index in range(2):
-        verdict, observation, events = _verify(capture, link, projection, config,
-            clock_ms, fine_factory, clock_ms(), state, evidence,
-            'corrected_verify' if index else 'stopped_verify')
+        if not index and initial_verification is not None:
+            verdict, observation, events = initial_verification
+        else:
+            verdict, observation, events = _verify(capture, link, projection, config,
+                clock_ms, fine_factory, clock_ms(), state, evidence,
+                'corrected_verify' if index else 'stopped_verify')
         result['verification'], result['verification_observation'] = verdict, observation
         result['verification_steps'] = events
         result['verifications'].append({'verdict': verdict, 'observation': observation, 'steps': events})
@@ -278,7 +299,7 @@ def run_parking(capture, track, link, projection, config, clock_ms, sleep_ms, fi
         if index:
             result['status'], result['failure_reason'] = 'parking_failed', verdict['status']
             return result
-        correction = correction_plan(verdict)
+        correction = correction_plan(verdict, projection, config['workspace'], config['near_parking'])
         result['correction'] = correction
         if correction['status'] not in ('move', 'turn'):
             result['status'] = verdict['status']
@@ -286,6 +307,7 @@ def run_parking(capture, track, link, projection, config, clock_ms, sleep_ms, fi
         states = []
         pending = True
         try:
+            result['motion_performed'] = True
             state = link.expect(correction['command'])
             pending = False
             states.append(state)

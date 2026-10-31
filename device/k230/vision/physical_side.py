@@ -623,7 +623,8 @@ def _seam_seed_steps(im, hsv, bbox, vertices, reuse_local=False, recover_interna
             for px,py in side_votes:
                 key=int(round((py-slope*(px-center_x))/2))
                 bins[key]=bins.get(key,0)+1
-            for key in sorted(bins,key=lambda k:-bins[k])[:2]:
+            # Tied bins need the same order on MicroPython and the PC.
+            for key in sorted(bins,key=lambda k:(-bins[k],k))[:2]:
                 support=[p for p in side_votes if abs(p[1]-slope*(p[0]-center_x)-2*key)<=2.5]
                 if len(set(p[0] for p in support))<minimum:continue
                 line=fit(support)
@@ -654,7 +655,8 @@ def _seam_seed_steps(im, hsv, bbox, vertices, reuse_local=False, recover_interna
         yield {'stage':'seam_seed','seed':q,'top_edge':top_edge}
         return
     if recover_internal:
-        for step in _recover_seam_steps(im, hsv, bbox, vertices, hypotheses, first, last):
+        recovery = hypotheses or [(count, line) for count, line, left, right in local_hypotheses]
+        for step in _recover_seam_steps(im, hsv, bbox, vertices, recovery, first, last):
             yield step
 
 

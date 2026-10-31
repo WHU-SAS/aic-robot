@@ -216,13 +216,14 @@ def verify_parked(observation, projection, workspace, config, now_ms,
     return result
 
 
-def correction_plan(verification):
+def correction_plan(verification, projection, workspace, config):
     """One existing MOVE or TURN command, using a new static fine result.
 
     Signed MOVE corrects depth when lateral window membership is already valid.
-    Otherwise one signed TURN aims at the camera midline; it may leave depth
-    outside the window, which the mandatory final image must report as failure.
-    The 30-degree bound is the existing TURN protocol range, not a new threshold.
+    Otherwise choose a single-wheel forward TURN with the greatest nominal
+    margin to all four window edges, never exceeding the old midline command.
+    The uncalibrated axle lever arm limits this prediction; only the mandatory
+    final static image can accept parking. The existing TURN limit is 30 degrees.
     """
     if verification.get('accepted'):
         return {'status': 'none'}
@@ -235,6 +236,25 @@ def correction_plan(verification):
         return {'status': 'move', 'distance_mm': distance, 'command': 'MOVE,%d' % distance,
                 'expected_reason': 6}
     bearing = verification['bearing_deg']
-    angle = min(30, max(1, int(abs(bearing)+.5))) * (1 if bearing >= 0 else -1)
+    limit = min(30, max(1, int(abs(bearing)+.5)))
+    direction = 1 if bearing >= 0 else -1
+    track = config['track_width_mm']
+    best = None
+    for magnitude in range(1, limit+1):
+        travel = track*math.radians(magnitude)
+        deltas = [(0, travel)] if direction > 0 else [(travel, 0)]
+        point = predict_center(verification['cube_center_Base_mm'], deltas,
+            track, projection.normal, getattr(projection, 'forward_axis_Base', None),
+            getattr(projection, 'motion_origin_Base_mm', None))
+        bounds = bounds_mm(workspace, point[0])
+        margin = min(point[0]-bounds['Base_X_mm'][0], bounds['Base_X_mm'][1]-point[0],
+                     point[1]-bounds['Base_Y_mm'][0], bounds['Base_Y_mm'][1]-point[1])
+        rank = (margin, -magnitude)
+        if best is None or rank > best[0]:
+            best = (rank, magnitude, point)
+    angle, point = direction*best[1], best[2]
     return {'status': 'turn', 'angle_deg': angle, 'command': 'TURN,%d' % angle,
-            'expected_reason': 7}
+            'expected_reason': 7, 'nominal_predicted_center_Base_mm': point,
+            'nominal_predicted_window': evaluate(point[0], point[1], workspace),
+            'nominal_window_margin_mm': best[0][0],
+            'prediction_basis': 'nominal single-wheel arc; uncalibrated axle lever arm; final static verification required'}

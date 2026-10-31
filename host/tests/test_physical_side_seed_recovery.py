@@ -29,6 +29,11 @@ class PhysicalSideSeedRecoveryTests(unittest.TestCase):
         return cv2.imread(str(path)), cfg
 
     def parking_failure(self, task):
+        if task == 'robot_task_109450_0':
+            folder = ROOT/'data/vision/hard_cases/cases/db85d27062cdb868-8b75ad95e6fa'
+            if not (folder/'image.jpg').exists():
+                self.skipTest('Original parking image is local-only evidence')
+            return cv2.imread(str(folder/'image.jpg')), json.loads((folder/'calibration.json').read_text())
         folder = ROOT/'data/logs/robot_handoff_diagnosis_20261031_160409/evidence'/task
         path = folder/'stopped_verify.jpg'
         if not path.exists():
@@ -105,7 +110,7 @@ class PhysicalSideSeedRecoveryTests(unittest.TestCase):
                     self.assertAlmostEqual(actual, baseline, places=10)
 
     def test_parking_separator_recovery_reuses_scan_and_retains_full_quality_gates(self):
-        for task in ('robot_task_49282_0', 'robot_task_345255_0'):
+        for task in ('robot_task_49282_0', 'robot_task_345255_0', 'robot_task_109450_0'):
             image, cfg = self.parking_failure(task)
             predictions = []
             for native in (True, False):
