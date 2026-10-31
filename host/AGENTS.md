@@ -26,8 +26,8 @@
 
 ## 视觉与对照入口
 
-- 正式PC及独立抓取使用`pick_validation_pc.json`：修正装配模型、配套`model_alignment_20261030`标定、25°张开中点（2332计数）、方块向固定爪侧3mm经验偏移（配置值−3，随5号旋转，不改视觉坐标）、额外前伸0mm、最低指尖80/15/80mm、夹紧20计数。阶段规则仍以对应入口为准。
-- 2026-10-31用户认可修正版并批准整合完整版本，修正URDF已成为默认，本轮按用户要求加入向固定爪侧3mm补偿；`pick_model_check.json`保留为相同参数的兼容入口。旧模型/45mm基线留Git历史，不重新混入运行配置；默认PC入口保持原5号角度；`pick_wrist_rotation.json`开启旋转，当前板端完整版本使用该配置。
+- 正式PC及独立抓取使用`pick_validation_pc.json`：修正装配模型、配套`model_alignment_20261030`标定、25°张开中点（2332计数）、方块向固定爪侧5mm经验偏移（配置值−5，随5号旋转，不改视觉坐标）、额外前伸0mm、最低指尖80/15/80mm、夹紧20计数。阶段规则仍以对应入口为准。
+- 2026-10-31用户认可修正版并批准整合完整版本，修正URDF已成为默认，本轮按用户要求加入向固定爪侧5mm补偿；`pick_model_check.json`保留为相同参数的兼容入口。旧模型/45mm基线留Git历史，不重新混入运行配置；默认PC入口保持原5号角度；`pick_wrist_rotation.json`开启旋转，当前板端完整版本使用该配置。
 - 第0版`./scripts/demo-v0-pick`保留PC解算与原时序，专属配置在`demos/v0_blue_pick/`；前伸10mm，不能混入正式视觉坐标。
 - 正式精定位使用`configs/vision/trials/model_alignment_20261030.json`，第0版使用`blue_cube.json`。内外参配对、相机1280×960 RGB565→JPEG95→BGR路径不随意改变。
 - 共用`CameraSession`仅一个活动所有者；粗跟踪代理不是精定位中心。采集时间不以处理时间替代，跨时钟/重启不能直接比较；未知旧图时间保持None。接口见`docs/guides/vision.md`。

@@ -86,7 +86,7 @@ class TrialConfigTests(unittest.TestCase):
         self.assertEqual(ext['intrinsics_sha256'],hashlib.sha256((ROOT/vision['intrinsics']).read_bytes()).hexdigest())
         self.assertEqual(pick['forward_extension_mm'],0)
         self.assertEqual(pick['alignment_reference'],'open_fingertip_midpoint')
-        self.assertEqual(pick['cube_offset_toward_moving_finger_mm'],-3)
+        self.assertEqual(pick['cube_offset_toward_moving_finger_mm'],-5)
         self.assertEqual(pick['model_urdf'],'models/genkiarm/genkiarm_corrected.urdf')
         self.assertEqual(pick['vision_config'],'configs/vision/trials/model_alignment_20261030.json')
         self.assertEqual([pick[k] for k in ('opening_count','descend_tip_height_mm','hover_tip_height_mm','lift_tip_height_mm')],[2332,15,80,80])

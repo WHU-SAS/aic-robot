@@ -213,7 +213,7 @@ class PcDirectFlowTests(unittest.TestCase):
             self.assertIn('unavailable',stage['feedback_source'])
         self.assertEqual(result.record['descend_position_sample']['positions'],result.observed['descend'])
         self.assertFalse(result.record['pid_writes_sent'])
-        self.assertEqual(result.record['pick_profile']['cube_offset_toward_moving_finger_mm'], -3)
+        self.assertEqual(result.record['pick_profile']['cube_offset_toward_moving_finger_mm'], -5)
         self.assertIn('4号已提前200毫秒发送',result.output)
         self.assertIn('连续5次处于±1计数',result.output)
         self.assertNotIn('连续0.5秒',result.output)
