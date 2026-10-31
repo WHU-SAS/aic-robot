@@ -105,7 +105,7 @@ class Link:
 class NearRuntimeTests(unittest.TestCase):
     def setUp(self):
         self.workspace, _, self.projection = load()
-        self.config, _, _, _ = build_bundle(continuous=True)
+        self.config, _, _, _ = build_bundle(near_parking=True)
         self.config['workspace'] = self.workspace
         self.config['near_parking'] = json.loads((ROOT/'configs/car/near_parking.json').read_text())
         self.config['near_parking']['capture_Base_X_mm'] = 500
@@ -253,7 +253,9 @@ class NearRuntimeTests(unittest.TestCase):
         self.assertTrue(all(active for unused,active in self.captures[1:-1]))
         self.assertFalse(self.captures[-1][1])
         self.assertNotIn(self.frames, self.track_frames)  # static verification bypasses coarse
-        self.assertGreater(result['stop_states'][-1]['ms']-result['stop_states'][0]['ms'], 199)
+        stopped_ms = result['stop_states'][-1]['ms']-result['stop_states'][0]['ms']
+        self.assertGreaterEqual(stopped_ms, 50)
+        self.assertLess(stopped_ms, 200)
         self.assertGreater(result['verification_observation']['frame_id'],
                            result['fine_observations'][0]['frame_id'])
         self.assertGreater(self.fines[-1].latest_ready_ms-self.fines[-1].frame['capture_timestamp_ms'],500)
@@ -311,7 +313,8 @@ class NearRuntimeTests(unittest.TestCase):
         self.post_fine_track_ms=501
         result=self.run_task()
         self.assertEqual(result['status'],'parked')
-        fallback=[s['plan'] for s in result['samples'] if s['plan'].get('heading_source')=='fine_odometry']
+        plans=[s['plan'] for s in result['samples']]+[result['last_plan']]
+        fallback=[p for p in plans if p.get('heading_source')=='fine_odometry']
         self.assertTrue(fallback)
         self.assertTrue(any(p['source_capture_age_ms']>500 for p in fallback))
         self.assertEqual(len(result['fine_observations']),1)

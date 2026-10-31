@@ -34,6 +34,7 @@ class NearBundleTests(unittest.TestCase):
         self.assertEqual(config['forward']['near_Base_X_mm'], approach['near_localization_start_Base_X_mm'])
         policy = json.loads((ROOT / 'configs/car/near_parking.json').read_text())
         self.assertEqual(config['near_parking'], policy)
+        self.assertEqual(config['stopped_observation_ms'], policy['stopped_observation_ms'])
         self.assertIn('capture_Base_X_mm', config['near_parking'])
         self.assertNotIn('trigger_Base_X_mm', config['near_parking'])
         self.assertIn('continuous', config)
@@ -70,6 +71,8 @@ class NearBundleTests(unittest.TestCase):
             self.assertNotIn('near_runtime.py', files)
             self.assertNotIn('intrinsics', config)
             self.assertNotIn('workspace', config)
+            self.assertEqual(config['stopped_observation_ms'], json.loads(
+                (ROOT / 'configs/car/straight.json').read_text())['stopped_observation_ms'])
         with self.assertRaises(ValueError):
             deploy.build_bundle(automatic=True, near_parking=True)
 

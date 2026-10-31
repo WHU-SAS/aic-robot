@@ -1,16 +1,17 @@
 {
   "schema": "aic.car.near_parking.v2",
-  "cruise_mm_s": 60,
-  "finish_mm_s": 40,
+  "cruise_mm_s": 70,
+  "finish_mm_s": 50,
   "max_wheel_mm_s": 80,
   "heading_gain_per_s": 1.5,
-  "slowdown_gain_per_s": 1.0,
+  "slowdown_gain_per_s": 2.0,
   "coast_s": 0.12,
   "center_tolerance_px": 48,
   "max_age_ms": 500,
   "track_width_mm": 119.2,
   "max_candidates": 3,
   "fine_budget_ms": 200,
-  "notes": "One moving precise image supplies distance; fresh coarse images continue steering. Aim one-quarter of the inset window depth closer to the arm than its centre (near+(far-near)/4), retaining the full formal 10mm-inset window and camera image midline. Near cruise60/max80 and finish40 are separate from coarse cruise70; no speed reduction merely to compute vision. After the moving result, the remaining-distance curve uses its60mm/s cap and finish40. Capture at coarse proxy Base X<=503.065045mm is a first field candidate, estimated from native full timing and three saved far-frame coarse/fine pairs, not a camera range or calibrated truth. The 200ms fine budget is soft; native full timings and maximum wheel-update gaps are recorded, not a10Hz promise during fine processing. User allows a faster, smoother near profile: slowdown1.0 gives60mm/s at60mm remaining, continuously falls to40mm/s at40mm, then retains40mm/s. Coast0.12 still uses measured wheel speed; higher final speed requires physical parking revalidation. After stopping, a new precise frame checks the actual window. At most one signed MOVE or TURN correction is followed by another static check; no automatic grasp. Existing FOLLOW20s, lease1s, B21 and pre-handoff coarse500ms remain. After handoff, unavailable/expired coarse heading falls back to the fixed fine anchor plus encoder yaw; distance is not discarded. Original JPEG95 frames, metadata, raw results and exact config/version are archived only after stopping and closing camera/UART. More than95% first-stop success remains an unverified field acceptance target. Coordinate trigger reexpressed by keeping the former500mm table-contact midline image ray and intersecting the new model_alignment_20261030 table plane; velocity, timing and candidate limits unchanged.",
-  "capture_Base_X_mm": 503.0650452530782
+  "stopped_observation_ms": 50,
+  "notes": "User-approved 2026-10-31 timing candidate: coarse capture proxy X<=470mm; one moving fine frame sets distance while fresh coarse frames steer. Keep70mm/s while computing and after handoff until35mm remaining, then min(70,max(50,2*remaining_mm)) reaches50mm/s at25mm. Use measured wheel speed with the existing0.12s coast estimate. The continuous parking task confirms50ms of unchanged encoders before its new static verification; UART/polling adds observation latency. The near-quarter destination, full10mm-inset window, one correction limit and shared final arm observation remain. The2.0-2.5s capture-to-physical-stop target is a nominal estimate, not field validation;470mm is a coarse proxy, not a fixed physical remaining distance. Fine200ms is a soft scheduling budget. Raw evidence is archived after stopping.",
+  "capture_Base_X_mm": 470
 }

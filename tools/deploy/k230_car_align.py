@@ -51,6 +51,7 @@ def build_bundle(approach_mode=False, automatic=False, continuous=False, near_pa
                       extrinsics=json.loads((ROOT / localization['extrinsics']).read_text()),
                       table_plane=localization['table_plane_Base_mm'], workspace=workspace,
                       near_parking=json.loads((ROOT / 'configs/car/near_parking.json').read_text()))
+        config['stopped_observation_ms'] = config['near_parking']['stopped_observation_ms']
         config['forward']['notes'] = 'Coarse vision supplies steering; one shared physical-side result and encoders supply distance to the inset window near-quarter point, shifted one-quarter depth from its centre toward the arm. Capture distance is separately configured; no old coarse endpoint and no arm action.'
     for name in ('visual_align', 'align_voice', 'blue_tracker', 'ground_projection', 'observations',
                  'continuous_math', 'continuous_approach'):

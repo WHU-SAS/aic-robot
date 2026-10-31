@@ -330,7 +330,7 @@ class NearControlTests(unittest.TestCase):
         result = self.plan(self.observation(self.center(500)), 3500,
             wheel_deltas=[(30, 30)], encoder_guided=True)
         self.assertEqual(result['status'], 'follow')
-        self.assertEqual((result['left_mm_s']+result['right_mm_s'])/2, 60)
+        self.assertEqual((result['left_mm_s']+result['right_mm_s'])/2, 70)
 
     def test_stop_at_depth_target_even_if_lateral_steering_has_not_finished(self):
         result = self.plan(self.observation(self.center(self.target, 25)))

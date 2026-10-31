@@ -123,10 +123,9 @@ class CalibrationPairingTests(unittest.TestCase):
     def test_coarse_triggers_keep_the_image_ray_on_the_new_runtime_table(self):
         pairing = self.approach['coordinate_pairing']
         before = [pairing['source_near_localization_start_Base_X_mm'],
-                  *pairing['source_tracking_forward_range_mm'], 500]
+                  *pairing['source_tracking_forward_range_mm']]
         after = [self.approach['near_localization_start_Base_X_mm'],
-                 *self.approach['tracking']['forward_range_mm'],
-                 self.policy['capture_Base_X_mm']]
+                 *self.approach['tracking']['forward_range_mm']]
         for x, actual in zip(before, after):
             low, high = -1000., 1000.
             for _ in range(70):

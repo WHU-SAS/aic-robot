@@ -7,5 +7,5 @@
   "heading_gain_per_s": 1.5,
   "slowdown_gain_per_s": 2,
   "run_limit_ms": 20000,
-  "notes": "Continuous coarse cruise70/max80 is the first speed-up trial. Near-parking uses this cruise while waiting for its one moving fine solve, then retains the separate near60/finish40 distance curve. New heading gain is separate from the old single-TURN gain0.75. Pure continuous coarse mode still has no fine localization or final parking."
+  "notes": "Continuous coarse cruise70/max80 also remains active while the one moving fine solve runs. Near-parking then uses its separate near70/finish50 curve. Heading gain is separate from the old single-TURN gain0.75. Pure continuous coarse mode still has no fine localization or final parking."
 }
