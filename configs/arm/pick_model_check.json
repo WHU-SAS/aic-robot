@@ -12,7 +12,7 @@
     "lift": 1
   },
   "gripper_stationary_tolerance_counts": 1,
-  "status": "corrected_model_candidate_pending_field_validation",
+  "status": "corrected_model_single_field_trial_success_not_default",
   "vision_config": "configs/vision/trials/model_alignment_20261030.json",
   "forward_extension_mm": 0,
   "forward_extension_authorization": "User 2026-10-22: start with 0mm to observe new calibration error",
@@ -31,5 +31,10 @@
     "poll_interval_ms": 50
   },
   "model_urdf": "models/genkiarm/genkiarm_corrected.urdf",
-  "comparison_parameters_approved_date": "2026-10-30"
+  "comparison_parameters_approved_date": "2026-10-30",
+  "field_validation": {
+    "date": "2026-10-31",
+    "result": "single_grasp_success_user_reported_aligned",
+    "default_replaced": false
+  }
 }

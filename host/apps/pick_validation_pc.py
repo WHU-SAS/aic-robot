@@ -104,10 +104,13 @@ def main(argv=None):
                 events.write(json.dumps(event,ensure_ascii=False)+'\n')
                 if event['event']=='stage_started':
                     record['motion_performed']=True;record['status']=event['name']+'_running';save()
-                    print('STAGE',event['name'],'目标已一次同步发送',flush=True)
+                    if event.get('dispatch_groups')==[[4],[1,2,3,5,6]]:
+                        print('STAGE',event['name'],'4号已提前%d毫秒发送，其余五轴随后同步发送'%event['axis4_lead_ms'],flush=True)
+                    else:
+                        print('STAGE',event['name'],'目标已发送；等待本阶段条件',flush=True)
                 elif event['event']=='gripper_settled':
                     record['gripper_settle']=event['details'];save()
-                    print('夹爪连续0.5秒静止，准备抬升。',flush=True)
+                    print('夹爪连续%d次处于±%d计数静止带，准备抬升。'%(event['details']['sample_count'],event['details']['tolerance_counts']),flush=True)
                 elif event['event']=='board_message' and ('Traceback' in event['text'] or 'Error' in event['text']):
                     print(event['text'],file=sys.stderr,flush=True)
             started=time.monotonic()
@@ -152,14 +155,23 @@ def main(argv=None):
                 duration=pick['stage_durations_s'].get(name,0)
                 stage={'name':name,'duration_s':duration,
                     'stationary_s':pick['stage_durations_s']['close_minimum_stationary_s'],
-                    'tolerance_counts':pick['gripper_stationary_tolerance_counts']}
+                    'tolerance_counts':pick['gripper_stationary_tolerance_counts'],
+                    'policy':pick['standalone_stage_policy']}
                 record['motion_command_attempted']=True;record['status']=name+'_dispatching';save()
-                result=run_action(payload(config,plan[name]),'stage',stage,port=args.camera_port,emit=emit)
-                completed=next(e for e in reversed(result) if e['event']=='stage_complete')
-                counts=[row['position'] for row in completed['rows']]
-                value={'name':name,'goals':plan[name],'final_feedback':completed['rows'],
-                    'final_error_counts':[v-g for v,g in zip(counts,plan[name])],
-                    'final_FK':geometry.report(counts)}
+                result=run_action(payload(config,plan[name]),'stage_direct',stage,port=args.camera_port,emit=emit)
+                completed=next(e for e in reversed(result) if e['event']=='stage_complete' and e['name']==name)
+                value={'name':name,'goals':plan[name],'stage_complete':completed,
+                    'final_feedback':None,'final_error_counts':None,'final_FK':None,
+                    'feedback_source':'unavailable_stage_does_not_read_six_axis_positions'}
+                if name in ('hover','descend'):
+                    sample=next(e['details'] for e in reversed(result)
+                        if e['event']=='position_gate_passed' and e['name']==name)
+                    counts=sample['positions']
+                    value.update(position_gate_sample=sample,
+                        final_feedback=[{'id':i,'position':count} for i,count in enumerate(counts,1)],
+                        final_error_counts=[v-g for v,g in zip(counts,plan[name])],
+                        final_FK=geometry.report(counts),feedback_source='position_gate_passed')
+                    if name=='descend':record['descend_position_sample']=sample
                 record['stages'].append(value);save()
                 print('STAGE_COMPLETE',name,json.dumps({'error_counts':value['final_error_counts'],'FK':value['final_FK']},ensure_ascii=False),flush=True)
             record.update(status='motion_sequence_complete_torque_on',physical_grasp_success='operator_observation_required')

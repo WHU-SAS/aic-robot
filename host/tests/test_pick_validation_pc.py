@@ -146,8 +146,16 @@ class FlowTests(unittest.TestCase):
                 rows=[{'position':2048} for i in range(6)]
                 if kind=='read':return [{'rows':rows}]
                 if kind=='hold':return []
+                self.assertEqual(kind,'stage_direct')
+                self.assertEqual(stage['policy'],pick['standalone_stage_policy'])
                 kwargs['emit']({'event':'stage_started','name':name})
-                return [{'event':'stage_complete','name':name,'rows':rows}]
+                events=[]
+                if name in ('hover','descend'):
+                    events.append({'event':'position_gate_passed','name':name,
+                        'details':{'goals':config['goals'],'positions':[2048]*6,
+                                   'errors_actual_minus_goal':[0]*6}})
+                events.append({'event':'stage_complete','name':name,'arrival_checked':name in ('hover','descend')})
+                return events
             with patch.object(app,'ROOT',root),patch.object(app,'parameters',return_value=(pick,config)),\
                  patch.object(app,'capture',side_effect=capture),patch.object(app.subprocess,'run',side_effect=localize),\
                  patch.object(app,'run_action',side_effect=action),patch.object(app,'make_plan',return_value=(SimpleNamespace(report=lambda c:{}),plan)),\

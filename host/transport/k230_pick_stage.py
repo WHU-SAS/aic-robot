@@ -23,7 +23,13 @@ def build_action(config,action,stage=None):
     settle='\n'.join(source.splitlines()[cls.lineno-1:cls.end_lineno])
     runner=(ROOT/'device/k230/arm/pick_stage.py').read_text()
     source='\n'.join((read,ready,settle,runner))
-    source+='\nrun_pick_action(ujson.loads(%r),%r,ujson.loads(%r))\n' % (json.dumps(config),action,json.dumps(stage))
+    if action=='stage_direct':
+        # Execute the exact existing standalone stage loop, without its legacy
+        # fixed-duration preflight/dispatch branch or another implementation.
+        source+='\nrun_pick_stage_direct(ujson.loads(%r),ujson.loads(%r))\n' % (json.dumps(config),json.dumps(stage))
+        source+='print("PICK_ACTION_PASS stage_direct")\n'
+    else:
+        source+='\nrun_pick_action(ujson.loads(%r),%r,ujson.loads(%r))\n' % (json.dumps(config),action,json.dumps(stage))
     return 'try:\n exec('+repr(source)+')\nexcept BaseException as exc:\n import sys\n sys.print_exception(exc)\nfinally:\n print("EXPORT_DONE")\n'
 
 
@@ -33,7 +39,11 @@ def run_action(config,action,stage=None,port=PORT,emit=lambda event:None):
     passed=False
     try:
         link=CameraLink(port)
-        timeout=86400 if stage and stage['name']=='close' else 45
+        if action=='stage_direct' and stage['name'] in ('hover','descend','close'):
+            # Position/sample gates have no elapsed-time advance or host deadline.
+            timeout=float('inf')
+        else:
+            timeout=86400 if stage and stage['name']=='close' else 45
         for raw in link.execute(build_action(config,action,stage),timeout=timeout):
             text=raw.decode(errors='replace')
             if text.startswith(('PICK_EVENT ','ARM_EVENT ')):
