@@ -17,6 +17,7 @@ from tools.deploy.k230_pick import (build_bundle as arm_bundle, digest, encoded,
 from tools.diagnostics.test_k230_motor_uart import stop_previous_script
 
 REMOTE = '/sdcard/aic/robot'
+DEFAULT_PICK_CONFIG = ROOT / 'configs/arm/pick_wrist_rotation.json'
 
 
 def _paired_config(car, arm):
@@ -47,7 +48,7 @@ def _paired_config(car, arm):
 
 def build_bundle(pick_config=None):
     car, car_files, _, _ = car_bundle(near_parking=True)
-    arm, arm_files, _ = arm_bundle(pick_config) if pick_config is not None else arm_bundle()
+    arm, arm_files, _ = arm_bundle(DEFAULT_PICK_CONFIG if pick_config is None else pick_config)
     _paired_config(car, arm)
     config = {'car':car, 'arm':arm, 'voice':arm['voice']}
     files = {}
@@ -125,7 +126,7 @@ def main(argv=None):
     parser.add_argument('--port', default=PORT)
     parser.add_argument('--install', action='store_true')
     parser.add_argument('--activate', action='store_true')
-    parser.add_argument('--pick-config', type=Path, help='explicit arm profile; default keeps servo5 angle')
+    parser.add_argument('--pick-config', type=Path, help='override the accepted wrist-aligned arm stage profile used by default')
     args = parser.parse_args(argv)
     if args.activate and not args.install:
         parser.error('--activate requires --install')

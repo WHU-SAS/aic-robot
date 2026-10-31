@@ -42,7 +42,7 @@ class WristHandoffTests(unittest.TestCase):
         estimate.assert_not_called()
 
     def test_combined_profile_preserves_car_calibration_and_control(self):
-        baseline,_,_=robot_bundle();rotating,files,_=robot_bundle(PROFILE)
+        baseline,_,_=robot_bundle('configs/arm/pick_validation_pc.json');rotating,files,_=robot_bundle()
         self.assertEqual(rotating['car'],baseline['car'])
         self.assertEqual(rotating['arm']['model'],baseline['arm']['model'])
         self.assertEqual(rotating['arm']['control'],baseline['arm']['control'])

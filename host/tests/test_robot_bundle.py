@@ -18,7 +18,7 @@ class RobotBundleTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.car_source = deploy.car_bundle(near_parking=True)
-        cls.arm_source = deploy.arm_bundle()
+        cls.arm_source = deploy.arm_bundle(deploy.DEFAULT_PICK_CONFIG)
 
     def build(self, car=None, arm=None):
         with patch.object(deploy, 'car_bundle', return_value=copy.deepcopy(
@@ -27,7 +27,7 @@ class RobotBundleTests(unittest.TestCase):
                 self.arm_source if arm is None else arm)) as arm_build:
             result = deploy.build_bundle()
         car_build.assert_called_once_with(near_parking=True)
-        arm_build.assert_called_once_with()
+        arm_build.assert_called_once_with(deploy.DEFAULT_PICK_CONFIG)
         return result
 
     def test_complete_nested_configs_keep_the_accepted_motion_and_calibration(self):
@@ -51,6 +51,8 @@ class RobotBundleTests(unittest.TestCase):
         self.assertEqual(pick['model_urdf'],'models/genkiarm/genkiarm_corrected.urdf')
         self.assertEqual(pick['vision_config'],'configs/vision/trials/model_alignment_20261030.json')
         self.assertEqual(pick['cube_offset_toward_moving_finger_mm'],-5)
+        self.assertTrue(pick['wrist_alignment_enabled'])
+        self.assertEqual(pick['status'],'user_accepted_arm_stage_baseline')
         self.assertEqual((pick['opening_angle_deg'],pick['opening_count']),(25,2332))
         self.assertEqual(pick['alignment_reference'],'open_fingertip_midpoint')
         self.assertEqual(pick['forward_extension_mm'],0)
@@ -79,6 +81,16 @@ class RobotBundleTests(unittest.TestCase):
         self.assertEqual(car['table_plane'],arm['vision']['localization']['table_plane_Base_mm'])
         for joint in arm['model']['joints'][1:4]:
             self.assertEqual(joint['axis'],[0.,-1.,0.])
+
+    def test_default_bundle_is_the_accepted_profile_and_fixed_wrist_remains_explicit(self):
+        default=deploy.build_bundle()
+        self.assertEqual(default,deploy.build_bundle(deploy.DEFAULT_PICK_CONFIG))
+        fixed=deploy.build_bundle(ROOT/'configs/arm/pick_validation_pc.json')
+        self.assertNotIn('wrist_alignment_enabled',fixed[0]['arm']['pick'])
+        for key in ('car','voice'):
+            self.assertEqual(default[0][key],fixed[0][key])
+        for key in ('model','control','ready_control','intrinsics','extrinsics'):
+            self.assertEqual(default[0]['arm'][key],fixed[0]['arm'][key])
 
     def test_flat_sources_and_manifest_include_both_executors_and_static_solver(self):
         unused, files, manifest = self.build()
