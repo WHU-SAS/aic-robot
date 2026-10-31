@@ -60,7 +60,10 @@ def _resolve(path, parent):
 def calibration_snapshot(config_path, role='comparison'):
     """Capture exact config plus resolved K/D/T/table; role must be explicit."""
     path = Path(config_path).resolve()
-    config = _json(path)
+    saved = _json(path)
+    # A complete robot archives its exact car and arm configs together. The
+    # car owns these moving/parking frames and embeds their original geometry.
+    config = saved.get('car', saved)
     vision = config.get('vision', config)
     loc = vision.get('localization', vision)
     files = {str(path): path.read_bytes()}

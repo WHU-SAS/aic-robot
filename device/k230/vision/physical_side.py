@@ -236,7 +236,58 @@ def _internal_edge(a, b, n, radius, rows, peaks, both, original):
     return internal
 
 
-def _edge_steps(im, a, b, stations_per_step=8, hsv=None):
+def _coherent_internal_edge(a, b, n, radius, rows, both, hsv, im):
+    """Recover a crease from local peaks in the SAME64 contrast profiles.
+
+    A broad highlight has two flanks: independently choosing the strongest
+    pixel at each station can mix them. Vote for one observed line instead;
+    the normal edge fit and blue/blue separator checks still own acceptance.
+    """
+    if sum(bool(row[radius]) for row in both) < 45:
+        raise ValueError('Coherent separator is not internal blue')
+    length = distance(a, b)
+    along = [(-.35+.7*j/63)*length for j in range(64)]
+    candidates = []
+    for j, (row, allowed) in enumerate(zip(rows, both)):
+        for peak in range(1, len(row)-1):
+            if (allowed[peak] and row[peak] > .08*.08 and
+                    row[peak] >= row[peak-1] and row[peak] >= row[peak+1]):
+                candidates.append((j, peak-radius+_peak_fraction(row, peak), row[peak]))
+    best = None
+    for index in range(-4, 5):
+        tilt = index*.05
+        bins = {}
+        for j, offset, score in candidates:
+            key = int(round((offset-tilt*along[j])/2))
+            bins.setdefault(key, set()).add(j)
+        for key in sorted(bins, key=lambda k: -len(bins[k]))[:2]:
+            selected = {}
+            for j, offset, score in candidates:
+                if (abs(offset-tilt*along[j]-key*2) <= 2.5 and
+                        (j not in selected or score > selected[j][1])):
+                    selected[j] = (offset, score)
+            if len(selected) < 45:
+                continue
+            stations = sorted(selected)
+            points = [[a[k]+(b[k]-a[k])*(.15+.7*j/63)+n[k]*selected[j][0]
+                       for k in (0, 1)] for j in stations]
+            try:
+                edge = _fit_edge(points, stations)
+                rank = (len(selected), sum(v[1] for v in selected.values()), -edge[1]['rms_px'])
+                if best is not None and rank <= best[0]:
+                    continue
+                upper = [intersect(edge[0], [1., 0., -v[0]]) for v in (a, b)]
+                _separator_evidence(hsv, upper, edge, im)
+            except ValueError:
+                continue
+            best = (rank, edge)
+    if best is None:
+        raise ValueError('No coherent measured internal edge')
+    best[1][1]['edge_ownership'] = 'coherent_internal_blue_blue'
+    return best[1]
+
+
+def _edge_steps(im, a, b, stations_per_step=8, hsv=None, coherent=False):
     """Same64 stations/edge checks; retain a resolved internal-face crease."""
     length = distance(a, b)
     if length < 25:
@@ -280,7 +331,13 @@ def _edge_steps(im, a, b, stations_per_step=8, hsv=None):
             stations.append(j)
         if (j+1) % stations_per_step == 0:
             yield {'stage': 'edge_samples', 'stations': j+1}
-    edge = _fit_edge(points, stations)
+    try:
+        edge = _fit_edge(points, stations)
+    except ValueError:
+        if not coherent or hsv is None:
+            raise
+        both = _blue_grid(hsv, a, b, n, radius) if grid is not None else blue_rows
+        edge = _coherent_internal_edge(a, b, n, radius, rows, both, hsv, im)
     # An internal line separated by5pixels cannot be closer to the seed if
     # the external peak stays within2pixels. Most existing edges exit here.
     if hsv is not None and sum(abs(p-radius)>=3 for p in peaks) >= 45:
@@ -357,14 +414,14 @@ def _separator_evidence(hsv, q, edge, image):
         'both_blue_stations': internal, 'colour_votes': legacy, 'direction_votes': direction}
 
 
-def _outline_support(a,b,contour):
+def _outline_support(a,b,contour,tolerance=3):
     """Require an observed contour span along a proposed supporting line."""
     if not contour:return False
     length=distance(a,b)
     line=fit([a,b]);u=[(b[k]-a[k])/length for k in (0,1)];intervals=[]
     for c,d in zip(contour,contour[1:]+contour[:1]):
         other=distance(c,d)
-        if other<8 or max(residual(p,line) for p in (c,d))>3:continue
+        if other<8 or max(residual(p,line) for p in (c,d))>tolerance:continue
         if abs(sum((d[k]-c[k])*u[k] for k in (0,1)))/other<.94:continue
         along=[sum((p[k]-a[k])*u[k] for k in (0,1)) for p in (c,d)]
         lo=max(0.,min(along));hi=min(length,max(along))
@@ -373,6 +430,19 @@ def _outline_support(a,b,contour):
     for lo,hi in sorted(intervals):
         coverage+=max(0.,hi-max(end,lo));end=max(end,hi)
     return coverage>=.5*length
+
+
+def _recoverable_outline_seeds(seeds, contour):
+    """Keep existing internal-face proposals ahead of any new recovery.
+
+    Fifteen pixels cover the original12px edge search plus3px fit tolerance.
+    This only classifies search seeds; it never establishes a physical edge.
+    """
+    for q in seeds:
+        top = min(range(4), key=lambda j: q[j][1]+q[(j+1) % 4][1])
+        if not _outline_support(q[top], q[(top+1) % 4], contour, tolerance=15):
+            return False
+    return True
 
 
 def _bottom_segments(bbox,vertices):
@@ -395,7 +465,42 @@ def _bottom_segments(bbox,vertices):
     return out
 
 
-def _seam_seed_steps(im, hsv, bbox, vertices, reuse_local=False):
+def _recover_seam_steps(im, hsv, bbox, vertices, hypotheses, first, last):
+    """Reuse the original seam votes and observed lower outline, static only."""
+    center_x = bbox[0]+bbox[2]/2
+    tried = []
+    bottoms = _bottom_segments(bbox, vertices)
+    for count, line in sorted(hypotheses, key=lambda item: -item[0]):
+        middle = -(line[0]*center_x+line[2])/line[1]
+        if any(abs(middle-old) < 3 for old in tried):
+            continue
+        tried.append(middle)
+        if len(tried) > 3:
+            break
+        for left, right in bottoms[:1]:
+            # The observed lower edge supplies a search direction, never the
+            # measured upper edge. All64 upper stations are still sampled.
+            slope = (right[1]-left[1])/(right[0]-left[0])
+            upper = [[p[0], middle+slope*(p[0]-center_x)] for p in (left, right)]
+            if min(left[1]-upper[0][1], right[1]-upper[1][1]) < 25:
+                continue
+            try:
+                for step in _edge_steps(im, upper[0], upper[1], hsv=hsv, coherent=True):
+                    if step['stage'] == 'edge_complete':
+                        top_edge = step['edge']
+                    yield {'stage': 'seam_'+step['stage']}
+                upper = [intersect(top_edge[0], [1., 0., -p[0]]) for p in (left, right)]
+                measured_middle = -(top_edge[0][0]*center_x+top_edge[0][2])/top_edge[0][1]
+                if not first <= measured_middle < last:
+                    raise ValueError('Measured separator left its searched band')
+                q = upper+[list(right), list(left)]
+                _separator_evidence(hsv, q, top_edge, im)
+            except ValueError:
+                continue
+            yield {'stage': 'seam_seed', 'seed': q, 'top_edge': top_edge}
+
+
+def _seam_seed_steps(im, hsv, bbox, vertices, reuse_local=False, recover_internal=False):
     """Propose a side from observed blue/blue separation and lower contour.
 
     Colour slices can merge a bright top with a gradually shaded front. A
@@ -498,6 +603,9 @@ def _seam_seed_steps(im, hsv, bbox, vertices, reuse_local=False):
         yield {'stage': 'seam_proposal'}
 
     if not reuse_local:
+        if recover_internal:
+            for step in _recover_seam_steps(im, hsv, bbox, vertices, hypotheses, first, last):
+                yield step
         return
     # Reuse the original RGB votes; do not scan the image a second time.
     # Fewer local proposal votes never replace the full64-station edge check.
@@ -524,7 +632,7 @@ def _seam_seed_steps(im, hsv, bbox, vertices, reuse_local=False):
                     local_hypotheses.append((len(set(p[0] for p in selected)),fit(selected),left,right))
     local_tried=[]
     for count,line,left,right in sorted(local_hypotheses,key=lambda item:-item[0]):
-        if seam_tries>=3:return
+        if seam_tries>=3:break
         center_x=(left[0]+right[0])/2
         middle=-(line[0]*center_x+line[2])/line[1]
         if any(abs(middle-old[0])<8 and abs(center_x-old[1])<8 for old in local_tried):continue
@@ -545,6 +653,9 @@ def _seam_seed_steps(im, hsv, bbox, vertices, reuse_local=False):
         except ValueError:continue
         yield {'stage':'seam_seed','seed':q,'top_edge':top_edge}
         return
+    if recover_internal:
+        for step in _recover_seam_steps(im, hsv, bbox, vertices, hypotheses, first, last):
+            yield step
 
 
 def _contour_side_seed(seed, edge_index, vertices, contour=None):
@@ -736,7 +847,9 @@ def localize_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
         priority, cached_edges = [], {}
         local_bbox = [bbox_px[0]-x0, bbox_px[1]-y0, bbox_px[2], bbox_px[3]]
         for step in _seam_seed_steps(smooth, hsv, local_bbox, vertices,
-                                     reuse_local=not seeds and not include_range):
+                reuse_local=not seeds and not include_range,
+                recover_internal=not include_range and _recoverable_outline_seeds(
+                    seeds, anchor['component_contour_px'])):
             if step['stage'] == 'seam_seed':
                 q = step['seed']
                 if component_support(q, anchor):

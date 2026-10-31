@@ -99,6 +99,20 @@ class HardVisionDatasetTests(unittest.TestCase):
         self.assertEqual(report['evaluation']['status'], 'pass')
         self.assertEqual(original, (self.folder(ident) / 'case.json').read_bytes())
 
+    def test_complete_robot_evidence_uses_its_saved_car_calibration(self):
+        config = self.run / 'config.json'
+        self.write(config, {'car': self.bundle(), 'arm': {'model': 'unused'}})
+        original = config.read_bytes()
+        ident = self.add()
+        report = replay_case(self.folder(ident), image_loader=self.loader,
+                             localizer=self.localizer)
+        self.assertTrue(report['original_calibration_known'])
+        self.assertEqual(self.localizer.call_args.args[2], self.intr)
+        self.assertEqual(self.localizer.call_args.args[3], self.ext)
+        self.assertEqual(self.localizer.call_args.args[4], self.bundle()['table_plane'])
+        archived = next((self.folder(ident) / 'evidence').glob('*_config.json'))
+        self.assertEqual(archived.read_bytes(), original)
+
     def test_override_does_not_replace_saved_original_and_tampering_is_rejected(self):
         self.write(self.run / 'config.json', self.bundle())
         ident = self.add()
