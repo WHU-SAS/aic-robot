@@ -50,7 +50,7 @@ class RobotBundleTests(unittest.TestCase):
         arm=config['arm'];car=config['car'];pick=arm['pick']
         self.assertEqual(pick['model_urdf'],'models/genkiarm/genkiarm_corrected.urdf')
         self.assertEqual(pick['vision_config'],'configs/vision/trials/model_alignment_20261030.json')
-        self.assertEqual(pick['cube_offset_toward_moving_finger_mm'],-5)
+        self.assertEqual(pick['cube_offset_toward_moving_finger_mm'],0)
         self.assertTrue(pick['wrist_alignment_enabled'])
         self.assertEqual(pick['status'],'user_accepted_arm_stage_baseline')
         self.assertEqual((pick['opening_angle_deg'],pick['opening_count']),(25,2332))

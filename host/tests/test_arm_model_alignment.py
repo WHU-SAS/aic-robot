@@ -74,7 +74,7 @@ class ArmModelAlignmentTests(unittest.TestCase):
         self.assertEqual(ext['geometry_model_sha256'], sha(self.model_path))
         self.assertEqual(ext['joint_mapping_sha256'], sha(ROOT / 'configs/arm/joint_mapping.json'))
         self.assertEqual(self.pick['alignment_reference'], 'open_fingertip_midpoint')
-        self.assertEqual(self.pick['cube_offset_toward_moving_finger_mm'], -5)
+        self.assertEqual(self.pick['cube_offset_toward_moving_finger_mm'], 0)
         self.assertEqual(self.pick['opening_angle_deg'],25)
         self.assertEqual(self.pick['opening_count'],2332)
         self.assertFalse(self.manifest['startup_motion'])
@@ -84,7 +84,7 @@ class ArmModelAlignmentTests(unittest.TestCase):
         cfg, _, _ = build_bundle()
         self.assertEqual(cfg['pick'], load(ROOT / 'configs/arm/pick_validation_pc.json'))
         self.assertEqual(cfg['pick']['model_urdf'],'models/genkiarm/genkiarm_corrected.urdf')
-        self.assertEqual(cfg['pick']['cube_offset_toward_moving_finger_mm'],-5)
+        self.assertEqual(cfg['pick']['cube_offset_toward_moving_finger_mm'],0)
         # Default export now uses the corrected model; the historical original
         # remains available only for explicitly selected local replay below.
         for exported in cfg['model']['joints']:

@@ -11,7 +11,7 @@
 | 5 | 24 | 0 | 60 | 0 | 16 | 1/1 | 150/5 |
 | 6 | 8 | 0 | 60 | 0 | 16 | 1/1 | 150/5 |
 
-2026-10-31用户认可当前机械臂版本为本阶段基线；完整包默认采用 `pick_wrist_rotation.json`（5号方向联动、固定爪侧5 mm补偿、准备位发送后退出）。用法见[完整任务](../robot-task.md)。
+完整包默认采用 `pick_wrist_rotation.json`（5号方向联动、准备位发送后退出）；按2026-10-31用户最新要求，取消−5mm补偿，当前经验补偿为0mm。用法见[完整任务](../robot-task.md)。
 
 以 `configs/arm/user_selected_pid_demo_baseline.json` 和 `motion_defaults.json` 为准。PC入口可核对已保存参数；独立语音入口沿用舵机当前值，不读写PID。正常动作与另行回中立使用相同运动配置；抓取结束不自动回中立。
 

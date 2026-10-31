@@ -203,7 +203,7 @@ class WristPcTests(unittest.TestCase):
         self.assertIs(type(geometry),pc.PickGeometry)
         self.assertNotIn('wrist_alignment',plan)
         self.assertNotIn('cube_orientation',plan)
-        self.assertEqual(plan['cube_offset_toward_moving_finger_mm'],-5)
+        self.assertEqual(plan['cube_offset_toward_moving_finger_mm'],0)
 
     def test_explicit_export_is_used_by_both_deployer_and_pc(self):
         with patch.object(deploy,'export_model',wraps=export_model) as build_export:

@@ -20,8 +20,8 @@
   "automatic_return_or_torque_release": false,
   "alignment_reference": "open_fingertip_midpoint",
   "alignment_authorization": "User 2026-10-31: use a 25-degree opening, retaining open-fingertip midpoint alignment",
-  "cube_offset_toward_moving_finger_mm": -5,
-  "cube_offset_authorization": "User 2026-10-31: increase the fixed-finger-side cube offset from3mm to5mm; preserve vision coordinates and rotate the compensation with servo5",
+  "cube_offset_toward_moving_finger_mm": 0,
+  "cube_offset_authorization": "User 2026-10-31: cancel the empirical finger-side offset; retain open-fingertip midpoint alignment and raw vision coordinates",
   "standalone_stage_policy": {
     "hover_tolerance_counts": 30,
     "descend_tolerance_counts": 10,
@@ -33,7 +33,7 @@
   "model_urdf": "models/genkiarm/genkiarm_corrected.urdf",
   "comparison_parameters_approved_date": "2026-10-30",
   "accepted_date": "2026-10-31",
-  "acceptance": "User 2026-10-31 accepted this wrist-aligned arm version with -5 mm fixed-finger offset and dispatch-only ready command as the current stage baseline, and requested integration into the complete robot. Full-robot success rate is not established.",
+  "acceptance": "User 2026-10-31 accepted this wrist-aligned arm version with no empirical finger-side offset and dispatch-only ready command as the current stage baseline, and requested integration into the complete robot. Full-robot success rate is not established.",
   "wrist_alignment_enabled": true,
   "unreachable_cube_orientation": "keep_current_wrist"
 }
