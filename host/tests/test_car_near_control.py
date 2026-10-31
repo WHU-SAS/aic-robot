@@ -4,7 +4,7 @@ import json
 import math
 import unittest
 
-from device.k230.car.near_control import near_plan, predict_center, verify_parked, correction_plan
+from device.k230.car.near_control import near_plan, predict_center, verify_parked, correction_plan, target_x
 from device.k230.car.parking_window import bounds_mm
 from host.car.runtime import load
 from host.project_paths import ROOT
@@ -62,7 +62,7 @@ class NearControlTests(unittest.TestCase):
         self.workspace, _, self.projection = load()
         self.config = json.loads((ROOT/'configs/car/near_parking.json').read_text())
         self.near, self.far = bounds_mm(self.workspace)['Base_X_mm']
-        self.target = (self.near+self.far)/2
+        self.target = self.near+(self.far-self.near)/4
 
     def center(self, x, offset=0):
         y = sum(bounds_mm(self.workspace, x)['Base_Y_mm'])/2 + offset
@@ -213,7 +213,7 @@ class NearControlTests(unittest.TestCase):
         observation['capture_timestamp_ms'] = observation['timestamp_ms'] = None
         self.assertEqual(self.plan(observation)['status'], 'no_precise_target')
 
-    def test_coast_estimate_requests_one_stop_before_window_centre(self):
+    def test_coast_estimate_requests_one_stop_before_shifted_target(self):
         observation = self.observation(self.center(self.target+1))
         moving = self.plan(observation, speeds={'left_mm_s': 15, 'right_mm_s': 15})
         self.assertEqual(moving['status'], 'stop_for_verification')
@@ -252,7 +252,7 @@ class NearControlTests(unittest.TestCase):
         self.assertLess(abs(result['image_error_px']), .02)
         self.assertEqual(result['cube_center_Base_mm'], observation['cube_center_Base_mm'])
         self.assertEqual(self.workspace['normalized_window']['inset_mm'], 10)
-        self.assertAlmostEqual(result['target_Base_X_mm'], 252.7818553936)
+        self.assertAlmostEqual(result['target_Base_X_mm'], 247.2972376453)
         far_inside = self.verify(self.observation(self.center(self.far-.1)))
         self.assertEqual(far_inside['status'], 'parked')
         self.assertTrue(far_inside['accepted'])
@@ -264,6 +264,18 @@ class NearControlTests(unittest.TestCase):
         point = self.center(self.target)
         point[1] = 0
         self.assertFalse(self.verify(self.observation(point))['accepted'])
+
+    def test_shifted_destination_drives_past_old_centre_but_keeps_full_acceptance_window(self):
+        old_center = (self.near+self.far)/2
+        self.assertAlmostEqual(old_center-target_x(self.workspace), (self.far-self.near)/4)
+        self.assertEqual(self.plan(self.observation(self.center(old_center)))['status'], 'follow')
+        self.assertEqual(self.plan(self.observation(self.center(self.target)))['status'], 'stop_for_verification')
+        # A valid stopped result elsewhere inside the same window remains final.
+        self.assertTrue(self.verify(self.observation(self.center(old_center)))['accepted'])
+        for x in (self.near, self.far):
+            verdict = self.verify(self.observation(self.center(x)))
+            self.assertTrue(verdict['accepted'])
+            self.assertEqual(verdict['target_Base_X_mm'], self.target)
 
     def test_static_slow_solve_is_accepted_only_for_a_new_stopped_frame(self):
         observation = self.observation(self.center(self.target), stamp=2000)

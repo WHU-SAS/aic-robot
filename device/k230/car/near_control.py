@@ -107,9 +107,10 @@ def _geometry(point, projection, workspace):
 
 
 def target_x(workspace):
-    """Centre of the actual approved, 10mm-inset window."""
+    """Shift the inset-window centre a quarter of its depth toward the arm."""
     near, far = bounds_mm(workspace)['Base_X_mm']
-    return (near+far)/2
+    # Smaller Base X brings the cube closer to the arm, so the car drives on.
+    return near+(far-near)/4
 
 
 def near_plan(observation, projection, workspace, config, now_ms,

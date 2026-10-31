@@ -109,7 +109,8 @@ class NearRuntimeTests(unittest.TestCase):
         self.config['workspace'] = self.workspace
         self.config['near_parking'] = json.loads((ROOT/'configs/car/near_parking.json').read_text())
         self.config['near_parking']['capture_Base_X_mm'] = 500
-        self.target = sum(bounds_mm(self.workspace)['Base_X_mm'])/2
+        near, far = bounds_mm(self.workspace)['Base_X_mm']
+        self.target = near+(far-near)/4
         self.clock = Clock()
         self.link = Link(self.clock, self.config['mm_per_count'])
         self.frames, self.captures, self.fines, self.track_frames = 0, [], [], []
