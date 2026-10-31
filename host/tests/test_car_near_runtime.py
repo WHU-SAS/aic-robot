@@ -80,7 +80,7 @@ class Link:
             self.left_speed = self.right_speed = 0
         elif name == 'STATUS':
             if self.nudge_next_status:
-                self.left += 10
+                self.left += 20
                 self.nudge_next_status = False
         elif name in ('MOVE', 'TURN'):
             value = int(command.split(',')[1])
@@ -542,7 +542,82 @@ class NearRuntimeTests(unittest.TestCase):
         self.assertFalse(trace['stationary_since_capture'])
         self.assertEqual(len(trace['status_samples']), self.static_steps)
         self.assertEqual(trace['status_samples'][0]['state']['encoder_a']-
-                         trace['reference_state']['encoder_a'], 10)
+                         trace['reference_state']['encoder_a'], 20)
+
+    def test_static_tolerance_accepts_one_count_and_checks_both_wheel_boundaries(self):
+        for delta_a, delta_b, accepted in ((-1, 0, True), (13, -13, True),
+                                          (14, 0, False), (0, -14, False)):
+            with self.subTest(delta_a=delta_a, delta_b=delta_b):
+                self.setUp()
+                self.coarse_x = [500]
+                self.link.left, self.link.right = 54698, 48591
+                expect = self.link.expect
+                def drift(command):
+                    state = expect(command)
+                    if command == 'STATUS' and len(self.fines) > 1 and self.fines[-1].starts:
+                        state['encoder_a'] += delta_a
+                        state['encoder_b'] += delta_b
+                    return state
+                with patch.object(self.link, 'expect', side_effect=drift):
+                    result = self.run_task()
+                self.assertEqual(result['verification']['accepted'], accepted)
+                trace = result['verification']['static_check']
+                self.assertEqual(trace['stationary_since_capture'], accepted)
+                self.assertEqual(trace['tolerance_mm'], 0.1)
+                self.assertEqual(trace['reference_state']['encoder_a'], 54698)
+                self.assertEqual(trace['reference_state']['encoder_b'], -48591)
+                self.assertEqual(self.names(), ['STATUS']*(1+self.static_steps))
+
+    def test_static_tolerance_handles_signed_encoder_wrap(self):
+        self.coarse_x = [500]
+        self.link.left = 2147483647
+        expect = self.link.expect
+        def wrapped_drift(command):
+            state = expect(command)
+            if command == 'STATUS' and len(self.fines) > 1 and self.fines[-1].starts:
+                state['encoder_a'] = ((state['encoder_a']+3+2147483648) % 4294967296)-2147483648
+            return state
+        with patch.object(self.link, 'expect', side_effect=wrapped_drift):
+            result = self.run_task()
+        self.assertEqual(result['status'], 'parked')
+        trace = result['verification']['static_check']
+        self.assertEqual(trace['reference_state']['encoder_a'], 2147483647)
+        self.assertEqual(trace['status_samples'][0]['state']['encoder_a'], -2147483646)
+        self.assertTrue(trace['stationary_since_capture'])
+        self.assertEqual(self.names(), ['STATUS']*(1+self.static_steps))
+
+    def test_static_tolerance_measures_total_drift_from_the_original_reference(self):
+        self.coarse_x = [500]
+        expect, shifts = self.link.expect, []
+        def accumulating_drift(command):
+            state = expect(command)
+            if command == 'STATUS' and len(self.fines) > 1 and self.fines[-1].starts:
+                shifts.append(5*(len(shifts)+1))
+                state['encoder_a'] += shifts[-1]
+            return state
+        with patch.object(self.link, 'expect', side_effect=accumulating_drift):
+            result = self.run_task()
+        self.assertEqual(result['status'], 'no_precise_target')
+        self.assertEqual(shifts, [5, 10, 15])
+        self.assertFalse(result['verification']['static_check']['stationary_since_capture'])
+        self.assertEqual(self.names(), ['STATUS']*(1+self.static_steps))
+
+    def test_static_running_state_is_rejected_even_without_encoder_travel(self):
+        self.coarse_x = [500]
+        expect = self.link.expect
+        def running(command):
+            state = expect(command)
+            if command == 'STATUS' and len(self.fines) > 1 and self.fines[-1].starts:
+                state['run'] = 1
+            return state
+        with patch.object(self.link, 'expect', side_effect=running):
+            result = self.run_task()
+        self.assertEqual(result['status'], 'no_precise_target')
+        trace = result['verification']['static_check']
+        self.assertFalse(trace['stationary_since_capture'])
+        self.assertEqual(trace['status_samples'][0]['state']['encoder_a'],
+                         trace['reference_state']['encoder_a'])
+        self.assertEqual(self.names(), ['STATUS']*(1+self.static_steps))
 
     def test_static_trace_retains_movement_even_when_counts_return_to_reference(self):
         self.coarse_x = [500]
@@ -550,9 +625,9 @@ class NearRuntimeTests(unittest.TestCase):
         def passive_motion(command):
             if command == 'STATUS' and len(self.fines) > 1 and self.fines[-1].starts:
                 if len(observed) == 0:
-                    self.link.left += 10
+                    self.link.left += 20
                 elif len(observed) == 1:
-                    self.link.left -= 10
+                    self.link.left -= 20
                 observed.append(command)
             return expect(command)
         with patch.object(self.link, 'expect', side_effect=passive_motion):
@@ -562,7 +637,7 @@ class NearRuntimeTests(unittest.TestCase):
         self.assertFalse(trace['stationary_since_capture'])
         reference = trace['reference_state']['encoder_a']
         self.assertEqual([sample['state']['encoder_a'] for sample in trace['status_samples']],
-                         [reference+10, reference, reference])
+                         [reference+20, reference, reference])
         self.assertEqual(self.names(), ['STATUS']*(1+self.static_steps))
         self.assertFalse(result['motion_performed'])
 

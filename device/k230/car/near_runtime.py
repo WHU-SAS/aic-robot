@@ -17,6 +17,9 @@ except ImportError:
     from near_control import near_plan, verify_parked, correction_plan, distance_anchor
 
 
+STATIC_POSITION_TOLERANCE_MM = 0.1
+
+
 def count_delta(a, b):
     return ((b-a+2147483648) % 4294967296)-2147483648
 
@@ -92,7 +95,6 @@ def _verify(capture, link, projection, config, clock_ms, fine_factory, stopped_a
     # coarse tracking state or proxy is involved in the final acceptance point.
     check = fine_factory(config, clock_ms)
     reference_state, status_samples = dict(state), []
-    counts = state['encoder_a'], state['encoder_b']
     stationary = not state['run']
     try:
         check.start(image, frame, None)
@@ -100,14 +102,17 @@ def _verify(capture, link, projection, config, clock_ms, fine_factory, stopped_a
             check.advance()
             state = link.expect('STATUS')
             status_samples.append({'received_at_k230_ms': clock_ms(), 'state': dict(state)})
-            stationary = stationary and not state['run'] and (state['encoder_a'], state['encoder_b']) == counts
+            stationary = stationary and not state['run'] and all(
+                abs(count_delta(reference_state[key], state[key]))*config['mm_per_count']
+                <= STATIC_POSITION_TOLERANCE_MM for key in ('encoder_a', 'encoder_b'))
     finally:
         _collect_evidence(check, evidence, label)
     verdict = verify_parked(check.latest, projection, config['workspace'],
         config['near_parking'], clock_ms(), stopped_at, check.latest_ready_ms,
         stationary_since_capture=stationary)
     verdict['static_check'] = {'reference_state': reference_state,
-        'status_samples': status_samples, 'stationary_since_capture': stationary}
+        'status_samples': status_samples, 'stationary_since_capture': stationary,
+        'tolerance_mm': STATIC_POSITION_TOLERANCE_MM}
     return verdict, check.latest, check.events
 
 
