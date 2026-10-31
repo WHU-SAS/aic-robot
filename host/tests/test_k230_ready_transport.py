@@ -36,6 +36,27 @@ class K230ReadyTests(unittest.TestCase):
         self.assertEqual(sum(actual[2:])&255,255)
         self.assertEqual(self.config['goals'],[2048,1138,2958,2958,2048,2332])
         self.assertEqual(self.config['gripper_opens_deg'],25)
+    def test_ready_returns_after_one_packet_without_post_dispatch_monitoring(self):
+        events=[]
+        class Pins:
+            UART1_TXD=1;UART1_RXD=2
+            def set_function(self,*args):pass
+        class Port:
+            UART1=1;EIGHTBITS=8;PARITY_NONE=None;STOPBITS_ONE=1
+            def __init__(self,*args,**kwargs):pass
+            def write(self,data):events.append(('packet',data));return len(data)
+            def deinit(self):events.append('closed')
+        def preflight(uart,config):
+            events.append('preflight');return [{'torque':1} for unused in range(6)]
+        with patch.object(self.board,'FPIOA',Pins),patch.object(self.board,'UART',Port),\
+             patch.object(self.board,'preflight',preflight),\
+             patch.object(self.board,'feedback',side_effect=AssertionError('No post-send feedback')),\
+             patch.object(self.board,'snapshot',side_effect=AssertionError('No monitoring')),\
+             patch.object(self.board.time,'sleep_ms',create=True,side_effect=lambda ms:events.append(('sleep_ms',ms))):
+            self.board.run_arm_ready(self.config,'ready')
+        self.assertEqual(events,['preflight',('packet',self.board.sync_frame(
+            self.config['goals'],self.config['profiles'])),('sleep_ms',2),'closed'])
+
     def test_enable_only_one_byte_sram(self):
         packet=self.board.frame(2,3,(40,1))
         self.assertEqual(packet,bytes((255,255,2,4,3,40,1,205)))

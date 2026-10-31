@@ -131,10 +131,11 @@ def run_arm_ready(config,action):
         elif action=='ready':
             # A separate current-hold invocation and hands-free confirmation precede this action.
             if any(row['torque']!=1 for row in rows):raise RuntimeError('Run hold and confirm hands free before ready')
-            send_sync(uart,config['goals'],config)
+            packet=sync_frame(config['goals'],config['profiles'])
+            if uart.write(packet)!=len(packet):raise RuntimeError('Short ready goal write')
+            # Finish the0.56ms packet on the wire, then return without feedback.
+            time.sleep_ms(2)
             print('ARM_READY_GOAL_SENT: torque remains ON; arrival requires observation')
-            for unused in range(12):
-                snapshot(uart,'ready_feedback');time.sleep_ms(250)
         print('ARM_ACTION_PASS '+action)
     finally:
         # Never issue recovery goals, torque-OFF, EEPROM or PID writes on failure.
