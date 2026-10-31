@@ -143,6 +143,65 @@ class WristPlanningTests(unittest.TestCase):
                         self.assertLess(math.hypot(center[0]*1000-xy[0],center[1]*1000-xy[1]),2.)
                         self.assertLess(abs(min(lows.values())*1000-g.table_z_m*1000-height),2.)
 
+    def test_straight_cube_does_not_turn_ninety_degrees_for_an_earlier_tilt(self):
+        # Frozen input from the reported143240 run. The old tilt-first loop
+        # returned axis0 at5deg/88.68deg before reaching axis1 at7.5deg/-2.64deg.
+        xy=[240.1945,-3.275456];start=[2050,1139,2955,2958,2046,2324]
+        orientation={'status':'estimated','yaw_table_deg':0.0038187543704580468,
+            'axes_Base':[[0.998474583515104,-0.0008804176085793556,-0.05520625815226152],
+                         [-6.654816842774445e-05,0.9998529420427943,-0.01714904836165123]],
+            'table_normal_Base':[0.05521323795686063,0.01712656279594587,0.9983276912923511]}
+        pick=dict(self.cfg['pick'],wrist_alignment_enabled=True,
+                  cube_offset_toward_moving_finger_mm=-3)
+        g=Geometry(self.cfg['model'],pick,-66.86218411503955)
+        result=g.plan([v/1000 for v in xy],start,orientation)
+        detail=result['wrist_alignment']
+        self.assertEqual(detail['status'],'aligned')
+        self.assertEqual(detail['axis_preference'],[1,0])
+        self.assertEqual(detail['cube_axis_index'],1)
+        self.assertEqual(result['descend_tilt_deg'],7.5)
+        self.assertLess(detail['servo5_rotation_from_start_deg'],3.)
+        self.assertEqual(result['descend'][4],2078)
+        self.assertLess(detail['stage_direction_errors_deg']['descend'],1.)
+        # The selected small rotation is a complete grasp, rather than merely
+        # a direction root: all stages retain it and both jaws overlap the cube.
+        for stage in STAGES:self.assertEqual(result[stage][4],2078)
+        for key in ('open_finger_clearances_mm','closed_finger_clearances_mm'):
+            self.assertTrue(all(0<=v<=20 for v in result[key].values()))
+        self.assertEqual(result['close'][:5],result['descend'][:5])
+        self.assertEqual(result['close'][5],result['nominal_closing_count']-20)
+
+    def test_other_face_pair_is_available_when_the_nearer_pair_cannot_complete(self):
+        # Here the nearer pair has no complete four-stage pose at any allowed
+        # tilt, whereas the other pair really is reachable. Do not turn the
+        # preference into a hard rejection of the second valid pair.
+        xy=[230,-60];g=self.geometry(xy)
+        g.pick['cube_offset_toward_moving_finger_mm']=-3
+        start=[2048]*6;start[4]=2048-round(-30*4096/360)
+        orientation=self.orientation(45)
+        result=g.plan([v/1000 for v in xy],start,orientation)
+        detail=result['wrist_alignment']
+        self.assertEqual(detail['status'],'aligned')
+        self.assertEqual(detail['axis_preference'],[1,0])
+        self.assertEqual(detail['cube_axis_index'],0)
+        self.assertGreater(detail['servo5_rotation_from_start_deg'],50.)
+        self.assertLess(detail['stage_direction_errors_deg']['descend'],1.)
+        self.assertTrue(all(result[s][4]==result['descend'][4] for s in STAGES))
+        for key in ('open_finger_clearances_mm','closed_finger_clearances_mm'):
+            self.assertTrue(all(0<=v<=20 for v in result[key].values()))
+        # Independently exhaust the nearer pair with the unmodified geometry
+        # checks, so this tests a physical case rather than mocking loop order.
+        from device.k230.pick.wrist_plan import TILTS,roll_candidates
+        counters={'scalar_evaluations':0,'ik_calls':0};near_count=0
+        for tilt in TILTS:
+            for roll,index,unused in roll_candidates(g,[.230,-.060],tilt,
+                    orientation,g.angles(start)[4],counters):
+                if index!=1:continue
+                near_count+=1
+                with self.assertRaises(ValueError):
+                    _stages(g,[.230,-.060],start,tilt,roll,orientation,counters)
+        self.assertGreater(near_count,0)
+
     def test_a_jaw_above_cube_when_open_is_not_rescued_by_acceptable_closed_height(self):
         g=self.geometry([248,4]);orientation=self.orientation(5)
         # This former candidate has acceptable closed height but an open

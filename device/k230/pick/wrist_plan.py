@@ -165,34 +165,59 @@ def _orientation(value):
 
 def plan(g,xy,start,orientation,fallback):
     counters={'scalar_evaluations':0,'candidate_attempts':0,'ik_calls':0}
-    reasons={}
+    reasons={};axis_preference=[];axis_min_rotation={}
     orientation=_orientation(orientation)
+    q0=g.angles(start)
     if orientation is not None:
-        q0=g.angles(start)
+        # Rank the two equivalent face pairs across the bounded tilt grid.
+        # Sorting only inside each tilt lets an early orthogonal solution win
+        # before a slightly less upright, small-wrist-motion solution is tried.
+        candidates=[]
         for tilt in TILTS:
-            for roll,index,sign in roll_candidates(g,xy,tilt,orientation,q0[4],counters):
-                counters['candidate_attempts']+=1
-                try:
-                    result=_stages(g,xy,start,tilt,roll,orientation,counters)
-                    stage_errors={stage:math.degrees(abs(direction_error(jaw_direction(g,g.angles(result[stage])),
-                        orientation['axes_Base'][index],orientation['table_normal_Base'])))
-                        for stage in ('hover','descend','lift')}
-                    # Heading matters at the grasp pose. Elevated-stage
-                    # headings are recorded rather than rejecting good reach.
-                    if stage_errors['descend']>1.:
-                        raise ValueError('Rounded descend target does not match the selected side direction')
-                    result['wrist_alignment']={'status':'aligned','cube_yaw_table_deg':orientation['yaw_table_deg'],
-                        'cube_axis_index':index,'servo5_goal':result['descend'][4],
-                        'servo5_angle_deg':math.degrees(g.angles(result['descend'])[4]),
-                        'direction_error_deg':[stage_errors['hover'],stage_errors['descend']],
-                        'stage_direction_errors_deg':stage_errors,
-                        'stage_tilts_deg':dict(result['stage_tilts_deg']),'counts':dict(counters),
-                        'tilt_candidates_deg':list(TILTS),'failures':reasons}
-                    return result
-                except ValueError as exc:
-                    reason=str(exc);reasons[reason]=reasons.get(reason,0)+1
+            roots=roll_candidates(g,xy,tilt,orientation,q0[4],counters)
+            candidates.append((tilt,roots))
+            for roll,index,sign in roots:
+                delta=abs(roll-q0[4])
+                axis_min_rotation[index]=min(axis_min_rotation.get(index,delta),delta)
+        axis_preference=sorted(axis_min_rotation,key=lambda i:(axis_min_rotation[i],i))
+        for preferred_axis in axis_preference:
+            for tilt,roots in candidates:
+                for roll,index,sign in roots:
+                    if index!=preferred_axis:continue
+                    counters['candidate_attempts']+=1
+                    try:
+                        result=_stages(g,xy,start,tilt,roll,orientation,counters)
+                        stage_errors={stage:math.degrees(abs(direction_error(jaw_direction(g,g.angles(result[stage])),
+                            orientation['axes_Base'][index],orientation['table_normal_Base'])))
+                            for stage in ('hover','descend','lift')}
+                        # Heading matters at the grasp pose. Elevated-stage
+                        # headings are recorded rather than rejecting good reach.
+                        if stage_errors['descend']>1.:
+                            raise ValueError('Rounded descend target does not match the selected side direction')
+                        goal_angle=g.angles(result['descend'])[4]
+                        result['wrist_alignment']={'status':'aligned','cube_yaw_table_deg':orientation['yaw_table_deg'],
+                            'cube_axis_index':index,'servo5_goal':result['descend'][4],
+                            'servo5_angle_deg':math.degrees(goal_angle),
+                            'servo5_delta_from_start_deg':math.degrees(goal_angle-q0[4]),
+                            'servo5_rotation_from_start_deg':math.degrees(abs(goal_angle-q0[4])),
+                            'selection_rule':'nearest_face_pair_then_upright_tilt',
+                            'axis_preference':list(axis_preference),
+                            'axis_min_rotation_deg':{str(i):math.degrees(v) for i,v in axis_min_rotation.items()},
+                            'direction_error_deg':[stage_errors['hover'],stage_errors['descend']],
+                            'stage_direction_errors_deg':stage_errors,
+                            'stage_tilts_deg':dict(result['stage_tilts_deg']),'counts':dict(counters),
+                            'tilt_candidates_deg':list(TILTS),'failures':reasons}
+                        return result
+                    except ValueError as exc:
+                        reason=str(exc);reasons[reason]=reasons.get(reason,0)+1
     else:reasons['No verified side orientation']=1
     result=fallback(xy,start)
     result['wrist_alignment']={'status':'held_current_fallback','reason':'No complete cube-aligned four-stage pose',
-        'servo5_goal':result['hover'][4],'counts':counters,'failures':reasons}
+        'servo5_goal':result['hover'][4],
+        'servo5_delta_from_start_deg':math.degrees(g.angles(result['hover'])[4]-q0[4]),
+        'servo5_rotation_from_start_deg':math.degrees(abs(g.angles(result['hover'])[4]-q0[4])),
+        'selection_rule':'nearest_face_pair_then_upright_tilt',
+        'axis_preference':list(axis_preference),
+        'axis_min_rotation_deg':{str(i):math.degrees(v) for i,v in axis_min_rotation.items()},
+        'counts':counters,'failures':reasons}
     return result
