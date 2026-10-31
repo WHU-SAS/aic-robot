@@ -357,7 +357,45 @@ def _separator_evidence(hsv, q, edge, image):
         'both_blue_stations': internal, 'colour_votes': legacy, 'direction_votes': direction}
 
 
-def _seam_seed_steps(im, hsv, bbox, vertices):
+def _outline_support(a,b,contour):
+    """Require an observed contour span along a proposed supporting line."""
+    if not contour:return False
+    length=distance(a,b)
+    line=fit([a,b]);u=[(b[k]-a[k])/length for k in (0,1)];intervals=[]
+    for c,d in zip(contour,contour[1:]+contour[:1]):
+        other=distance(c,d)
+        if other<8 or max(residual(p,line) for p in (c,d))>3:continue
+        if abs(sum((d[k]-c[k])*u[k] for k in (0,1)))/other<.94:continue
+        along=[sum((p[k]-a[k])*u[k] for k in (0,1)) for p in (c,d)]
+        lo=max(0.,min(along));hi=min(length,max(along))
+        if hi>lo:intervals.append((lo,hi))
+    end=coverage=0.
+    for lo,hi in sorted(intervals):
+        coverage+=max(0.,hi-max(end,lo));end=max(end,hi)
+    return coverage>=.5*length
+
+
+def _bottom_segments(bbox,vertices):
+    """Observed lower edges seed a side; rounded endpoints may be extended."""
+    x,y,w,h=bbox
+    bottoms=[(a,b) for a,b in zip(vertices,vertices[1:]+vertices[:1]) if min(a[1],b[1])>y+.5*h and abs(a[0]-b[0])>=25]
+    vertical=[(a,b) for a,b in zip(vertices,vertices[1:]+vertices[:1]) if abs(a[0]-b[0])<.25*abs(a[1]-b[1]) and abs(a[1]-b[1])>=.5*h]
+    out=[]
+    for a,b in sorted(bottoms,key=lambda item:-abs(item[0][0]-item[1][0]))[:2]:
+        line=fit([a,b]);ends=[list(a),list(b)]
+        for index,p in enumerate(ends):
+            alternatives=[]
+            for c,d in vertical:
+                try:q=intersect(line,fit([c,d]))
+                except ValueError:continue
+                if distance(p,q)<.25*w:alternatives.append((distance(p,q),q))
+            if alternatives:ends[index]=min(alternatives,key=lambda item:item[0])[1]
+        left,right=sorted(ends,key=lambda p:p[0])
+        if right[0]-left[0]>=25:out.append((left,right))
+    return out
+
+
+def _seam_seed_steps(im, hsv, bbox, vertices, reuse_local=False):
     """Propose a side from observed blue/blue separation and lower contour.
 
     Colour slices can merge a bright top with a gradually shaded front. A
@@ -425,6 +463,7 @@ def _seam_seed_steps(im, hsv, bbox, vertices):
     bottoms = [(a, b) for a, b in zip(vertices, vertices[1:]+vertices[:1])
                if min(a[1], b[1]) > y+.5*h and abs(a[0]-b[0]) >= 25]
     tried = []
+    seam_tries = 0
     for count, line in sorted(hypotheses, key=lambda item: -item[0]):
         middle = -(line[0]*center_x+line[2])/line[1]
         if any(abs(middle-old) < 8 for old in tried):
@@ -441,6 +480,7 @@ def _seam_seed_steps(im, hsv, bbox, vertices):
                 # Verify the observed separator BEFORE consuming a full-face
                 # attempt. Blue background near the silhouette may otherwise
                 # outrank the real top/side colour step.
+                seam_tries += 1
                 for step in _edge_steps(im, upper[0], upper[1], hsv=hsv):
                     if step['stage'] == 'edge_complete':
                         top_edge = step['edge']
@@ -457,15 +497,64 @@ def _seam_seed_steps(im, hsv, bbox, vertices):
             return  # One verified separator proposal; colours find other sides.
         yield {'stage': 'seam_proposal'}
 
+    if not reuse_local:
+        return
+    # Reuse the original RGB votes; do not scan the image a second time.
+    # Fewer local proposal votes never replace the full64-station edge check.
+    local_hypotheses=[]
+    for left,right in _bottom_segments(bbox,vertices):
+        side_columns=[column for column in columns if left[0]<=column<=right[0]]
+        if len(set(side_columns))<6:continue
+        side_votes=[p for p in votes if min(side_columns)<=p[0]<=max(side_columns)]
+        center_x=(left[0]+right[0])/2
+        slope0=(right[1]-left[1])/(right[0]-left[0])
+        minimum=max(6,min(12,(len(set(side_columns))+1)//2))
+        for index in range(9):
+            slope=slope0-.4+.1*index
+            bins={}
+            for px,py in side_votes:
+                key=int(round((py-slope*(px-center_x))/2))
+                bins[key]=bins.get(key,0)+1
+            for key in sorted(bins,key=lambda k:-bins[k])[:2]:
+                support=[p for p in side_votes if abs(p[1]-slope*(p[0]-center_x)-2*key)<=2.5]
+                if len(set(p[0] for p in support))<minimum:continue
+                line=fit(support)
+                selected=[p for p in support if residual(p,line)<=3]
+                if len(set(p[0] for p in selected))>=minimum and abs(line[1])>1e-6:
+                    local_hypotheses.append((len(set(p[0] for p in selected)),fit(selected),left,right))
+    local_tried=[]
+    for count,line,left,right in sorted(local_hypotheses,key=lambda item:-item[0]):
+        if seam_tries>=3:return
+        center_x=(left[0]+right[0])/2
+        middle=-(line[0]*center_x+line[2])/line[1]
+        if any(abs(middle-old[0])<8 and abs(center_x-old[1])<8 for old in local_tried):continue
+        local_tried.append((middle,center_x))
+        if len(local_tried)>3:break
+        upper=[[p[0],-(line[0]*p[0]+line[2])/line[1]] for p in (left,right)]
+        if min(left[1]-upper[0][1],right[1]-upper[1][1])<25:continue
+        try:
+            seam_tries+=1
+            for step in _edge_steps(im,upper[0],upper[1],hsv=hsv):
+                if step['stage']=='edge_complete':top_edge=step['edge']
+                yield {'stage':'seam_'+step['stage']}
+            upper=[intersect(top_edge[0],[1.,0.,-p[0]]) for p in (left,right)]
+            measured_middle=-(top_edge[0][0]*center_x+top_edge[0][2])/top_edge[0][1]
+            if not first<=measured_middle<last:raise ValueError('Measured separator left its searched band')
+            q=upper+[list(right),list(left)]
+            _separator_evidence(hsv,q,top_edge,im)
+        except ValueError:continue
+        yield {'stage':'seam_seed','seed':q,'top_edge':top_edge}
+        return
 
-def _contour_side_seed(seed, edge_index, vertices):
+
+def _contour_side_seed(seed, edge_index, vertices, contour=None):
     """Recover a rounded endpoint using a measured-outline search initialisation.
 
     Only a long, parallel contour segment alongside the failed side can seed
     this bounded retry. Component extrema alone cannot supply a missing edge.
     Every retry still measures all four sides and passes normal face checks.
     """
-    if edge_index not in (1, 3):
+    if edge_index not in (1, 2, 3):
         return None
     a, b = seed[edge_index], seed[(edge_index+1) % 4]
     length = distance(a, b)
@@ -491,7 +580,10 @@ def _contour_side_seed(seed, edge_index, vertices):
         if abs(denominator) < 1e-6:
             continue
         gap = -(sum(line[k]*middle[k] for k in (0, 1))+line[2])/denominator
-        if gap*inward >= 0 or not 3. < abs(gap) <= limit:
+        minimum = min(12, max(5, int(round(length*.06)))) if edge_index == 2 else 3.
+        if gap*inward >= 0 or not minimum < abs(gap) <= limit:
+            continue
+        if edge_index == 2 and not _outline_support(c, d, contour):
             continue
         candidate = [list(p) for p in seed]
         try:
@@ -643,7 +735,8 @@ def localize_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
             yield {'stage': 'side_proposals', 'seed_count': len(seeds)}
         priority, cached_edges = [], {}
         local_bbox = [bbox_px[0]-x0, bbox_px[1]-y0, bbox_px[2], bbox_px[3]]
-        for step in _seam_seed_steps(smooth, hsv, local_bbox, vertices):
+        for step in _seam_seed_steps(smooth, hsv, local_bbox, vertices,
+                                     reuse_local=not seeds and not include_range):
             if step['stage'] == 'seam_seed':
                 q = step['seed']
                 if component_support(q, anchor):
@@ -654,7 +747,13 @@ def localize_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
         seeds = priority+[q for q in seeds if not any(corner_distance(q, old) < 3 for old in priority)]
         measured = 0
         contour_retry = None
+        # A corrected seed can use only a later same-side slot already in the
+        # original list; existing priority, successes and face budget stay put.
+        bottom_retry = None
         for seed in seeds:
+            if not include_range and bottom_retry is not None and not faces and corner_distance(seed, bottom_retry[0]) < 18:
+                seed = bottom_retry[1]
+                bottom_retry = None
             if seed is contour_retry and faces:
                 continue  # Any original strict result keeps its old priority.
             full_seed = [[p[0]+x0, p[1]+y0] for p in seed]
@@ -727,6 +826,10 @@ def localize_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
                 yield {'stage': 'side_pose', 'candidate': index}
             except (ValueError, ZeroDivisionError) as exc:
                 rejected.append({'candidate': index, 'reason': str(exc)})
+                if not include_range and str(exc) == 'No accurate vertical-side pose' and bottom_retry is None:
+                    corrected = _contour_side_seed(seed, 2, vertices, anchor['component_contour_px'])
+                    if corrected is not None and component_support(corrected, anchor):
+                        bottom_retry = (seed, corrected)
                 if not include_range and contour_retry is None and failed_edge in (1, 3):
                     retry = _contour_side_seed(seed, failed_edge, vertices)
                     if retry is not None and component_support(retry, anchor) and not any(
