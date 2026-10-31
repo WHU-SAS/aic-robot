@@ -1,8 +1,8 @@
 {
   "schema": "aic.car.approach.v1",
   "status": "offline_candidate_not_hardware_validated",
-  "vision_config": "configs/vision/trials/fixed_tip_top_20261022.json",
-  "workspace_config": "configs/car/workspace_definition.json",
+  "vision_config": "configs/vision/trials/model_alignment_20261030.json",
+  "workspace_config": "configs/car/workspace_model_alignment_20261030.json",
   "tracking": {
     "image_size_px": [1280, 960],
     "lab_thresholds": [[0, 100, -10, 127, -128, -35]],
@@ -10,7 +10,10 @@
     "min_area_px2": 25,
     "max_aspect_ratio": 4,
     "min_fill_ratio": 0.2,
-    "forward_range_mm": [150, 1500],
+    "forward_range_mm": [
+      150.46384123942093,
+      1523.309061610322
+    ],
     "height_ratio_range": [0.4, 2.5],
     "confirmation_frames": 3,
     "max_age_ms": 500,
@@ -18,7 +21,7 @@
     "max_size_ratio": 3
   },
   "coarse_center_tolerance_px": 48,
-  "near_localization_start_Base_X_mm": 315.6895618835043,
+  "near_localization_start_Base_X_mm": 317.0544335321832,
   "preferred_stop_fraction_of_inset_depth": 0.25,
   "motion_profiles": {
     "forward_coarse": null,
@@ -30,5 +33,26 @@
     "turn_right_fine": null
   },
   "automatic_arm_action": false,
-  "notes": "Image thresholds are initial offline candidates. Actual wheel PWM and pulse durations await user selection/bench observation; no motion defaults or startup integration are installed."
+  "notes": "Image thresholds are initial offline candidates. Actual wheel PWM and pulse durations await user selection/bench observation; no motion defaults or startup integration are installed.",
+  "forward_axis_Base": [
+    0.9982692707239893,
+    -0.05880762223178514,
+    -0.0003559433068513751
+  ],
+  "motion_origin_Base_mm": [
+    -0.2114208987142021,
+    -8.343141062064563,
+    -0.15839245980104977
+  ],
+  "coordinate_pairing": {
+    "source_vision_config": "configs/vision/trials/fixed_tip_top_20261022.json",
+    "target_vision_config": "configs/vision/trials/model_alignment_20261030.json",
+    "method": "keep each old coarse threshold image ray at u640 and reintersect the newly fitted table plane; runtime X is that new contact proxy X",
+    "source_near_localization_start_Base_X_mm": 315.6895618835043,
+    "source_tracking_forward_range_mm": [
+      150,
+      1500
+    ],
+    "not_new_physical_measurements": true
+  }
 }

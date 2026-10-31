@@ -1,6 +1,6 @@
 # 视觉模块
 
-目标为桌面上的20mm蓝色方块。K230可独立完成精定位与语音抓取；小车和机械臂共用相机、标定及精定位接口，整车任务调度尚未接入。
+目标为桌面上的20mm蓝色方块。K230可独立完成精定位与语音抓取；小车和机械臂共用相机、标定及精定位接口，整车任务见[完整任务](robot-task.md)。
 
 ## 入口与职责
 
@@ -45,7 +45,7 @@ PC单图入口、独立抓取及小车`observations.py`已接入该协议。部�
 
 | 流程 | 配置 |
 | --- | --- |
-| 正式PC验证及独立抓取 | `configs/vision/trials/fixed_tip_top_20261022.json`及配对外参 |
+| 正式PC验证及独立抓取 | `configs/vision/trials/model_alignment_20261030.json`及配对外参 |
 | 第0版演示 | `configs/vision/blue_cube.json` → `configs/vision/runtime/` |
 | 共用内参 | `configs/vision/runtime/camera_intrinsics.json`；加载时核对外参中的内参SHA256 |
 
@@ -65,12 +65,12 @@ PC单图入口、独立抓取及小车`observations.py`已接入该协议。部�
   --output data/development/tip_top_fit_新目录
 ```
 
-结果另存候选，不自动替换运行外参。现有验证结果：
+上述工具复现采集时冻结模型的历史拟合，不会推广运行配置。当前修正模型重新拟合的标签一致性如下：
 
 | 样本 | 水平RMS | 三维RMS | 最大三维误差 |
 | --- | --- | --- | --- |
-| 预留4组 | 3.51mm | 4.38mm | 5.55mm |
-| 新增17～20组 | 3.87mm | 4.67mm | 5.34mm |
+| 预留4组 | 2.99mm | 3.95mm | 4.75mm |
+| 新增17～20组 | 4.31mm | 5.10mm | 6.37mm |
 
 以上是对人工接触/CAD标签的一致性，不是独立实测抓取精度。
 
@@ -83,7 +83,7 @@ PC单图入口、独立抓取及小车`observations.py`已接入该协议。部�
 ```bash
 ./scripts/vision host/vision/localize_pick_cube.py \
   --image /绝对路径/frame.jpg --output /tmp/vision_review \
-  --config configs/vision/trials/fixed_tip_top_20261022.json
+  --config configs/vision/trials/model_alignment_20261030.json
 ```
 
 第0版特征回放用`tools/analysis/replay_onboard_detector.py`；其`--source image`是PC图像适配，不能证明真实多帧稳定性。

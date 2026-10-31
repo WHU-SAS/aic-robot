@@ -31,10 +31,16 @@ def _paired_config(car, arm):
     K = [list(row) for row in intrinsics['camera_matrix']]
     K[0] = [v * width / intrinsics['image_width'] for v in K[0]]
     K[1] = [v * height / intrinsics['image_height'] for v in K[1]]
+    transform = car['workspace'].get('coordinate_reexpression', {}).get(
+        'T_new_Base_from_old_Base_mm')
+    axis = [row[0] for row in transform[:3]] if transform else None
+    origin = [row[3] for row in transform[:3]] if transform else None
     geometry = GroundProjection(K, intrinsics['distortion_coefficients'],
-        car['extrinsics']['T_Base_from_Camera_mm'], plane)
+        car['extrinsics']['T_Base_from_Camera_mm'], plane, axis, origin)
     expected = {'K':geometry.K, 'D':geometry.D, 'T':geometry.T,
-                'plane':{'normal':geometry.normal, 'offset_mm':geometry.offset}}
+                'plane':{'normal':geometry.normal, 'offset_mm':geometry.offset},
+                'forward_axis_Base':geometry.forward_axis_Base,
+                'motion_origin_Base_mm':geometry.motion_origin_Base_mm}
     if car['projection'] != expected:
         raise ValueError('Car projection differs from the paired calibration')
 

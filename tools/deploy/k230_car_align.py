@@ -29,7 +29,9 @@ def build_bundle(approach_mode=False, automatic=False, continuous=False, near_pa
                   coarse_center_tolerance_px=approach['coarse_center_tolerance_px'],
                   vision={key: vision[key] for key in ('camera', 'sampling')},
                   projection={'K': projection.K, 'D': projection.D, 'T': projection.T,
-                              'plane': {'normal': projection.normal, 'offset_mm': projection.offset}})
+                              'plane': {'normal': projection.normal, 'offset_mm': projection.offset},
+                              'forward_axis_Base': projection.forward_axis_Base,
+                              'motion_origin_Base_mm': projection.motion_origin_Base_mm})
     if approach_mode or automatic or continuous:
         config['forward'] = json.loads((ROOT / 'configs/car/visual_approach.json').read_text())
         config['forward']['near_Base_X_mm'] = approach['near_localization_start_Base_X_mm']

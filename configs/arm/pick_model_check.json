@@ -12,7 +12,7 @@
     "lift": 1
   },
   "gripper_stationary_tolerance_counts": 1,
-  "status": "corrected_model_single_field_trial_success_not_default",
+  "status": "user_accepted_corrected_model_zero_offset",
   "vision_config": "configs/vision/trials/model_alignment_20261030.json",
   "forward_extension_mm": 0,
   "forward_extension_authorization": "User 2026-10-22: start with 0mm to observe new calibration error",
@@ -21,7 +21,7 @@
   "alignment_reference": "open_fingertip_midpoint",
   "alignment_authorization": "User 2026-10-31: use a 25-degree opening, retaining open-fingertip midpoint alignment",
   "cube_offset_toward_moving_finger_mm": 0,
-  "cube_offset_authorization": "User 2026-10-30 approved 0mm for the next corrected-model PC trial; no automatic motion or default switch",
+  "cube_offset_authorization": "User 2026-10-31: integrate corrected model, paired calibration and 0mm empirical offset into the complete robot",
   "standalone_stage_policy": {
     "hover_tolerance_counts": 30,
     "descend_tolerance_counts": 10,
@@ -35,8 +35,10 @@
   "field_validation": {
     "date": "2026-10-31",
     "result": "single_grasp_success_user_reported_aligned",
-    "default_replaced": false,
+    "default_replaced": true,
     "tested_opening_angle_deg": 30,
     "tested_opening_count": 2389
-  }
+  },
+  "accepted_date": "2026-10-31",
+  "acceptance": "User accepted the corrected model trial and requested integration into the complete robot version"
 }

@@ -12,18 +12,16 @@
     "lift": 1
   },
   "gripper_stationary_tolerance_counts": 1,
-  "status": "user_selected_45mm_offset",
-  "vision_config": "configs/vision/trials/fixed_tip_top_20261022.json",
+  "status": "user_accepted_corrected_model_zero_offset",
+  "vision_config": "configs/vision/trials/model_alignment_20261030.json",
   "forward_extension_mm": 0,
   "forward_extension_authorization": "User 2026-10-22: start with 0mm to observe new calibration error",
   "arm_transport": "K230 UART1 -> URT-2",
   "automatic_return_or_torque_release": false,
   "alignment_reference": "open_fingertip_midpoint",
   "alignment_authorization": "User 2026-10-31: use a 25-degree opening, retaining open-fingertip midpoint alignment",
-  "cube_offset_toward_moving_finger_mm": -45,
-  "cube_offset_authorization": "User 2026-10-22: restore cumulative fixed-jaw offset to 45mm; explicitly approved writing and activating K230",
-  "accepted_date": "2026-10-22",
-  "acceptance": "User restored previously accepted cumulative 45mm fixed-jaw offset; retain 1-second lift dwell and fast voice resume",
+  "cube_offset_toward_moving_finger_mm": 0,
+  "cube_offset_authorization": "User 2026-10-31: integrate corrected model, paired calibration and 0mm empirical offset into the complete robot",
   "standalone_stage_policy": {
     "hover_tolerance_counts": 30,
     "descend_tolerance_counts": 10,
@@ -31,5 +29,16 @@
     "gripper_stable_samples": 5,
     "gripper_stable_tolerance_counts": 1,
     "poll_interval_ms": 50
-  }
+  },
+  "model_urdf": "models/genkiarm/genkiarm_corrected.urdf",
+  "comparison_parameters_approved_date": "2026-10-30",
+  "field_validation": {
+    "date": "2026-10-31",
+    "result": "single_grasp_success_user_reported_aligned",
+    "default_replaced": true,
+    "tested_opening_angle_deg": 30,
+    "tested_opening_count": 2389
+  },
+  "accepted_date": "2026-10-31",
+  "acceptance": "User accepted the corrected model trial and requested integration into the complete robot version"
 }

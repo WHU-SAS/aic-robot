@@ -15,4 +15,4 @@
 
 以 `configs/arm/user_selected_pid_demo_baseline.json` 和 `motion_defaults.json` 为准。PC入口可核对已保存参数；独立语音入口沿用舵机当前值，不读写PID。正常动作与另行回中立使用相同运动配置；抓取结束不自动回中立。
 
-正式抓取内外参由 `configs/vision/trials/fixed_tip_top_20261022.json` 指定，第0版使用 `blue_cube.json`；说明见[视觉模块](../vision.md)。配置中的来源路径/哈希是历史记录，不是当前代码或加载位置。
+正式抓取内外参由 `configs/vision/trials/model_alignment_20261030.json` 指定，第0版使用 `blue_cube.json`；说明见[视觉模块](../vision.md)。配置中的来源路径/哈希是历史记录，不是当前代码或加载位置。

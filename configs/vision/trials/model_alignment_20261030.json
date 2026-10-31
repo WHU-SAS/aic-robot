@@ -1,6 +1,6 @@
 {
   "schema": "aic.blue_cube_config.v1",
-  "status": "model_alignment_candidate_pending_field_validation",
+  "status": "user_accepted_corrected_model_runtime",
   "object": {
     "color": "blue",
     "edge_mm": 20

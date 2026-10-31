@@ -50,7 +50,8 @@ def run_forever(root):
     with open(root + '/config.json') as f:
         config = json.load(f)
     model = config['projection']
-    projection = GroundProjection(model['K'], model['D'], model['T'], model['plane'])
+    projection = GroundProjection(model['K'], model['D'], model['T'], model['plane'],
+                                  model.get('forward_axis_Base'), model.get('motion_origin_Base_mm'))
     automatic = config.get('automatic_approach', False)
     continuous = config.get('continuous')
     parking = config.get('near_parking')

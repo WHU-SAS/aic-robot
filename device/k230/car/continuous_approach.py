@@ -3,23 +3,21 @@ import math
 try:
     from .blue_tracker import age_ms
     from .visual_align import alignment_plan
-    from .continuous_math import wheel_speeds, predict_bearing, wheel_targets
+    from .continuous_math import wheel_speeds, predict_bearing, wheel_targets, table_forward, forward_x_per_mm
     from ..pick.pose import undistort
 except ImportError:
     from blue_tracker import age_ms
     from visual_align import alignment_plan
-    from continuous_math import wheel_speeds, predict_bearing, wheel_targets
+    from continuous_math import wheel_speeds, predict_bearing, wheel_targets, table_forward, forward_x_per_mm
     from pose import undistort
 
 
 def midline_heading(projection, v, width):
-    """Planar u=width/2 direction relative to nominal planar Base+X."""
+    """Planar u=width/2 direction relative to the declared forward axis."""
     ray = undistort([width/2, v], projection.K, projection.D) + [1.]
     direction = [sum(row[j]*ray[j] for j in range(3)) for row in projection.T[:3]]
     n = projection.normal
-    forward = [1-n[0]*n[0], -n[0]*n[1], -n[0]*n[2]]
-    length = math.sqrt(sum(x*x for x in forward))
-    forward = [x/length for x in forward]
+    forward = table_forward(n, getattr(projection, 'forward_axis_Base', None))
     left = [n[1]*forward[2]-n[2]*forward[1], n[2]*forward[0]-n[0]*forward[2],
             n[0]*forward[1]-n[1]*forward[0]]
     return math.degrees(math.atan2(sum(a*b for a,b in zip(direction,left)),
@@ -39,7 +37,7 @@ def continuous_plan(observation, projection, config, now_ms, speeds):
     bearing = predict_bearing(raw['bearing_error_deg'], projection.table_distance(point),
         midline_heading(projection, observation['center_pixel'][1], config['tracking']['image_size_px'][0]),
         dl, dr, config['track_width_mm'])
-    remaining = point[0] - config['forward']['near_Base_X_mm'] - travel
+    remaining = (point[0] - config['forward']['near_Base_X_mm']) / forward_x_per_mm(projection) - travel
     result = {'status': 'follow', 'frame_id': observation['frame_id'],
               'image_error_px': raw['image_error_px'], 'raw_bearing_deg': raw['bearing_error_deg'],
               'predicted_bearing_deg': bearing, 'image_age_ms': seconds*1000,

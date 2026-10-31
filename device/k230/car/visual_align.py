@@ -4,11 +4,13 @@ try:
     from .blue_tracker import age_ms
     from .observations import for_approach
     from .straight_voice import run_motion
+    from .continuous_math import forward_x_per_mm
     from ..pick.pose import undistort
 except ImportError:
     from blue_tracker import age_ms
     from observations import for_approach
     from straight_voice import run_motion
+    from continuous_math import forward_x_per_mm
     from pose import undistort
 
 
@@ -54,7 +56,7 @@ def motion_plan(observation, projection, config, now_ms):
     point = observation.get('ground_contact_proxy_Base_mm', [])
     if len(point) != 3 or not all(isinstance(v, (int, float)) and math.isfinite(v) for v in point):
         raise ValueError('Forward approach requires a valid coarse contact proxy')
-    remaining = point[0] - forward['near_Base_X_mm']
+    remaining = (point[0] - forward['near_Base_X_mm']) / forward_x_per_mm(projection)
     plan.update(coarse_forward_Base_X_mm=point[0], near_Base_X_mm=forward['near_Base_X_mm'])
     if remaining < forward['min_step_mm']:
         plan.update(status='near', distance_mm=0, precise_localization_required=True)

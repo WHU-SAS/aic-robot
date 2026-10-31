@@ -26,10 +26,10 @@
 
 ## 视觉与对照入口
 
-- 正式PC及独立抓取使用`pick_validation_pc.json`：25°张开中点（2332计数）、固定爪侧45mm（moving-side offset=-45）、额外前伸0mm、最低指尖80/15/80mm、夹紧20计数。阶段规则仍以对应入口为准。
-- 2026-10-30装配修复对照通过`--pick-config configs/arm/pick_model_check.json`显式选择；含新URDF、重拟外参、零经验偏移；2026-10-31以30°开口单位置实物抓取成功、用户报告对位准确；随后开口改25°，尚未实测，尚未切换默认。保持原默认与小车坐标不变，说明见`docs/guides/arm/PC_PICK_VALIDATION.md`。
+- 正式PC及独立抓取使用`pick_validation_pc.json`：修正装配模型、配套`model_alignment_20261030`标定、25°张开中点（2332计数）、0mm经验偏移、额外前伸0mm、最低指尖80/15/80mm、夹紧20计数。阶段规则仍以对应入口为准。
+- 2026-10-31用户认可修正版并批准整合完整版本，修正URDF与零偏移已成为默认；`pick_model_check.json`保留为相同参数的兼容入口。旧模型/45mm基线留Git历史，不重新混入运行配置；5号旋转另版开发，当前完整基线仍保持原5号角度。
 - 第0版`./scripts/demo-v0-pick`保留PC解算与原时序，专属配置在`demos/v0_blue_pick/`；前伸10mm，不能混入正式视觉坐标。
-- 正式精定位使用`configs/vision/trials/fixed_tip_top_20261022.json`，第0版使用`blue_cube.json`。内外参配对、相机1280×960 RGB565→JPEG95→BGR路径不随意改变。
+- 正式精定位使用`configs/vision/trials/model_alignment_20261030.json`，第0版使用`blue_cube.json`。内外参配对、相机1280×960 RGB565→JPEG95→BGR路径不随意改变。
 - 共用`CameraSession`仅一个活动所有者；粗跟踪代理不是精定位中心。采集时间不以处理时间替代，跨时钟/重启不能直接比较；未知旧图时间保持None。接口见`docs/guides/vision.md`。
 - 保留侧面优先、面积比1.25、双侧面中心差≤8mm及四边/2px检查。正式桌面双解用标定桌面方向20°与高度10±8mm筛选，不用编码、历史目标或抓取成败选视觉解；原始标定拟合和第0版不启用此桌面约束。
 - `grasp_pairs`与`fixed_tip_top_pairs`参考点不同，不混用；正式固定指尖触顶后沿桌面法向下10mm近似方块中心，不能当实测TCP。所有回放精度说明与实物验收区分。

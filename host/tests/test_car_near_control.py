@@ -129,7 +129,9 @@ class NearControlTests(unittest.TestCase):
         deltas = [(3, 4), (2, 2)]
         result = self.plan(observation, 1200, wheel_deltas=deltas)
         expected = predict_center(observation['cube_center_Base_mm'], deltas,
-                                  self.config['track_width_mm'], self.projection.normal)
+                                  self.config['track_width_mm'], self.projection.normal,
+                                  self.projection.forward_axis_Base,
+                                  self.projection.motion_origin_Base_mm)
         self.assertEqual(result['capture_timestamp_ms'], 1000)
         self.assertEqual(result['source_capture_age_ms'], 200)
         self.assertTrue(result['odometry_predicted'])
@@ -172,7 +174,9 @@ class NearControlTests(unittest.TestCase):
         self.assertEqual(result['raw_center_Base_mm'], point)
         self.assertEqual(result['capture_timestamp_ms'], 1000)
         self.assertEqual(result['predicted_center_Base_mm'],
-            predict_center(point, [(20, 21)], self.config['track_width_mm'], self.projection.normal))
+            predict_center(point, [(20, 21)], self.config['track_width_mm'], self.projection.normal,
+                           self.projection.forward_axis_Base,
+                           self.projection.motion_origin_Base_mm))
         self.assertEqual(observation, original)
         self.assertNotIn('accepted', result)
         self.assertNotIn('cube_center_Base_mm', observation)
@@ -252,7 +256,7 @@ class NearControlTests(unittest.TestCase):
         self.assertLess(abs(result['image_error_px']), .02)
         self.assertEqual(result['cube_center_Base_mm'], observation['cube_center_Base_mm'])
         self.assertEqual(self.workspace['normalized_window']['inset_mm'], 10)
-        self.assertAlmostEqual(result['target_Base_X_mm'], 247.2972376453)
+        self.assertAlmostEqual(result['target_Base_X_mm'], 248.2222441147)
         far_inside = self.verify(self.observation(self.center(self.far-.1)))
         self.assertEqual(far_inside['status'], 'parked')
         self.assertTrue(far_inside['accepted'])
@@ -263,6 +267,10 @@ class NearControlTests(unittest.TestCase):
             self.assertFalse(outside['preferred'])
         point = self.center(self.target)
         point[1] = 0
+        # Reexpressing the camera-centred physical window in the corrected
+        # model's Base puts BaseY=0 inside it; BaseY=0 is not the target line.
+        self.assertTrue(self.verify(self.observation(point))['accepted'])
+        point[1] = bounds_mm(self.workspace, self.target)['Base_Y_mm'][0] - .1
         self.assertFalse(self.verify(self.observation(point))['accepted'])
 
     def test_shifted_destination_drives_past_old_centre_but_keeps_full_acceptance_window(self):

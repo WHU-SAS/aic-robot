@@ -7,7 +7,8 @@ except ImportError:
 
 
 class GroundProjection:
-    def __init__(self, camera_matrix, distortion, Base_from_Camera, table_plane):
+    def __init__(self, camera_matrix, distortion, Base_from_Camera, table_plane,
+                 forward_axis_Base=None, motion_origin_Base_mm=None):
         self.K, self.D, self.T = camera_matrix, distortion, Base_from_Camera
         normal = table_plane['normal']
         length = math.sqrt(sum(v * v for v in normal))
@@ -16,6 +17,9 @@ class GroundProjection:
         self.normal = [v / length for v in normal]
         self.offset = table_plane['offset_mm'] / length
         self.origin = [row[3] for row in self.T[:3]]
+        self.forward_axis_Base = forward_axis_Base
+        self.motion_origin_Base_mm = ([0., 0., 0.] if motion_origin_Base_mm is None
+                                      else motion_origin_Base_mm)
 
     def base_to_pixel(self, point):
         # Inverse of the calibrated rigid Camera->Base transform.

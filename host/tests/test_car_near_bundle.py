@@ -12,10 +12,11 @@ from tools.deploy import k230_car_align as deploy
 
 
 class NearBundleTests(unittest.TestCase):
-    def test_original_calibration_and_full_inset_window_are_preserved(self):
+    def test_paired_calibration_and_full_inset_window_are_preserved(self):
         config, files, remote, startup = deploy.build_bundle(near_parking=True)
         approach = json.loads((ROOT / 'configs/car/approach.json').read_text())
-        self.assertEqual(approach['vision_config'], 'configs/vision/trials/fixed_tip_top_20261022.json')
+        self.assertEqual(approach['vision_config'], 'configs/vision/trials/model_alignment_20261030.json')
+        self.assertEqual(approach['workspace_config'], 'configs/car/workspace_model_alignment_20261030.json')
         formal = json.loads((ROOT / approach['vision_config']).read_text())['localization']
         intrinsics = (ROOT / formal['intrinsics']).read_bytes()
         extrinsics = (ROOT / formal['extrinsics']).read_bytes()

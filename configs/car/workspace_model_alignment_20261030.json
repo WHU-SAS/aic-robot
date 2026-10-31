@@ -1,0 +1,184 @@
+{
+  "schema": "aic.car.workspace_definition.v1",
+  "status": "user_approved_provisional_camera_centered_window_reexpressed_model_alignment",
+  "approved_date": "2026-10-23",
+  "units": "mm",
+  "coordinate_frame": "mechanical_arm_Base",
+  "forward_axis": "X",
+  "lateral_coordinate": "Y",
+  "centerline": {
+    "definition": "camera image vertical midline",
+    "image_midline_is_final_centering_reference": true,
+    "image_width_px": 1280,
+    "image_height_px": 960,
+    "image_midline_x_px": 640.0,
+    "local_Base_Y_line": {
+      "slope_per_X": 0.05125067902369733,
+      "intercept_mm": -8.70534079056372,
+      "calibrated_Base_X_interval_mm": [
+        242.71159308113283,
+        264.75419721532154
+      ],
+      "cube_center_height_above_table_mm": 10,
+      "method": "local line through exact distorted image-midline intersections at mapped near/far midpoint X on the paired table +10mm plane",
+      "vision_config": "configs/vision/trials/model_alignment_20261030.json",
+      "intrinsics_sha256": "9bd4426442417c9425f146971464a4946463a3b5704095decc5d2ed7075f0e07",
+      "extrinsics_sha256": "165711d25b287ff9b0b0edbeaa524ed9fd673b0671e3112aa02e7a35bd458cf5"
+    }
+  },
+  "feasible_window": {
+    "near_boundary": "camera can fully observe the cube features required for reliable localization",
+    "far_boundary": "existing arm policy can complete the grasp sequence",
+    "lateral_boundaries": "near-distance camera visibility constrains the final parking region; no far-distance lateral mapping required",
+    "numeric_bounds_status": "provisional linear acceptance adopted by user; no far-side samples required"
+  },
+  "parking_target": {
+    "preference": "within the usable window, keep the cube as near as practical and its center as close to image width/2 as practical",
+    "when_centerline_not_visible": "choose the feasible position closest to the camera image midline",
+    "boundary_clearance_mm": 10,
+    "boundary_clearance_basis": "user-selected cube-center inset for object volume; no extra stopping-error margin added",
+    "image_control_reference": "cube center projection horizontal target equals image width/2 (640 at 1280 pixels)",
+    "when_centerline_outside_allowed_region": "choose the allowed center position closest to the camera image midline"
+  },
+  "capture_policy": {
+    "frames_per_user_placement": 1,
+    "capture_trigger": "user confirms placement is ready"
+  },
+  "runtime_control_implemented": true,
+  "scope_updated_date": "2026-10-31",
+  "window_scope": {
+    "purpose": "near, centered final parking region for arm handoff",
+    "user_decision": "Far-left and far-right boundary captures are unnecessary; distant or strongly lateral positions are not desired final parking positions.",
+    "full_far_field_mapping_required": false,
+    "far_lateral_boundary_captures_required": false,
+    "existing_far_reference_role": "longitudinal normalization endpoint 1 and approach distance reference; not desired final parking location",
+    "remaining_work": "revalidate the promoted calibration on the complete car-to-arm physical run; no new boundary capture was taken"
+  },
+  "acceptance_updated_date": "2026-10-31",
+  "normalized_window": {
+    "method": "camera_centered_local_linear_window_v1_coordinate_reexpression",
+    "status": "user_approved_temporary_rule",
+    "input": "raw cube center in mechanical-arm Base mm, before grasp compensation",
+    "longitudinal": {
+      "near_Base_X_mm": 232.71159308113283,
+      "far_Base_X_mm": 316.79680134951025,
+      "near_normalized": 0,
+      "far_normalized": 1,
+      "allowed": [
+        0,
+        0.5
+      ],
+      "formula": "(X - near_X) / (far_X - near_X)"
+    },
+    "lateral": {
+      "left_Base_Y_mm": 58.417937228719126,
+      "right_Base_Y_mm": -49.82065247585608,
+      "left_normalized": -1,
+      "right_normalized": 1,
+      "allowed": [
+        -0.5,
+        0.5
+      ],
+      "formula": "2 * (Y - camera_midline_Base_Y_at_X) / (right_Y - left_Y)",
+      "sample_reference_role": "derived normalization endpoints preserve the mapped inset width; they are not new left/right physical captures"
+    },
+    "acceptance": "cube center must lie inside both inclusive intervals after a 10mm inward offset of each rectangle edge",
+    "clamp_normalized_values": false,
+    "centerline_target": "projected cube center u = image width/2; normalized lateral zero follows this line",
+    "depth_dependent_side_limits": true,
+    "physical_accuracy_verified": false,
+    "reference_git_revision": "3b90cf217f77cfc85093aff377ea05644c28a37d",
+    "reference_frames": {
+      "near": "data/logs/pick_pc_20261023_220142_190039/frame.jpg",
+      "far": "data/logs/pick_pc_20261023_221115_807507/frame.jpg",
+      "left": "data/logs/pick_pc_20261023_222333_294066/frame.jpg",
+      "right": "data/logs/pick_pc_20261023_235820_075724/frame.jpg"
+    },
+    "provenance_note": "Original photos and references remain unchanged in workspace_definition.json. These numerical endpoints are reparameterized from the rigidly mapped 10mm-inset window, not new measurements; no local data files are required at runtime.",
+    "inset_mm": 10,
+    "inset_basis": "User 2026-10-24: convert the approved normalized rectangle to Base mm, then shrink all four edges inward by 10mm for the 20mm cube volume.",
+    "recenter_policy": "preserve mapped near/far edge midpoint X and mapped constant-X lateral width; retain 10mm inset and center each X on the new paired camera image midline",
+    "reference_frames_coordinate_frame": "historical fixed_tip_top_20261022 Base; retained only as original physical-boundary provenance"
+  },
+  "position_classifier": "device/k230/car/parking_window.py",
+  "coordinate_calibration": "configs/vision/trials/model_alignment_20261030.json",
+  "coordinate_reexpression": {
+    "date": "2026-10-31",
+    "purpose": "pair the previously accepted physical parking region with the promoted arm model/camera calibration; no new physical survey",
+    "source_workspace": "configs/car/workspace_definition.json",
+    "source_workspace_sha256": "55b6ff86d86bb31bcf16fae834f9a9fb96555ca62db9489a43c23270a8e4fa60",
+    "source_vision_config": "configs/vision/trials/fixed_tip_top_20261022.json",
+    "source_extrinsics_sha256": "5c9cecec5fb139b797249d9f518c67638200f457fac0c0dcc69afdc6351d3ab0",
+    "target_vision_config": "configs/vision/trials/model_alignment_20261030.json",
+    "target_extrinsics_sha256": "165711d25b287ff9b0b0edbeaa524ed9fd673b0671e3112aa02e7a35bd458cf5",
+    "T_new_Base_from_old_Base_mm": [
+      [
+        0.9982692707239893,
+        0.05880808142146993,
+        0.0002696066017410792,
+        -0.2114208987142021
+      ],
+      [
+        -0.05880762223178514,
+        0.9982682429324159,
+        -0.001476048804013229,
+        -8.343141062064563
+      ],
+      [
+        -0.0003559433068513751,
+        0.0014576392399490053,
+        0.9999988742954711,
+        -0.15839245980104977
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "source_cube_center_height_above_table_mm": 10,
+    "mapped_inset_polygon_new_Base_XY_mm": [
+      [
+        243.7194878869781,
+        20.845439357285606
+      ],
+      [
+        241.70369827528756,
+        -13.377141298833806
+      ],
+      [
+        263.7463024094763,
+        -12.247713865860442
+      ],
+      [
+        265.7620920211669,
+        21.97486679025897
+      ]
+    ],
+    "representation": "configuration-only axis-X approximation; mapped near/far caps are replaced by their midpoint X, and mapped constant-X width is retained",
+    "normalization_endpoints": "derived after mapping the already-inset window, then expanded by the existing 10mm per edge so unchanged [0,.5]/[-.5,.5] intervals reproduce the selected bounds",
+    "inset_applied_times": 1,
+    "max_near_far_edge_X_deviation_mm": 1.0078948058453534,
+    "max_corresponding_corner_XY_deviation_mm": 1.0092352608120154,
+    "mapped_old_midline": {
+      "slope_per_X": 0.05123838481595683,
+      "intercept_mm": -8.702000976359109
+    },
+    "max_new_midline_vs_mapped_old_midline_Y_mm": 0.00035586745824467414,
+    "max_linear_midline_projection_residual_px": 0.00023671147721415764,
+    "mapped_old_near_quarter_target_new_Base_mm": [
+      248.22224411468002,
+      4.016505887469238,
+      -57.43014735738796
+    ],
+    "configured_near_quarter_target_new_Base_mm": [
+      248.22224411468,
+      4.016217769099587,
+      -57.41450373162193
+    ],
+    "preferred_stop_fraction_of_inset_depth": 0.25,
+    "physical_field_revalidated": false,
+    "odometry_forward_basis_note": "approach.forward_axis_Base rotates the old Base+X into this calibration; runtime must project it onto the new table and normalize. This preserves the old chassis-direction assumption rather than surveying a new chassis axis."
+  }
+}

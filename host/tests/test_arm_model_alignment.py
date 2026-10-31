@@ -1,4 +1,4 @@
-"""Offline regression for the explicit arm-model alignment profile; no hardware."""
+"""Promoted physical model, paired calibration and historical replay; no hardware."""
 import copy
 import hashlib
 import json
@@ -62,8 +62,13 @@ class ArmModelAlignmentTests(unittest.TestCase):
             for key in ('zero_count', 'positive_direction', 'software_count_limits'):
                 self.assertEqual(exported[key], original[key])
 
-    def test_candidate_is_explicit_and_calibration_is_bound_to_actual_files(self):
-        self.assertNotIn('model_urdf', parameters()[0])
+    def test_default_and_explicit_profile_share_the_calibration_bound_model(self):
+        default,unused=parameters()
+        for key in ('model_urdf','vision_config','opening_angle_deg','opening_count',
+                    'cube_offset_toward_moving_finger_mm','alignment_reference',
+                    'standalone_stage_policy'):
+            self.assertEqual(default[key],self.pick[key],key)
+        self.assertEqual(default['status'],'user_accepted_corrected_model_zero_offset')
         self.assertEqual(self.model_path, ROOT / 'models/genkiarm/genkiarm_corrected.urdf')
         ext = self.bundle['extrinsics']
         self.assertEqual(ext['geometry_model_sha256'], sha(self.model_path))
@@ -75,14 +80,15 @@ class ArmModelAlignmentTests(unittest.TestCase):
         self.assertFalse(self.manifest['startup_motion'])
         self.assertFalse(self.manifest['pc_runtime_required'])
 
-    def test_retained_default_model_and_historical_30_degree_targets(self):
+    def test_promoted_default_model_and_explicit_historical_30_degree_replay(self):
         cfg, _, _ = build_bundle()
         self.assertEqual(cfg['pick'], load(ROOT / 'configs/arm/pick_validation_pc.json'))
-        self.assertNotIn('model_urdf', cfg['pick'])
-        # Compare against the retained historical model's parsed geometry,
-        # independent of comments, whitespace and URDF serialization.
+        self.assertEqual(cfg['pick']['model_urdf'],'models/genkiarm/genkiarm_corrected.urdf')
+        self.assertEqual(cfg['pick']['cube_offset_toward_moving_finger_mm'],0)
+        # Default export now uses the corrected model; the historical original
+        # remains available only for explicitly selected local replay below.
         for exported in cfg['model']['joints']:
-            j = self.old_fk.joints[exported['urdf_joint_name']]
+            j = self.fk.joints[exported['urdf_joint_name']]
             expected = np.eye(4)
             expected[:3,:3] = self.old_fk._rpy_to_matrix(j['rpy'])
             expected[:3,3] = j['xyz']
@@ -94,10 +100,14 @@ class ArmModelAlignmentTests(unittest.TestCase):
         self.assertAlmostEqual(self.old_fk.joints['Rotation5']['rpy'][2], 0.)
         pick, config = parameters()
         self.assertEqual((pick['opening_angle_deg'],pick['opening_count']),(25,2332))
-        # Replay the frozen historical opening only in this local profile copy.
-        historical=dict(pick,opening_angle_deg=30,opening_count=2389)
+        # Explicitly recreate ALL historical geometry/calibration choices in
+        # this local profile copy; never run new-default math against old goals.
+        historical=dict(pick,opening_angle_deg=30,opening_count=2389,
+            model_urdf='models/genkiarm/genkiarm.urdf',
+            vision_config='configs/vision/trials/fixed_tip_top_20261022.json',
+            cube_offset_toward_moving_finger_mm=-45)
         _, plan = make_plan({'cube_center_Base_mm': [245., -28., -65.]}, [2048]*6, historical, config)
-        self.assertNotIn('model_urdf', plan)
+        self.assertEqual(plan['model_urdf'],'models/genkiarm/genkiarm.urdf')
         self.assertFalse(plan['model_correction_applied'])
         for stage in STAGES:
             self.assertEqual(plan[stage], OLD_GOALS[stage], stage)

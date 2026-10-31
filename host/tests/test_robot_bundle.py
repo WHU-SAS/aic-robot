@@ -45,6 +45,41 @@ class RobotBundleTests(unittest.TestCase):
         self.assertFalse(manifest['pc_runtime_required'])
         self.assertEqual(manifest['completion'], 'arm_stage_completed_not_verified_grasp')
 
+    def test_promoted_arm_default_keeps_authorized_motion_rules_and_shared_raw_calibration(self):
+        config,unused,unused_manifest=self.build()
+        arm=config['arm'];car=config['car'];pick=arm['pick']
+        self.assertEqual(pick['model_urdf'],'models/genkiarm/genkiarm_corrected.urdf')
+        self.assertEqual(pick['vision_config'],'configs/vision/trials/model_alignment_20261030.json')
+        self.assertEqual(pick['cube_offset_toward_moving_finger_mm'],0)
+        self.assertEqual((pick['opening_angle_deg'],pick['opening_count']),(25,2332))
+        self.assertEqual(pick['alignment_reference'],'open_fingertip_midpoint')
+        self.assertEqual(pick['forward_extension_mm'],0)
+        self.assertEqual([pick[k] for k in
+            ('hover_tip_height_mm','descend_tip_height_mm','lift_tip_height_mm')],[80,15,80])
+        self.assertEqual(pick['extra_closing_counts'],20)
+        self.assertEqual(pick['stage_durations_s']['lift'],1)
+        self.assertEqual(pick['standalone_stage_policy'],{
+            'hover_tolerance_counts':30,'descend_tolerance_counts':10,
+            'descend_axis4_lead_ms':200,'gripper_stable_samples':5,
+            'gripper_stable_tolerance_counts':1,'poll_interval_ms':50})
+        self.assertEqual(arm['control']['profiles'],[
+            {'speed_raw':v,'acceleration_raw':a} for v,a in
+            [(150,5),(600,20),(600,20),(600,20),(150,5),(150,5)]])
+        expected_pid=[(24,0,100,0),(48,24,160,48),(40,12,140,24),
+                      (20,3,60,16),(24,0,60,0),(8,0,60,0)]
+        self.assertEqual([tuple(row[k] for k in ('21','23','22','25'))
+                          for row in arm['control']['registers']],expected_pid)
+        self.assertEqual(arm['ready_control']['goals'],[2048,1138,2958,2958,2048,2332])
+        self.assertEqual(arm['extrinsics']['geometry_model_sha256'],
+                         deploy.digest((ROOT/pick['model_urdf']).read_bytes()))
+        self.assertEqual(car['intrinsics'],arm['intrinsics'])
+        self.assertEqual(car['extrinsics']['T_Base_from_Camera_mm'],
+                         arm['extrinsics']['T_Base_from_Camera_mm'])
+        self.assertEqual(car['projection']['T'],arm['extrinsics']['T_Base_from_Camera_mm'])
+        self.assertEqual(car['table_plane'],arm['vision']['localization']['table_plane_Base_mm'])
+        for joint in arm['model']['joints'][1:4]:
+            self.assertEqual(joint['axis'],[0.,-1.,0.])
+
     def test_flat_sources_and_manifest_include_both_executors_and_static_solver(self):
         unused, files, manifest = self.build()
         for source in (self.car_source[1], self.arm_source[1]):
@@ -98,6 +133,13 @@ class RobotBundleTests(unittest.TestCase):
             else:
                 value[0][0] += 1
             with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'projection'):
+                self.build(car=car)
+
+    def test_motion_reference_must_match_the_window_coordinate_transform(self):
+        for key in ('forward_axis_Base','motion_origin_Base_mm'):
+            car=copy.deepcopy(self.car_source)
+            car[0]['projection'][key][0] += .1
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError,'projection'):
                 self.build(car=car)
 
     def test_verification_hashes_manifest_and_refreshes_all_flat_imports_without_motion(self):

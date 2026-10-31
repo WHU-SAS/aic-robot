@@ -4,7 +4,7 @@ Moving distance may use a measured-side range candidate; only complete precise
 vision can confirm parking. A range candidate's raw XYZ is retained for motion
 propagation and heading audit, not as a table-valid pose or arm target.
 Encoder prediction assumes a fixed target and nominal differential-drive motion
-about the Base origin: the Base-to-axle lever arm is not calibrated. Neither
+about the declared origin (legacy Base zero): the axle lever arm is not calibrated. Neither
 prediction nor the initial 0.12s coast model is a physical parking measurement.
 """
 import math
@@ -12,30 +12,31 @@ try:
     from .blue_tracker import age_ms
     from .observations import for_approach
     from .parking_window import bounds_mm, evaluate
-    from .continuous_math import wheel_targets
+    from .continuous_math import wheel_targets, table_forward, forward_x_per_mm
     from ..pick.pose import undistort
 except ImportError:
     from blue_tracker import age_ms
     from observations import for_approach
     from parking_window import bounds_mm, evaluate
-    from continuous_math import wheel_targets
+    from continuous_math import wheel_targets, table_forward, forward_x_per_mm
     from pose import undistort
 
 
-def predict_center(center_Base_mm, wheel_deltas, track_width_mm, table_normal):
+def predict_center(center_Base_mm, wheel_deltas, track_width_mm, table_normal,
+                   forward_axis_Base=None, motion_origin_Base_mm=None):
     """Integrate ordered (left_mm, right_mm) travel from capture to now.
 
     The caller supplies increments on the K230 capture time line; this function
     never subtracts absolute timestamps from different boards. Rotation is about
-    the table normal, preserving centre height above the calibrated tabletop.
+    the table normal at the declared motion origin. Optional paired axes/origin
+    preserve that nominal assumption after a rigid Base-coordinate change.
     """
     n = table_normal
-    forward = [1-n[0]*n[0], -n[0]*n[1], -n[0]*n[2]]
-    length = math.sqrt(sum(x*x for x in forward))
-    forward = [x/length for x in forward]
+    forward = table_forward(n, forward_axis_Base)
     left = [n[1]*forward[2]-n[2]*forward[1], n[2]*forward[0]-n[0]*forward[2],
             n[0]*forward[1]-n[1]*forward[0]]
-    point = list(center_Base_mm)
+    origin = [0., 0., 0.] if motion_origin_Base_mm is None else motion_origin_Base_mm
+    point = [center_Base_mm[k]-origin[k] for k in range(3)]
     for dl, dr in wheel_deltas:
         distance, yaw = (dl+dr)/2, (dr-dl)/track_width_mm
         if abs(yaw) < 1e-8:
@@ -49,7 +50,7 @@ def predict_center(center_Base_mm, wheel_deltas, track_width_mm, table_normal):
                  n[0]*point[1]-n[1]*point[0]]
         height = sum(a*b for a,b in zip(n, point))
         point = [c*point[k]-s*cross[k]+(1-c)*height*n[k] for k in range(3)]
-    return point
+    return [point[k]+origin[k] for k in range(3)]
 
 
 def _precise(observation):
@@ -139,12 +140,15 @@ def near_plan(observation, projection, workspace, config, now_ms,
         return {'status': 'no_precise_target', 'reason': 'Precise image expired',
                 'capture_timestamp_ms': observation['capture_timestamp_ms'],
                 'image_age_ms': age, 'automatic_arm_action': False}
-    point = predict_center(raw, wheel_deltas or (), config['track_width_mm'], projection.normal)
+    axis = getattr(projection, 'forward_axis_Base', None)
+    origin = getattr(projection, 'motion_origin_Base_mm', None)
+    point = predict_center(raw, wheel_deltas or (), config['track_width_mm'], projection.normal,
+                           axis, origin)
     geometry = _geometry(point, projection, workspace)
     speeds = speeds or {'left_mm_s': 0, 'right_mm_s': 0}
     coast = predict_center(point,
         [(speeds['left_mm_s']*config['coast_s'], speeds['right_mm_s']*config['coast_s'])],
-        config['track_width_mm'], projection.normal)
+        config['track_width_mm'], projection.normal, axis, origin)
     stopped = _geometry(coast, projection, workspace)
     target = target_x(workspace)
     result = {'status': 'follow', 'frame_id': observation['frame_id'],
@@ -167,7 +171,7 @@ def near_plan(observation, projection, workspace, config, now_ms,
     if coast[0] <= target:
         result['status'] = 'stop_for_verification'
     else:
-        targets = wheel_targets(bearing, max(0, point[0]-target),
+        targets = wheel_targets(bearing, max(0, (point[0]-target)/forward_x_per_mm(projection)),
                                 config, config['track_width_mm'])
         result.update(left_mm_s=int(targets['left_mm_s']+.5),
                       right_mm_s=int(targets['right_mm_s']+.5))
@@ -207,7 +211,7 @@ def verify_parked(observation, projection, workspace, config, now_ms,
             'preferred': preferred,
             'frame_id': observation['frame_id'], 'capture_timestamp_ms': stamp,
             'cube_center_Base_mm': list(point), 'target_Base_X_mm': target,
-            'automatic_arm_action': False}
+            'automatic_arm_action': False, 'forward_X_per_mm': forward_x_per_mm(projection)}
     result.update(geometry)
     return result
 
@@ -225,7 +229,8 @@ def correction_plan(verification):
     if verification.get('status') != 'not_parked':
         return {'status': 'unavailable'}
     if verification['window']['lateral_allowed']:
-        distance = verification['cube_center_Base_mm'][0]-verification['target_Base_X_mm']
+        distance = ((verification['cube_center_Base_mm'][0]-verification['target_Base_X_mm']) /
+                    verification.get('forward_X_per_mm', 1.))
         distance = int(abs(distance)+.5) * (1 if distance >= 0 else -1)
         return {'status': 'move', 'distance_mm': distance, 'command': 'MOVE,%d' % distance,
                 'expected_reason': 6}

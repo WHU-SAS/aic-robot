@@ -3,6 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 from device.k230.car import visual_align, straight_voice
+from device.k230.car.continuous_math import forward_x_per_mm
 from host.car.runtime import load
 from tools.deploy.k230_car_align import build_bundle
 
@@ -29,11 +30,12 @@ class VisualApproachTests(unittest.TestCase):
 
     def test_forward_steps_shrink_at_existing_near_handoff(self):
         near = self.config['forward']['near_Base_X_mm']
-        for gap, expected in ((1000, 100), (100, 100), (50.9, 50), (10, 10)):
-            plan = visual_align.motion_plan(self.observation(x=near+gap), self.geometry, self.config, 100)
+        scale = forward_x_per_mm(self.geometry)
+        for gap, expected in ((1000, 100), (100.1, 100), (50.9, 50), (10.1, 10)):
+            plan = visual_align.motion_plan(self.observation(x=near+gap*scale), self.geometry, self.config, 100)
             self.assertEqual((plan['status'], plan['distance_mm']), ('move', expected))
         for gap in (9.9, 0, -30):
-            plan = visual_align.motion_plan(self.observation(x=near+gap), self.geometry, self.config, 100)
+            plan = visual_align.motion_plan(self.observation(x=near+gap*scale), self.geometry, self.config, 100)
             self.assertEqual((plan['status'], plan['distance_mm']), ('near', 0))
             self.assertTrue(plan['precise_localization_required'])
 

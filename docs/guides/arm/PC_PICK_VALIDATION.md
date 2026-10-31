@@ -9,25 +9,19 @@ cd /home/xd/Desktop/aic-robot
 
 实机运行由K230重新拍照、识别并回传定位结果，PC完成逆解和阶段调度，不回传原图后在PC识图。可移动方块后重复同一命令。`--hands-free`表示执行时已经放手；省略它，则先锁定当前位置，再等待输入“已放手”。
 
-## 装配修复对照：尚未切换默认
+## 当前默认：修正装配模型
 
-`configs/arm/pick_model_check.json`选择核对后的装配模型及配套重拟外参：根部活动链安装朝向转180°，2～4号局部轴改为−Y，5号安装角不变。编码零位、正方向、PID、速度和阶段规则不变。
+使用`models/genkiarm/genkiarm_corrected.urdf`及配套`model_alignment_20261030`外参，25°开口、0mm经验偏移。2026-10-31实物抓取成功，用户确认对位准确并批准整合完整版本；尚未量化全工作区实物精度。
 
-该对照把45mm经验偏移设为0，仍按25°张开中点对齐。2026-10-31首轮以30°（2389计数）实物抓取成功，用户确认对位准确；仅验证一个位置，未测量实际毫米误差。随后开口改25°，尚未实测。新外参在旧样本回放中的XYZ RMS约3.64～5.10mm，不代表实物抓取精度。默认模型／外参、第0版和小车窗口未切换。
+`--pick-config configs/arm/pick_model_check.json`保留为相同参数的兼容入口。模型、编码映射和外参通过哈希配对，不能单独替换。
 
-```bash
-./scripts/pick-pc --pick-config configs/arm/pick_model_check.json
-```
-
-上述命令只由K230重新拍照和识别，再由PC读编码和规划；需要真机动作时再添加`--execute --hands-free`。模型与外参通过哈希配对，不能单独替换。后续K230打包也可传同一个`--pick-config`，此对照尚未写入或激活。
-
-开发或首次安装所选板包（不更改开机入口）：
+首次安装或源码更新后预装当前识别包（不更改开机入口）：
 
 ```bash
-./scripts/host tools/deploy/k230_pick.py --pick-config configs/arm/pick_model_check.json --install
+./scripts/host tools/deploy/k230_pick.py --install
 ```
 
-正常重复测试无需重装；当前正式包和修正版包均已预装，配置或板端源码变化后需更新对应包。
+正常重复测试无需重装。整车使用[完整任务入口](../robot-task.md)。
 
 ## 执行顺序
 
@@ -40,7 +34,7 @@ cd /home/xd/Desktop/aic-robot
 | 项目 | 本次值 |
 | --- | --- |
 | 夹爪张开 | 25°，2332计数 |
-| 横向对齐参考 | 张开25°时两指末端中点，加用户指定的固定爪侧45mm补偿 |
+| 横向对齐参考 | 张开25°时两指末端中点，经验偏移0mm |
 | 悬停 / 下探 / 抬升 | 最低指尖模型高度80 / 15 / 80mm |
 | 额外夹紧 | 20计数 |
 | 额外向前伸展 | **0mm**，不沿用第0版的10mm补偿 |
@@ -60,7 +54,7 @@ Ctrl+C会停止当前采样脚本和后续阶段，已经发送的舵机目标�
 ./scripts/pick-pc --image /绝对路径/frame.jpg # 仅此显式离线回放使用PC识图，不连接硬件
 ```
 
-2026-10-22用户指定：在张开中点版本基础上，让方块在开口内向固定爪侧偏移45mm。配置中`cube_offset_toward_moving_finger_mm=-45`；方向随夹爪在Base-XY中的朝向旋转，不是固定Base-X或Y平移。不修改视觉坐标或外参。
+旧模型的45mm经验偏移已取消；原图和历史版本仍保留。
 
 另可自行指定Base坐标偏移，单位mm；默认三项均为0。例如将目标沿Base-X增加3mm：
 
@@ -73,9 +67,9 @@ Ctrl+C会停止当前采样脚本和后续阶段，已经发送的舵机目标�
 ## 配置和日志
 
 - 动作：`configs/arm/pick_validation_pc.json`。
-- 视觉和桌面平面：`configs/vision/trials/fixed_tip_top_20261022.json`；外参位于同目录配对文件，与内参哈希核对。
+- 视觉和桌面平面：`configs/vision/trials/model_alignment_20261030.json`；外参位于同目录配对文件，与内参哈希核对。
 - PID和速度：继续读取`configs/arm/user_selected_pid_demo_baseline.json`及`motion_defaults.json`。
 - 每轮PC日志：`data/logs/pick_pc_时间/`，包含视觉解、板包/标定上下文、K230原始日志及证据路径、四阶段目标与理论FK、悬停/下探到位采样和耗时。闭合与抬升不额外读取六轴反馈，不把发送目标当作实际到位位置。
 - 实机原图和当轮配置保存在K230的`/sdcard/aic/vision/evidence/`，成功与失败均保留；正常测试不传原图，需复查时再按PC日志中的证据路径导出。
 
-2026-10-22用户实物试跑后确认固定爪侧45mm补偿版本效果可用，暂定为PC验证基线。本入口仍依赖PC；另已移植并写入[K230独立语音抓取](K230_STANDALONE_PICK.md)，保留此入口供对照。正式PC与独立抓取共用这组外参，不替换第0版演示配置。
+当前PC对照与整车使用同一修正模型及配套标定，第0版演示配置独立保留。

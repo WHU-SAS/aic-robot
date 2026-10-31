@@ -1,5 +1,5 @@
 {
-  "status": "model_alignment_candidate_pending_field_validation",
+  "status": "user_accepted_corrected_model_runtime",
   "T_Base_from_Camera_mm": [
     [
       0.04223772631476755,
@@ -145,6 +145,10 @@
     "Historical contacts and CAD endpoint are approximate, not surveyed TCP ground truth.",
     "Retrospective replay checks consistency; it is not new independent or powered-grasp validation."
   ],
-  "canonical_default_replaced": false,
-  "geometry_model_sha256": "69494c69caef885790a67d6fd54a324967fbad29e246cb6c3e0e8d23a01aa231"
+  "canonical_default_replaced": true,
+  "geometry_model_sha256": "69494c69caef885790a67d6fd54a324967fbad29e246cb6c3e0e8d23a01aa231",
+  "runtime_acceptance": {
+    "date": "2026-10-31",
+    "basis": "User accepted corrected-model grasping and requested integration into complete robot"
+  }
 }

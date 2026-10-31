@@ -27,5 +27,6 @@ def load(root=ROOT):
     K[0] = [v * width / intrinsics['image_width'] for v in K[0]]
     K[1] = [v * height / intrinsics['image_height'] for v in K[1]]
     geometry = GroundProjection(K, intrinsics['distortion_coefficients'],
-        extrinsics['T_Base_from_Camera_mm'], loc['table_plane_Base_mm'])
+        extrinsics['T_Base_from_Camera_mm'], loc['table_plane_Base_mm'],
+        config.get('forward_axis_Base'), config.get('motion_origin_Base_mm'))
     return workspace, config, geometry

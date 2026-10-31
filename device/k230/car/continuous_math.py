@@ -9,6 +9,27 @@ time, and keeps the centroid-to-image-midline bearing as the angular reference.
 import math
 
 
+def table_forward(table_normal, forward_axis_Base=None):
+    """Declared forward axis projected onto the table, in this Base frame.
+
+    This preserves the nominal motion model; it is not a measured chassis axis.
+    """
+    axis = [1., 0., 0.] if forward_axis_Base is None else forward_axis_Base
+    component = sum(a*b for a, b in zip(axis, table_normal))
+    forward = [axis[k]-component*table_normal[k] for k in range(3)]
+    length = math.sqrt(sum(v*v for v in forward))
+    return [v/length for v in forward]
+
+
+def forward_x_per_mm(projection):
+    """Paired axes convert nominal wheel travel to Base X displacement.
+
+    Omitted axes retain the legacy X-difference-as-distance approximation.
+    """
+    axis = getattr(projection, 'forward_axis_Base', None)
+    return 1. if axis is None else table_forward(projection.normal, axis)[0]
+
+
 def wheel_speeds(previous_state, current_state, mm_per_count):
     """Nominal mm/s from two MCU replies; callers supply distinct MCU times.
 
@@ -30,7 +51,7 @@ def predict_bearing(bearing_deg, range_mm, midline_heading_deg,
 
     Positive bearings/yaw are left. `range_mm` is the coarse contact proxy's
     planar range, used only as an approximate radius for the centroid direction.
-    The image-midline ray may have a nonzero heading relative to planar Base+X.
+    The image-midline ray may have a nonzero heading relative to declared forward.
     Exposure/buffer age and camera-to-axle lever arm are not calibrated here.
     """
     heading = math.radians(midline_heading_deg)

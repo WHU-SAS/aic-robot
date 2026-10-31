@@ -63,7 +63,8 @@ class BoardMathTests(unittest.TestCase):
         self.assertEqual(self.config['pick']['stage_durations_s']['lift'],1)
         self.assertFalse(self.manifest['startup_motion'])
         self.assertFalse(self.manifest['pc_runtime_required'])
-        self.assertEqual(self.config['pick']['cube_offset_toward_moving_finger_mm'],-45)
+        self.assertEqual(self.config['pick']['cube_offset_toward_moving_finger_mm'],0)
+        self.assertEqual(self.config['pick']['model_urdf'],'models/genkiarm/genkiarm_corrected.urdf')
         # Control helpers are definitions, not a queued sequence executed on import.
         control=ast.parse(self.files['control.py'].decode())
         for n in control.body:
