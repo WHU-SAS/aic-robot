@@ -234,7 +234,14 @@ def _run_target(config,found,execute,start_counts=None):
     xy=found['cube_center_Base_mm'][:2];plane=vision['localization']['table_plane_Base_mm'];n=plane['normal']
     table_z=(plane['offset_mm']-n[0]*xy[0]-n[1]*xy[1])/n[2]
     geometry=Geometry(config['model'],config['pick'],table_z)
-    plan=geometry.plan([v/1000 for v in xy],start);log('planned',plan)
+    if config['pick'].get('wrist_alignment_enabled') is True:
+        from cube_orientation import estimate
+        orientation=estimate(found,config['extrinsics']['T_Base_from_Camera_mm'],plane)
+        log('cube_orientation',orientation)
+        plan=geometry.plan([v/1000 for v in xy],start,orientation)
+    else:
+        plan=geometry.plan([v/1000 for v in xy],start)
+    log('planned',plan)
     if not execute:return plan
     for name in ('hover','descend','close','lift'):
         action=dict(control);action['goals']=plan[name]

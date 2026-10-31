@@ -34,4 +34,12 @@
 
 组合包在`/sdcard/aic/robot/releases/<版本>/`，独立于原小车和机械臂包。本次只更新K230，天猛星沿用当前固件，无需重新按BSL下载。部署不发动作。原启动文件备份到本地`data/deployments/k230_robot_*/previous_main.py`，不清理旧包。
 
+5号旋转试用包使用同一整车流程，显式选择配置：
+
+```bash
+./scripts/deploy-robot --pick-config configs/arm/pick_wrist_rotation.json --install --activate
+```
+
+仅在抓取规划阶段按已确认侧面方向联动5号与1～4号；未找到完整姿态则保持原5号方式。原非旋转配置仍为默认，稳定版本保留，旋转实物表现待验证。
+
 任务调度：`device/k230/robot/task.py`；板端入口：`device/k230/robot/app.py`；组合部署：`tools/deploy/k230_robot.py`。共享相机只有一个所有者，移动阶段不写原图。任务结束后留存同一原JPEG、完整观测、车/臂配置及源码指纹，位置为`/sdcard/aic/vision/evidence/robot_task_*`；完整任务记录为`/sdcard/aic/robot/runs.jsonl`，原机械臂阶段记录仍在`/sdcard/aic/pick/events.jsonl`。

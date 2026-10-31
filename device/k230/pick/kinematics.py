@@ -1,6 +1,9 @@
 """Portable FK and analytic IK for the existing equal-link arm and tilt choices."""
 import math
-from numeric import dot,norm,matmul,matvec,rotation,rigid,transform,identity
+try:
+    from .numeric import dot,norm,matmul,matvec,rotation,rigid,transform,identity
+except ImportError:
+    from numeric import dot,norm,matmul,matvec,rotation,rigid,transform,identity
 
 
 class Geometry:
@@ -38,10 +41,15 @@ class Geometry:
         if length<1e-8:raise ValueError('Open jaw line has no horizontal projection')
         for i in range(2):mid[i]+=direction[i]/length*self.pick['cube_offset_toward_moving_finger_mm']/1000
         return mid
-    def nominal_contact(self,q):
+    def nominal_contact(self,q,orientation=None):
         t=self.transforms(q)['wan2'];axis=[t[0][1],t[1][1]];length=norm(axis)
         if length<1e-8:raise ValueError('Gripper across-axis has no horizontal projection')
         width=.020*(abs(axis[0])+abs(axis[1]))/length
+        if orientation is not None:
+            across=[t[i][1] for i in range(3)];length3=norm(across)
+            across=[v/length3 for v in across]
+            width=.020*sum(abs(dot(across,v)) for v in
+                orientation['axes_Base']+[orientation['table_normal_Base']])
         fixed=self.points['wan2']['distal'];moving=self.points['zhua']['distal']
         def gap(a):return min(v[1] for v in fixed)-max(v[1]*math.cos(a)-v[2]*math.sin(a)-.0132 for v in moving)
         lo=0.;hi=math.pi/2;target=width-.0007
@@ -90,7 +98,16 @@ class Geometry:
                 'moving_tip_center_Base_mm':[v*1000 for v in pts['zhua']],
                 'link_clearance_above_table_mm':{k:(v-self.table_z_m)*1000 for k,v in low.items()},
                 'cube_offset_toward_moving_finger_mm':self.pick['cube_offset_toward_moving_finger_mm']}
-    def plan(self,xy,start):
+    def plan(self,xy,start,orientation=None):
+        if self.pick.get('wrist_alignment_enabled') is True:
+            try:
+                from .wrist_plan import plan
+            except ImportError:
+                from wrist_plan import plan
+            return plan(self,xy,start,orientation,self._plan_held)
+        return self._plan_held(xy,start)
+
+    def _plan_held(self,xy,start):
         q0=self.angles(start);q5=q0[4];failures=[]
         for tilt in sorted([20,25,30,35,40,45],key=lambda t:abs(t-25)):
             try:

@@ -45,9 +45,9 @@ def _paired_config(car, arm):
         raise ValueError('Car projection differs from the paired calibration')
 
 
-def build_bundle():
+def build_bundle(pick_config=None):
     car, car_files, _, _ = car_bundle(near_parking=True)
-    arm, arm_files, _ = arm_bundle()
+    arm, arm_files, _ = arm_bundle(pick_config) if pick_config is not None else arm_bundle()
     _paired_config(car, arm)
     config = {'car':car, 'arm':arm, 'voice':arm['voice']}
     files = {}
@@ -125,10 +125,11 @@ def main(argv=None):
     parser.add_argument('--port', default=PORT)
     parser.add_argument('--install', action='store_true')
     parser.add_argument('--activate', action='store_true')
+    parser.add_argument('--pick-config', type=Path, help='explicit arm profile; default keeps servo5 angle')
     args = parser.parse_args(argv)
     if args.activate and not args.install:
         parser.error('--activate requires --install')
-    config, files, manifest = build_bundle()
+    config, files, manifest = build_bundle(args.pick_config)
     remote = REMOTE + '/releases/' + manifest['release_id']
     stamp = datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y%m%d_%H%M%S_%f')
     output = ROOT / 'data/deployments' / ('k230_robot_' + stamp)

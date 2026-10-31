@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from host.apps.pick_validation_pc import parameters
 from tools.diagnostics.k230_arm_ready import config_payload as ready_payload
 from device.k230.pick.voice_commands import registered_commands
-from host.arm.blue_pick_geometry import PickGeometry
+from host.arm.portable_model import export_model
 from host.transport.k230_pick_stage import payload
 from host.transport.download_calibration import CameraLink,PORT
 from host.vision.config import load_vision_config
@@ -31,20 +31,10 @@ def digest(data):return hashlib.sha256(data).hexdigest()
 def encoded(value):return (json.dumps(value,ensure_ascii=False,sort_keys=True,indent=2)+'\n').encode()
 
 def build_bundle(pick_config=None):
-    import numpy as np
-    from scipy.spatial import ConvexHull
     pick,config=parameters(pick_config);vision=load_vision_config(ROOT/pick['vision_config']);loc=vision['localization']
     intrpath=ROOT/loc['intrinsics'];intr=json.loads(intrpath.read_text());ext=json.loads((ROOT/loc['extrinsics']).read_text())
     if digest(intrpath.read_bytes())!=ext['intrinsics_sha256']:raise ValueError('Calibration pair mismatch')
-    geometry=PickGeometry(ROOT,config.mapping,urdf_path=pick.get('model_urdf'));model={'joints':[],'points':{}}
-    for i in range(1,7):
-        item=dict(config.mapping.joint(i));joint=geometry.fk.joints[item['urdf_joint_name']]
-        origin=np.eye(4);origin[:3,:3]=geometry.fk._rpy_to_matrix(joint['rpy']);origin[:3,3]=joint['xyz']
-        item.update(origin_transform=origin.tolist(),axis=joint['axis'].tolist(),child=joint['child'])
-        model['joints'].append(item)
-    for link,vertices in geometry.vertices.items():
-        model['points'][link]={'tip':geometry.tip[link].tolist(),'distal':geometry.distal[link].tolist(),
-                             'hull':vertices[ConvexHull(vertices).vertices].tolist()}
+    model=export_model(ROOT,config.mapping,urdf_path=pick.get('model_urdf'))
     voice=json.loads((ROOT/'configs/voice/wake_word.json').read_text())
     if not voice.get('enrollment_file'):raise ValueError('No accepted wake word registration')
     commands=registered_commands(voice)
@@ -138,7 +128,7 @@ def verify(link,remote,manifest,config):
     # Imports/pose/IK and saved registration checks only: no camera/UART init.
     source="""import os,sys,json,binascii,uhashlib
 sys.path.insert(0,%r)
-for name in ['app','pose','numeric','kinematics','vision','physical_side','side_range','evidence','reflection_faces','face_selection','side_faces','table_pose','top_boundaries','camera','vision_runtime','wake_word','control','voice_commands']:
+for name in ['app','pose','numeric','kinematics','cube_orientation','wrist_plan','vision','physical_side','side_range','evidence','reflection_faces','face_selection','side_faces','table_pose','top_boundaries','camera','vision_runtime','wake_word','control','voice_commands']:
  if name in sys.modules:del sys.modules[name]
 with open(%r+'/manifest.json') as f:m=json.load(f)
 for name,item in m['files'].items():

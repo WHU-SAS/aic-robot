@@ -1,0 +1,39 @@
+{
+  "opening_count": 2332,
+  "opening_angle_deg": 25,
+  "extra_closing_counts": 20,
+  "hover_tip_height_mm": 80,
+  "descend_tip_height_mm": 15,
+  "lift_tip_height_mm": 80,
+  "stage_durations_s": {
+    "hover": 6,
+    "descend": 6,
+    "close_minimum_stationary_s": 0.5,
+    "lift": 1
+  },
+  "gripper_stationary_tolerance_counts": 1,
+  "status": "development_wrist_rotation_pending_field_validation",
+  "vision_config": "configs/vision/trials/model_alignment_20261030.json",
+  "forward_extension_mm": 0,
+  "forward_extension_authorization": "User 2026-10-22: start with 0mm to observe new calibration error",
+  "arm_transport": "K230 UART1 -> URT-2",
+  "automatic_return_or_torque_release": false,
+  "alignment_reference": "open_fingertip_midpoint",
+  "alignment_authorization": "User 2026-10-31: use a 25-degree opening, retaining open-fingertip midpoint alignment",
+  "cube_offset_toward_moving_finger_mm": 0,
+  "cube_offset_authorization": "User 2026-10-31: integrate corrected model, paired calibration and 0mm empirical offset into the complete robot",
+  "standalone_stage_policy": {
+    "hover_tolerance_counts": 30,
+    "descend_tolerance_counts": 10,
+    "descend_axis4_lead_ms": 200,
+    "gripper_stable_samples": 5,
+    "gripper_stable_tolerance_counts": 1,
+    "poll_interval_ms": 50
+  },
+  "model_urdf": "models/genkiarm/genkiarm_corrected.urdf",
+  "comparison_parameters_approved_date": "2026-10-30",
+  "accepted_date": "2026-10-31",
+  "acceptance": "User 2026-10-31: develop a new corrected-model version with servo5 cube-side alignment; physical rotation validation pending",
+  "wrist_alignment_enabled": true,
+  "unreachable_cube_orientation": "keep_current_wrist"
+}

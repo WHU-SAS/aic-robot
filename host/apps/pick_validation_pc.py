@@ -17,6 +17,7 @@ import time
 from zoneinfo import ZoneInfo
 from host.arm.task_controller import Configuration
 from host.arm.pick_validation_geometry import OpenTipPickGeometry as PickGeometry
+from host.arm.portable_model import export_model
 from host.transport.download_calibration import PORT
 from host.transport.k230_pick_perception import perceive as perceive_onboard
 from host.transport.k230_pick_stage import payload,run_action
@@ -45,18 +46,65 @@ def parameters(pick_config=None):
     return pick,Configuration(ROOT)
 
 
+class _WristReportGeometry(PickGeometry):
+    """Keep PC's full FK report, using the shared selected contact-width rule."""
+    contact_model=None
+    contact_orientation=None
+
+    def nominal_contact(self,q):
+        if self.contact_model is None:return super().nominal_contact(q)
+        return self.contact_model.nominal_contact(list(q),self.contact_orientation)
+
+
+def _physical_face_result(vision):
+    raw=vision.get('vision')
+    if isinstance(raw,dict):return raw
+    observation=vision.get('observation',vision)
+    payload=observation.get('payload') if isinstance(observation,dict) else None
+    return payload if isinstance(payload,dict) else vision
+
+
 def make_plan(vision,start,pick,config,offset=(0,0,0)):
     settings=load_vision_config(ROOT/pick['vision_config'])['localization']
     xy=[float(v)+float(d) for v,d in zip(vision['cube_center_Base_mm'][:2],offset[:2])]
     table_z=table_height_at(settings,xy)
-    geometry=PickGeometry(ROOT,config.mapping,table_z_m=table_z/1000,
+    wrist_enabled=pick.get('wrist_alignment_enabled') is True
+    geometry_type=_WristReportGeometry if wrist_enabled else PickGeometry
+    geometry=geometry_type(ROOT,config.mapping,table_z_m=table_z/1000,
         hover_tip_height_mm=pick['hover_tip_height_mm']+offset[2],
         descend_tip_height_mm=pick['descend_tip_height_mm']+offset[2],
         lift_tip_height_mm=pick['lift_tip_height_mm']+offset[2],opening_count=pick['opening_count'],
         cube_offset_toward_moving_finger_mm=pick['cube_offset_toward_moving_finger_mm'],
         urdf_path=pick.get('model_urdf'))
     config.check_counts(dict(enumerate(start,1)))
-    plan=geometry.plan([v/1000 for v in xy],start)
+    if wrist_enabled:
+        from device.k230.pick.kinematics import Geometry as PortableGeometry
+        from device.k230.pick.cube_orientation import estimate
+        portable_pick=dict(pick)
+        for key in ('hover_tip_height_mm','descend_tip_height_mm','lift_tip_height_mm'):
+            portable_pick[key]=pick[key]+offset[2]
+        model=export_model(ROOT,config.mapping,urdf_path=pick.get('model_urdf'))
+        portable=PortableGeometry(model,portable_pick,table_z)
+        extrinsics=json.loads((ROOT/settings['extrinsics']).read_text())
+        orientation=estimate(_physical_face_result(vision),
+            extrinsics['T_Base_from_Camera_mm'],settings['table_plane_Base_mm'])
+        plan=portable.plan([v/1000 for v in xy],start,orientation)
+        geometry.contact_model=portable
+        geometry.contact_orientation=orientation if plan['wrist_alignment']['status']=='aligned' else None
+        plan.update(cube_orientation=orientation,alignment_reference=pick['alignment_reference'],
+            alignment_opening_count=pick['opening_count'],opening_count=pick['opening_count'],
+            opening_angle_deg=float(config.mapping.count_to_radians(6,pick['opening_count'])*180/math.pi),
+            cube_offset_toward_moving_finger_mm=pick['cube_offset_toward_moving_finger_mm'],
+            closing_count=plan['close'][5],nominal_closing_count=plan['close'][5]+pick['extra_closing_counts'],
+            low_min_tip_model_mm=portable_pick['descend_tip_height_mm'],
+            hover_min_tip_model_mm=portable_pick['hover_tip_height_mm'],
+            lift_min_tip_model_mm=portable_pick['lift_tip_height_mm'],
+            physical_low_height_is_estimate=True,table_z_Base_mm=table_z,
+            height_reference='Base-Z relative to table height at target XY; final poses only',
+            target_FK={name:geometry.report(plan[name]) for name in ('hover','descend','close','lift')})
+        plan['estimated_cube_projection_mm']=geometry.report(plan['descend'])['estimated_cube_projection_mm']
+    else:
+        plan=geometry.plan([v/1000 for v in xy],start)
     if pick.get('model_urdf'):
         model_sha=hashlib.sha256((ROOT/pick['model_urdf']).read_bytes()).hexdigest()
         plan['model_urdf']=pick['model_urdf']
