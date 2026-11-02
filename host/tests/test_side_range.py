@@ -70,6 +70,73 @@ class SideRangeTests(unittest.TestCase):
         self.assertEqual(result['Base_X_mm'], 401.)
         self.assertEqual(result['X_interval_mm'], [401., 405.])
 
+    def projected_pose(self, x, tag, **options):
+        pose = self.pose(x, **options)
+        pose.update(cube_projected_corners_px=[[i, tag] for i in range(8)],
+                    cube_projection_source='pose_projected_cube_corners')
+        return pose
+
+    def test_single_selected_face_keeps_legacy_pose_without_projection(self):
+        face = self.face([self.pose()])
+        result = self.solve([face])
+        self.assertEqual(len(result['selected_faces']), 1)
+        selected = result['selected_faces'][0]
+        self.assertTrue(selected['used_for_center'])
+        self.assertEqual(selected['face_quad_px'], face['face_quad_px'])
+        self.assertEqual(selected['selected_pose']['cube_center_Camera_mm'],
+                         face['poses'][0]['cube_center_Camera_mm'])
+        self.assertNotIn('cube_projected_corners_px', selected['selected_pose'])
+        self.assertEqual(result['Base_X_mm'], 400.)
+        self.assertEqual(result['X_interval_mm'], [400., 400.])
+        self.assertEqual(len(result['audit']), 1)
+
+    def test_larger_side_retains_selected_pair_pose_and_excludes_unused_side(self):
+        first = self.face([self.projected_pose(400., 1),
+                           self.projected_pose(410., 2, rms=.4)])
+        first['area_px2'] = 15000.
+        second = self.face([self.projected_pose(412., 3, normal=[0., 1., 0.])],
+                           adjacent=True)
+        before = copy.deepcopy([first, second])
+        result = self.solve([first, second])
+        self.assertEqual(result['side_selection'], 'larger_verified_side')
+        self.assertEqual(result['Base_X_mm'], 410.)
+        self.assertEqual(result['X_interval_mm'], [410., 410.])
+        self.assertEqual(len(result['selected_faces']), 1)
+        used = result['selected_faces'][0]
+        self.assertEqual(used['face_quad_px'], first['face_quad_px'])
+        self.assertTrue(used['used_for_center'])
+        self.assertEqual(used['selected_pose']['original_pose_rank'], 1)
+        self.assertEqual(used['selected_pose']['cube_projected_corners_px'],
+                         first['poses'][1]['cube_projected_corners_px'])
+        self.assertEqual(used['selected_pose']['cube_projection_source'],
+                         first['poses'][1]['cube_projection_source'])
+        self.assertEqual(len(result['audit']), 2)
+        self.assertEqual(len(result['audit'][0]['poses']), 2)
+        self.assertEqual(result['audit'][1]['face_quad_px'], second['face_quad_px'])
+        self.assertEqual([first, second], before)
+
+    def test_mean_side_evidence_keeps_two_original_selected_poses_not_mean_pose(self):
+        first = self.face([self.projected_pose(400., 1),
+                           self.projected_pose(410., 2, rms=.4)])
+        second = self.face([self.projected_pose(412., 3, normal=[0., 1., 0.])],
+                           adjacent=True)
+        result = self.solve([first, second])
+        self.assertEqual(result['side_selection'], 'mean_of_similar_area_sides')
+        self.assertEqual(result['Base_X_mm'], 411.)
+        self.assertEqual(result['X_interval_mm'], [411., 411.])
+        used = result['selected_faces']
+        self.assertEqual(len(used), 2)
+        self.assertTrue(all(face['used_for_center'] for face in used))
+        self.assertEqual([face['selected_pose']['cube_center_Camera_mm'][0]
+                          for face in used], [410., 412.])
+        self.assertEqual([face['selected_pose']['cube_projected_corners_px']
+                          for face in used],
+                         [first['poses'][1]['cube_projected_corners_px'],
+                          second['poses'][0]['cube_projected_corners_px']])
+        self.assertEqual([face['face_quad_px'] for face in used],
+                         [first['face_quad_px'], second['face_quad_px']])
+        self.assertEqual(len(result['audit']), 2)
+
     def test_horizontal_face_and_bad_reprojection_do_not_supply_range(self):
         for pose in (self.pose(normal=[0., 0., 1.]), self.pose(rms=2.01)):
             self.assertIsNone(self.solve([self.face([pose])]))

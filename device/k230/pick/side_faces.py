@@ -242,6 +242,9 @@ def select_sides(faces,K,D,table=None):
             used=[first,second];rule='mean_of_similar_area_sides'
             center=[(a+b)/2 for a,b in zip(pair[1]['cube_center_Camera_mm'],pair[2]['cube_center_Camera_mm'])]
             pose=dict(pose);pose['cube_center_Camera_mm']=center;pose['cube_center_pixel']=project(center,K,D)
+            # Averaging centers does not define a rigid cube transform. Keep
+            # each original projection on side_faces[].selected_pose instead.
+            pose.pop('cube_projected_corners_px',None);pose.pop('cube_projection_source',None)
             pose['face_reprojection_rms_px']=max(pair[1]['face_reprojection_rms_px'],pair[2]['face_reprojection_rms_px'])
             if table is not None:pose['table_geometry']=table_metrics(pose,table,'side')
         else:rule='larger_verified_side'

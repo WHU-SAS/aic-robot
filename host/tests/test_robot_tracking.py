@@ -13,6 +13,17 @@ from tools.deploy.k230_car_align import build_bundle
 from host.tests.test_car_near_control import PlanarPlant
 
 
+def synthetic_fine_match(coarse, observation):
+    """API fixture only: these Fine doubles supply no measured face pixels.
+
+    Actual cube-hull association is exercised by the shared-vision tests.
+    """
+    same = (coarse['frame_id'] == observation['frame_id'] and
+            coarse['capture_timestamp_ms'] == observation['capture_timestamp_ms'])
+    return {'status':'matched' if same else 'unknown',
+            'source':'synthetic_fine_api_fixture'}
+
+
 class Clock:
     def __init__(self): self.ms = 0
     def now(self): return self.ms
@@ -137,6 +148,7 @@ class RobotTrackingTests(unittest.TestCase):
         self.task = TrackingTask(self.capture,self.track,self.motor,self.projection,
             self.config,self.clock.now,self.begin_arm,Fine,Fine,
             emit=lambda event,details:self.events.append((event,details)))
+        self.task._match_fine = synthetic_fine_match
 
     def point(self):
         n = self.projection.normal
@@ -176,7 +188,7 @@ class RobotTrackingTests(unittest.TestCase):
             return dict(frame,schema='aic.vision_observation.v1',mode='coarse',status='lost',
                 visual_evidence=dict(visible=False,associated=False,ambiguous=False,
                     distance_valid=False,candidate_count=0,edge_directions=[],
-                    timestamp_ms=frame['capture_timestamp_ms']))
+                    timestamp_ms=frame['capture_timestamp_ms']),visual_candidates=[])
         pixel = self.projection.base_to_pixel(point)
         contact = [point[k]-10*self.projection.normal[k] for k in range(3)]
         lifted = (self.lift_changes and self.task.arm is not None and self.task.arm.phase == 'lift')
@@ -184,13 +196,14 @@ class RobotTrackingTests(unittest.TestCase):
         if lifted: pixel[1] -= 160
         evidence = dict(visible=True,associated=True,ambiguous=False,candidate_count=1,
             center_pixel=pixel,bbox_px=[int(pixel[0])-30,int(pixel[1])-30,60,60],
-            timestamp_ms=frame['capture_timestamp_ms'],distance_valid=distance_valid,edge_directions=[])
+            pixels=3600,timestamp_ms=frame['capture_timestamp_ms'],
+            distance_valid=distance_valid,edge_directions=[])
         if not distance_valid: evidence['reason']='inconsistent_with_20mm_height'
         if distance_valid: evidence['ground_contact_proxy_Base_mm'] = contact
         return dict(frame,schema='aic.vision_observation.v1',mode='coarse',status='tracking',
             center_pixel=pixel,bbox_px=evidence['bbox_px'],confirmations=3,
             ground_contact_proxy_Base_mm=contact,image_midline_error_px=pixel[0]-640,
-            visual_evidence=evidence)
+            visual_evidence=evidence,visual_candidates=[dict(evidence)])
 
     def precise(self, point, frame):
         return dict(frame,schema='aic.vision_observation.v1',mode='precise',status='localized',
@@ -248,6 +261,100 @@ class RobotTrackingTests(unittest.TestCase):
                       if item['frame']['tracking_purpose']=='moving')
         self.assertEqual(moving['localization_bbox_px'],
                          moving['paired_coarse']['bbox_px'])
+
+    def test_unassociated_raw_pose_is_archived_but_never_grants_parking_or_memory(self):
+        self.task._match_fine = lambda *args:{'status':'unknown','reason':'separate_candidate'}
+        self.tick(200)
+        self.assertFalse(self.arms)
+        self.assertIsNone(self.task.memory.last_precise)
+        self.assertIsNone(self.task.last_parking)
+        raw = [item['observation'] for item in self.task.evidence]
+        self.assertTrue(any(row.get('status')=='localized' and
+                            row['target_association']['status']=='unknown' for row in raw))
+        self.assertTrue(any(event=='tracking_fine_completed' and
+                            details['status']=='no_complete_face' and
+                            details['target_association']=='unknown'
+                            for event,details in self.events))
+
+    def test_unassociated_moving_range_is_not_bound_as_distance(self):
+        self.x=650
+        advance=self.Fine.advance
+        def range_result(session):
+            advance(session)
+            if session.latest is not None and session.phase is None:
+                point=session.latest.pop('cube_center_Base_mm')
+                session.latest.update(status='no_complete_face',range_candidate={
+                    'schema':'aic.car.side_range.v1','status':'range_candidate',
+                    'coordinate_frame':'Base','units':'mm','Base_X_mm':point[0],
+                    'raw_center_Base_mm':point,'not_arm_or_parking_authority':True})
+        self.Fine.advance=range_result
+        self.task._match_fine=lambda *args:{'status':'unknown','reason':'separate_candidate'}
+        for unused in range(1000):
+            self.tick()
+            if self.task.complete is not None and self.task.evidence[-1]['observation'].get('range_candidate'):
+                break
+        else:
+            self.fail('No synthetic range completed')
+        self.assertNotIn('range_candidate',self.task.complete['observation'])
+        self.tick()
+        self.assertFalse(self.arms)
+        self.assertIsNone(self.task.memory.last_precise)
+        self.assertIsNone(self.task.drive.anchor)
+        self.assertTrue(any(item['observation'].get('range_candidate') and
+                            item['observation']['target_association']['status']=='unknown'
+                            for item in self.task.evidence))
+
+    def use_real_association_with_synthetic_pose(self, fine_point=None):
+        # Supply projected-pose protocol data, not image/CV success, to exercise
+        # the actual helper and coordinator together without a matching mock.
+        self.task._match_fine=TrackingTask._match_fine.__get__(self.task,TrackingTask)
+        advance=self.Fine.advance
+        parent=self
+        def projected(session):
+            advance(session)
+            if session.latest is None or session.phase is not None:
+                return
+            point=list(session.point if fine_point is None else fine_point)
+            session.latest['cube_center_Base_mm']=point
+            u,v=parent.projection.base_to_pixel(point)
+            front=[[u-40,v-40],[u+40,v-40],[u+40,v+40],[u-40,v+40]]
+            corners=front+[[x+5,y+5] for x,y in front]
+            pose=dict(session.latest['payload']['poses'][0],
+                cube_projected_corners_px=corners,cube_projection_source='pose_transform')
+            session.latest['payload']['side_faces']=[{
+                'face_quad_px':front,'selected_pose':pose,'used_for_center':True}]
+        self.Fine.advance=projected
+
+    def test_real_association_helper_allows_same_source_through_full_task(self):
+        self.use_real_association_with_synthetic_pose()
+        result=self.finish()
+        self.assertEqual(result['status'],'succeeded')
+        self.assertEqual(len(self.arms),1)
+        self.assertEqual(self.handoffs[0][1]['target_association']['status'],'matched')
+        self.assertEqual(self.task.memory.last_precise['target_association']['status'],'matched')
+
+    def test_real_association_helper_blocks_same_frame_other_cube_before_consumption(self):
+        destination=self.point()
+        self.y-=40
+        self.use_real_association_with_synthetic_pose(destination)
+        for unused in range(1000):
+            self.tick()
+            if self.task.complete is not None:
+                break
+        else:
+            self.fail('No synthetic fine completed')
+        complete=self.task.complete['observation']
+        self.assertEqual(complete['status'],'no_complete_face')
+        self.assertEqual(complete['target_association']['reason'],'no_used_pose_support')
+        self.assertNotIn('cube_center_Base_mm',complete)
+        self.assertNotIn('range_candidate',complete)
+        raw=self.task.evidence[-1]['observation']
+        self.assertEqual(raw['status'],'localized')
+        self.assertEqual(raw['frame_id'],complete['frame_id'])
+        self.assertEqual(raw['cube_center_Base_mm'],destination)
+        self.tick()
+        self.assertIsNone(self.task.memory.last_precise)
+        self.assertFalse(self.arms)
 
     def test_running_chassis_model_disagreement_does_not_cancel_fixed_target(self):
         self.task._observe(force_status=True)

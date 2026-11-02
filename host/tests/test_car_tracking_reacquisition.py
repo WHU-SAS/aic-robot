@@ -18,7 +18,7 @@ from device.k230.arm.pick_execution import PickExecution
 from device.k230.robot.tracking import TrackingTask
 from device.k230.vision.runtime import track_coarse
 from tools.deploy.k230_robot import build_bundle
-from host.tests.test_robot_tracking import Clock, Motor, ArmIO, PLAN
+from host.tests.test_robot_tracking import Clock, Motor, ArmIO, PLAN, synthetic_fine_match
 
 
 # The flat box comes from fa30's abnormal-motion log. Its being a supplied blue
@@ -272,6 +272,7 @@ class TrackingReacquisitionTests(unittest.TestCase):
         task = TrackingTask(capture,
             lambda image,stamp:track_coarse(image,stamp,tracker.detect_frame),
             motor,model,config,clock.now,begin_arm,Fine,Fine,reset_tracker=tracker.reset)
+        task._match_fine = synthetic_fine_match
         for unused in range(1800):
             task.step()
             if task.status == 'succeeded': break

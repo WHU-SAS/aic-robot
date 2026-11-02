@@ -9,12 +9,14 @@ try:
     from ..car.target_memory import TargetMemory
     from ..car.tracking_drive import DriveController
     from ..car.near_runtime import count_delta
+    from ..vision.candidate_association import associate_fine_candidate
     from .task import handoff_observation
 except ImportError:
     from blue_tracker import age_ms
     from target_memory import TargetMemory
     from tracking_drive import DriveController
     from near_runtime import count_delta
+    from candidate_association import associate_fine_candidate
     from robot_task import handoff_observation
 
 
@@ -153,7 +155,7 @@ class TrackingTask:
             item['frame']['paired_coarse'] = {key: coarse[key] for key in (
                 'frame_id', 'capture_timestamp_ms', 'status', 'bbox_px',
                 'center_pixel', 'confirmations', 'ground_contact_proxy_Base_mm',
-                'visual_evidence') if key in coarse}
+                'visual_evidence', 'visual_candidates') if key in coarse}
             item['frame']['localization_bbox_px'] = (
                 coarse.get('bbox_px') if job['purpose'] == 'moving' else None)
             if reason:
@@ -357,16 +359,33 @@ class TrackingTask:
             job['session'].latest_ready_ms = self.clock()
             job['session'].phase = None
         if not job['session'].phase:
-            self.complete = dict(job, observation=job['session'].latest,
+            observation = job['session'].latest
+            if observation.get('status') == 'localized' or observation.get('range_candidate'):
+                association = self._match_fine(job['paired_coarse'], observation)
+                # Retain the raw visual solve with its association audit. Only
+                # the filtered capability below may reach driving or Memory.
+                job['session'].latest = dict(observation, target_association=association)
+                job['session'].latest_ready_ms = self.clock()
+                observation = job['session'].latest
+                if association['status'] != 'matched':
+                    observation = dict(observation, status='no_complete_face',
+                        reason='Fine result is not associated with the selected target')
+                    observation.pop('cube_center_Base_mm', None)
+                    observation.pop('range_candidate', None)
+            self.complete = dict(job, observation=observation,
                 result_ready_ms=job['session'].latest_ready_ms)
             self.complete.pop('session')
             self._record('tracking_fine_completed', dict(purpose=job['purpose'],
                 frame_id=job['session'].latest.get('frame_id'),
-                status=job['session'].latest.get('status'),
+                status=observation.get('status'),
+                target_association=(observation.get('target_association') or {}).get('status'),
                 elapsed_ms=age_ms(job['session'].latest_ready_ms,
                     job['session'].latest.get('capture_timestamp_ms', job['session'].latest_ready_ms))))
             self._save_job()
             self.job = None
+
+    def _match_fine(self, coarse, observation):
+        return associate_fine_candidate(observation, coarse)
 
     def _step_arm(self):
         if self.arm is None or self._fresh_before_arm:
@@ -491,9 +510,10 @@ class TrackingTask:
                         encoder_a=self.state.get('encoder_a'), encoder_b=self.state.get('encoder_b')))
                 if self.complete is not None and self.decision.get('precise_consumed'):
                     done = self.complete
-                    self.memory.bind_precise(done['observation'], done['paired_coarse'],
-                        done['target_version'], self.drive.odometry.since(
-                            done['observation'].get('capture_timestamp_ms', self.clock()), self.clock()))
+                    if done['observation'].get('target_association', {}).get('status') == 'matched':
+                        self.memory.bind_precise(done['observation'], done['paired_coarse'],
+                            done['target_version'], self.drive.odometry.since(
+                                done['observation'].get('capture_timestamp_ms', self.clock()), self.clock()))
                 if not self.decision.get('precise_deferred'):
                     self.complete = None
                 if self.decision.get('command'):

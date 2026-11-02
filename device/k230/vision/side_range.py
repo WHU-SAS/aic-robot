@@ -86,6 +86,12 @@ def range_candidate(raw_faces, K, D, T, table):
         'raw_center_Base_mm': point, 'X_interval_mm': [min(xs), max(xs)],
         'not_arm_or_parking_authority': True, 'height_used_for_selection': False,
         'side_selection': selected['side_selection'],
+        # Preserve only the original faces/poses that actually supplied this
+        # centre; audit below deliberately retains every measured candidate.
+        'selected_faces': [{'face_quad_px': face['face_quad_px'],
+                            'selected_pose': face['selected_pose'],
+                            'used_for_center': True}
+                           for face in selected['side_faces'] if face['used_for_center']],
         'audit': [{'face_quad_px': face['face_quad_px'],
                    'physical_edges': face['physical_edges'],
                    'area_px2': face['area_px2'],

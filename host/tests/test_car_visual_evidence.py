@@ -331,6 +331,18 @@ class VisualEvidenceTests(unittest.TestCase):
         self.assertNotIn('cube_center_Base_mm', normalized)
         self.assertNotIn('ground_contact_proxy_Base_mm', normalized['visual_evidence'])
 
+    def test_shared_result_keeps_invalid_cues_for_same_frame_fine_competition(self):
+        image=Image(Blob([300,400,40,40]),Blob([900,400,100,3]))
+        result=track_coarse(image,self.frame,self.tracker.detect_frame)
+        cues=result['visual_candidates']
+        self.assertEqual(image.calls,1)
+        self.assertEqual(len(cues),2)
+        self.assertEqual(len(result['payload']['candidates']),1)
+        self.assertIs(cues,result['payload']['visual_candidates'])
+        self.assertTrue(all(cue['timestamp_ms']==self.frame['capture_timestamp_ms'] for cue in cues))
+        self.assertEqual(cues[1]['measurement_reason'],'implausible_aspect_ratio')
+        self.assertFalse(cues[1]['distance_valid'])
+
     def test_evidence_cannot_refresh_old_frame_or_claim_precise_coordinates(self):
         for evidence in ({'timestamp_ms': 99},
                          {'timestamp_ms': 100, 'cube_center_Base_mm': [1, 2, 3]}):

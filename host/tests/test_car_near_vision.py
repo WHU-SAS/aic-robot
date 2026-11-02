@@ -1,5 +1,6 @@
 """Car-only bounded side localization, exercised in the vision environment."""
 import importlib.util
+import copy
 import json
 import subprocess
 import unittest
@@ -12,6 +13,7 @@ if HAS_VISION:
     import numpy as np
     from device.k230.car import near_vision
     from device.k230.pick.reflection_faces import measure_edge
+    from device.k230.pick.side_faces import select_sides
 
 
 @unittest.skipUnless(HAS_VISION, 'Dedicated vision environment')
@@ -48,6 +50,36 @@ class NearVisionTests(unittest.TestCase):
                      intr, ext, plane, **options))
         self.assertEqual(steps[-1]['stage'], 'complete')
         return steps, steps[-1]['observation']
+
+    def test_mean_center_removes_rigid_projection_but_keeps_selected_side_evidence(self):
+        faces=[]
+        for i,normal in enumerate(([1.,0.,0.],[0.,0.,1.])):
+            x=100.+100*i
+            pose={'cube_center_Camera_mm':[2.*i,0.,300.],
+                  'inward_face_normal_Camera':normal,'face_reprojection_rms_px':.2+.1*i,
+                  'cube_projected_corners_px':[[j,i] for j in range(8)],
+                  'cube_projection_source':'pose_transform'}
+            faces.append({'face_quad_px':[[x,100.],[x+100.,100.],[x+100.,200.],[x,200.]],
+                          'area_px2':10000.,'poses':[pose],'physical_edges':[]})
+        before=copy.deepcopy(faces)
+        K=[[1200.,0.,640.],[0.,1210.,480.],[0.,0.,1.]]
+        result=select_sides(faces,K,[])
+        self.assertEqual(result['side_selection'],'mean_of_similar_area_sides')
+        self.assertEqual(result['poses'][0]['cube_center_Camera_mm'],[1.,0.,300.])
+        self.assertNotIn('cube_projected_corners_px',result['poses'][0])
+        self.assertNotIn('cube_projection_source',result['poses'][0])
+        for face,original in zip(result['side_faces'],faces):
+            self.assertTrue(face['used_for_center'])
+            self.assertIs(face['selected_pose'],original['poses'][0])
+            self.assertEqual(face['selected_pose']['cube_projection_source'],'pose_transform')
+            self.assertEqual(len(face['selected_pose']['cube_projected_corners_px']),8)
+        self.assertEqual(faces,before)
+        # A dominant face still represents its own solved rigid transform.
+        faces[0]['area_px2']=15000.
+        dominant=select_sides(faces,K,[])
+        self.assertEqual(dominant['side_selection'],'larger_verified_side')
+        self.assertIs(dominant['poses'][0],faces[0]['poses'][0])
+        self.assertEqual(dominant['poses'][0]['cube_projection_source'],'pose_transform')
 
     def test_real_side_geometry_and_full_pixel_coordinates(self):
         for yaw in (.7, .95):

@@ -97,7 +97,7 @@ def track_coarse(image,frame,detector):
         for key in ('bbox_px','center_pixel','image_midline_error_px','pixels','confirmations','ground_contact_proxy_Base_mm'):
             raw.pop(key,None)
     result.update(status=status,payload=raw,processing_ms=_elapsed(started))
-    for key in ('bbox_px','center_pixel','image_midline_error_px','pixels','confirmations','ground_contact_proxy_Base_mm','visual_evidence'):
+    for key in ('bbox_px','center_pixel','image_midline_error_px','pixels','confirmations','ground_contact_proxy_Base_mm','visual_evidence','visual_candidates'):
         if key in raw:result[key]=raw[key]
     result['quality']={key:raw[key] for key in ('pixels','confirmations') if key in raw}
     return result

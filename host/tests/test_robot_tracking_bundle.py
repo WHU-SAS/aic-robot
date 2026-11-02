@@ -30,7 +30,7 @@ class TrackingBundleTests(unittest.TestCase):
         self.assertTrue(manifest['continuous_observation'])
         self.assertFalse(manifest['physical_tracking_validated'])
         for name in ('robot_tracking.py','target_memory.py','tracking_drive.py',
-                     'cooperative_static_session.py'):
+                     'cooperative_static_session.py','candidate_association.py'):
             self.assertIn(name,files.keys())
             ast.parse(files[name])
         self.assertIn(b'class PickExecution:',files['control.py'])

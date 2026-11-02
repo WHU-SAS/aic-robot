@@ -74,6 +74,7 @@ def build_bundle(pick_config=None, tracking=False):
                 ('target_memory.py', 'device/k230/car/target_memory.py'),
                 ('tracking_drive.py', 'device/k230/car/tracking_drive.py'),
                 ('robot_tracking.py', 'device/k230/robot/tracking.py'),
+                ('candidate_association.py', 'device/k230/vision/candidate_association.py'),
                 ('cooperative_static_session.py', 'device/k230/vision/cooperative_static_session.py')):
             files[name] = (ROOT / path).read_bytes()
     files['config.json'] = encoded(config)

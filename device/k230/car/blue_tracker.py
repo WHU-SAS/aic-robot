@@ -144,19 +144,22 @@ class BlueTracker:
             self.previous, self.confirmations = None, 0
             self.association_confirmations = 0
             return {'status': 'lost' if had_measurement else 'no_target', 'timestamp_ms': timestamp_ms,
-                    'candidates': candidates, 'rejected': rejected, 'visual_evidence': evidence}
+                    'candidates': candidates, 'visual_candidates': cues,
+                    'rejected': rejected, 'visual_evidence': evidence}
         self.previous = selected
         self.association_confirmations += 1
         evidence['association_confirmations'] = self.association_confirmations
         if not selected['distance_valid']:
             self.confirmations = 0
             return {'status': 'lost' if had_measurement else 'no_target', 'timestamp_ms': timestamp_ms,
-                    'candidates': candidates, 'rejected': rejected, 'visual_evidence': evidence}
+                    'candidates': candidates, 'visual_candidates': cues,
+                    'rejected': rejected, 'visual_evidence': evidence}
         self.confirmations += 1
         confirmed = self.confirmations >= c['confirmation_frames']
         evidence.update(confirmations=self.confirmations, navigation_confirmed=confirmed)
         return dict(selected, status='tracking' if confirmed else 'confirming',
-                    confirmations=self.confirmations, candidates=candidates, rejected=rejected,
+                    confirmations=self.confirmations, candidates=candidates, visual_candidates=cues,
+                    rejected=rejected,
                     visual_evidence=evidence,
                     image_midline_error_px=selected['center_pixel'][0] - width / 2,
                     estimate_basis='blue blob and calibrated table contact proxy; coarse only')

@@ -19,6 +19,7 @@ from tools.deploy import k230_pick as deploy
 BOARD=ROOT/'device/k230/pick'
 sys.path.insert(0,str(BOARD))
 from numeric import rotation,matvec,dot,norm
+import pose as board_pose
 from pose import pose_candidates,project
 from kinematics import Geometry
 
@@ -36,6 +37,43 @@ class BoardMathTests(unittest.TestCase):
             expected=[v+10*n for v,n in zip(t,normal)]
             self.assertLess(norm([a-b for a,b in zip(ps[0]['cube_center_Camera_mm'],expected)]),1e-4)
             self.assertLess(ps[0]['face_reprojection_rms_px'],1e-5)
+    def test_cube_projection_uses_distorted_rigid_corners_and_inward_normal(self):
+        K=[[1200.,0.,640.],[0.,1210.,480.],[0.,0.,1.]];D=[.12,-.3,.002,-.001,.2]
+        for angle in (.7,2.2):
+            R=rotation([0.,1.,0.],angle);t=[-20.,30.,250.]
+            front=[[v+t[i] for i,v in enumerate(matvec(R,p))] for p in board_pose.OBJECT]
+            pixels=[project(p,K,D) for p in front];inward=[row[2] for row in R]
+            if dot(inward,t)<0:inward=[-v for v in inward]
+            back=[[p[i]+20*inward[i] for i in range(3)] for p in front]
+            expected=pixels+[project(p,K,D) for p in back]
+            # A fixed refiner exposes both normal-sign cases without relying
+            # on which planar ambiguity the solver ranks first.
+            poses=pose_candidates(pixels,K,D,refine=True,refiner=lambda *args:(R,t))
+            self.assertEqual(len(poses),2)
+            for pose in poses:
+                self.assertEqual(pose['cube_projection_source'],'pose_transform')
+                self.assertEqual(len(pose['cube_projected_corners_px']),8)
+                for actual,target in zip(pose['cube_projected_corners_px'],expected):
+                    for a,b in zip(actual,target):self.assertAlmostEqual(a,b,places=10)
+    def test_unavailable_back_projection_preserves_legacy_pose_values_and_order(self):
+        K=[[1200.,0.,640.],[0.,1210.,480.],[0.,0.,1.]];D=[]
+        R=rotation([0.,1.,0.],.7);t=[-20.,30.,250.]
+        pixels=[project([v+t[i] for i,v in enumerate(matvec(R,p))],K,D) for p in board_pose.OBJECT]
+        baseline=pose_candidates(pixels,K,D)
+        calls=[0]
+        def unavailable_back(point,K,D):
+            calls[0]+=1
+            # Per candidate the original path projects four face corners and
+            # the center before attempting the four optional back corners.
+            if calls[0]%6==0:raise ValueError('Back corner unavailable')
+            return project(point,K,D)
+        with patch.object(board_pose,'project',side_effect=unavailable_back):
+            actual=pose_candidates(pixels,K,D)
+        self.assertEqual(len(actual),len(baseline))
+        for pose,reference in zip(actual,baseline):
+            reference={k:v for k,v in reference.items()
+                       if k not in ('cube_projected_corners_px','cube_projection_source')}
+            self.assertEqual(pose,reference)
     def test_board_fk_matches_pc_and_four_stage_ik(self):
         from host.apps.pick_validation_pc import make_plan,parameters
         pick,cfg=parameters();vision={'cube_center_Base_mm':[245.,-28.,-65.]};start=[2048]*6

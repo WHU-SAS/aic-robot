@@ -75,8 +75,20 @@ def pose_candidates(quad,K,D,refine=False,refiner=None):
         inward=[row[2] for row in R]
         if dot(inward,t)<0:inward=[-v for v in inward]
         center=[t[i]+10*inward[i] for i in range(3)]
-        result.append({'face_reprojection_rms_px':rms,'cube_center_Camera_mm':center,
-                       'cube_center_pixel':project(center,K,D),'inward_face_normal_Camera':inward})
+        pose={'face_reprojection_rms_px':rms,'cube_center_Camera_mm':center,
+              'cube_center_pixel':project(center,K,D),'inward_face_normal_Camera':inward}
+        # Optional rigid-cube evidence: front corners retain the reprojection
+        # used above; the opposite corners lie 20mm along the inward normal.
+        try:
+            corners=predicted[:]
+            for obj in OBJECT:
+                rp=matvec(R,obj)
+                corners.append(project([rp[i]+t[i]+20*inward[i] for i in range(3)],K,D))
+            if all(math.isfinite(v) for corner in corners for v in corner):
+                pose['cube_projected_corners_px']=corners
+                pose['cube_projection_source']='pose_transform'
+        except (ValueError,ZeroDivisionError,OverflowError):pass
+        result.append(pose)
     return sorted(result,key=lambda v:v['face_reprojection_rms_px'])
 
 
