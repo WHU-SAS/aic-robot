@@ -48,6 +48,11 @@ class TrackingBundleTests(unittest.TestCase):
         self.assertEqual(result['status'],'succeeded')
 
     def test_task_keeps_one_camera_and_uart_until_tracking_finishes(self):
+        for borrowed, interrupted in ((False,False),(True,False),(False,True),(True,True)):
+            with self.subTest(borrowed=borrowed,interrupted=interrupted):
+                self.check_task_camera_ownership(borrowed,interrupted)
+
+    def check_task_camera_ownership(self,borrowed,interrupted):
         app=board_app();config=build_bundle(tracking=True)[0];trace=[]
         camera,link=Mock(),Mock()
         camera.open.side_effect=lambda:trace.append('camera_open')
@@ -57,6 +62,7 @@ class TrackingBundleTests(unittest.TestCase):
         def step():
             trace.append('tracking_step')
             self.assertNotIn('camera_close',trace)
+            if interrupted:raise RuntimeError('tracking interrupted')
             task.status='succeeded'
         task.step.side_effect=step
         task.snapshot.return_value={'status':'succeeded'}
@@ -75,10 +81,27 @@ class TrackingBundleTests(unittest.TestCase):
             'kinematics':SimpleNamespace(Geometry=Mock())}
         with patch.dict(sys.modules,modules),patch.object(app.time,'ticks_ms',lambda:0,create=True),\
              patch.object(app.time,'sleep_ms',Mock(),create=True),patch('builtins.open',mock_open()):
-            result=app.tracking_task(config,ready_dispatched=True)
-        self.assertEqual(result['status'],'succeeded')
-        self.assertEqual(trace,['camera_open','tracking_step','task_close','camera_close','motor_close'])
+            if interrupted:
+                with self.assertRaisesRegex(RuntimeError,'tracking interrupted'):
+                    app.tracking_task(config,ready_dispatched=True,camera=camera if borrowed else None)
+            else:
+                result=app.tracking_task(config,ready_dispatched=True,camera=camera if borrowed else None)
+                self.assertEqual(result['status'],'succeeded')
+        expected=['tracking_step','task_close','motor_close'] if borrowed else [
+            'camera_open','tracking_step','task_close','camera_close','motor_close']
+        self.assertEqual(trace,expected)
+        self.assertEqual(task.metrics.update.call_args.kwargs['camera_reused'],borrowed)
+        self.assertEqual(modules['camera'].CameraSession.call_count,0 if borrowed else 1)
         arm.run_ready.assert_not_called();arm.begin_from_observation.assert_not_called()
+
+    def test_tracking_dispatch_forwards_only_the_prepared_camera_to_new_entry(self):
+        app=board_app();arm=SimpleNamespace(run_ready=Mock());camera=Mock()
+        config={'car':{'tracking_task':{'enabled':True}},'arm':{}}
+        with patch.dict(sys.modules,{'app':arm}),\
+             patch.object(app,'tracking_task',return_value={'status':'succeeded'}) as task:
+            app.dispatch('pick',config,ready_dispatched=True,camera=camera)
+        task.assert_called_once_with(config,True,camera=camera)
+        arm.run_ready.assert_not_called()
 
 
 if __name__=='__main__':unittest.main()

@@ -12,7 +12,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch,mock_open
 from host.project_paths import ROOT
 from tools.deploy import k230_pick as deploy
 
@@ -79,6 +79,40 @@ class VoiceDispatchTests(unittest.TestCase):
                'vision_runtime':__import__('device.k230.vision.runtime',fromlist=['localize_precise'])}
         with patch.dict(sys.modules,mocks):spec.loader.exec_module(module)
         return module
+    def test_log_serializes_once_and_reuses_identical_stdout_and_sd_text(self):
+        app=self.app();details={'phase':'悬停','goals':[2048]*6}
+        record={'event':'planned','ticks_ms':0,'details':details}
+        dumps=json.dumps;expected=dumps(record);writer=mock_open()
+        with patch.object(app.json,'dumps',wraps=dumps) as serialize, \
+             patch('builtins.open',writer),contextlib.redirect_stdout(io.StringIO()) as output:
+            app.log('planned',details)
+        serialize.assert_called_once_with(record)
+        self.assertEqual(output.getvalue(),'AIC_PICK '+expected+'\n')
+        writer.assert_called_once_with('/sdcard/aic/pick/events.jsonl','a')
+        writer().write.assert_called_once_with(expected+'\n')
+
+    def test_log_persist_false_serializes_once_without_opening_sd(self):
+        app=self.app();record={'event':'voice_listening','ticks_ms':0,'details':None}
+        dumps=json.dumps;expected=dumps(record)
+        with patch.object(app.json,'dumps',wraps=dumps) as serialize, \
+             patch('builtins.open',side_effect=AssertionError('No SD writes for transient event')) as writer, \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            app.log('voice_listening',persist=False)
+        serialize.assert_called_once_with(record)
+        writer.assert_not_called()
+        self.assertEqual(output.getvalue(),'AIC_PICK '+expected+'\n')
+
+    def test_log_sd_oserror_retains_stdout_and_log_error_with_one_serialization(self):
+        app=self.app();record={'event':'planned','ticks_ms':0,'details':{'stage':'hover'}}
+        dumps=json.dumps;expected=dumps(record)
+        with patch.object(app.json,'dumps',wraps=dumps) as serialize, \
+             patch('builtins.open',side_effect=OSError('SD unavailable')) as writer, \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            app.log('planned',{'stage':'hover'})
+        serialize.assert_called_once_with(record)
+        writer.assert_called_once_with('/sdcard/aic/pick/events.jsonl','a')
+        self.assertEqual(output.getvalue(),'AIC_PICK '+expected+'\nLOG_ERROR SD unavailable\n')
+
     def test_control_log_interceptor_preserves_both_event_prefixes(self):
         app=self.app()
         with patch.object(app,'log') as log:

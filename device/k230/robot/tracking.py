@@ -113,6 +113,14 @@ class TrackingTask:
         return ((at_observation and self.drive.stopped_at_ms is None) or
                 age_ms(self.clock(), self._last_motor_reply) >= self.stationary_status_period)
 
+    def idle_delay_ms(self):
+        """Stopped background calculation can use its next slice immediately."""
+        if (self.fault is None and self.arm is None and not self.state.get('run') and
+                (self.job is not None or self.planning is not None) and
+                (self.target or {}).get('movement_state') != 'suspected'):
+            return 0
+        return 5
+
     def _fault(self, stage, error):
         reason = '%s: %s' % (stage, error)
         if self.fault != reason:
@@ -256,7 +264,8 @@ class TrackingTask:
             arm_state = self.arm_context(arm_state)
         deltas = self._wheel_delta(self._frame_motor, self.state)
         self._check_chassis_reference()
-        self.target = self.memory.update(self.coarse, deltas, arm_state)
+        self.target = self.memory.update(self.coarse, deltas, arm_state,
+                                         motion_state=self.state)
         if self._parking_version != self.memory.version:
             self.last_parking = None
         if self.planning is not None and (
@@ -570,8 +579,9 @@ def run_tracking(*args, sleep_ms=None, **kwargs):
     try:
         while task.status != 'succeeded':
             task.step()
-            if sleep_ms:
-                sleep_ms(5)
+            delay = task.idle_delay_ms()
+            if sleep_ms and delay:
+                sleep_ms(delay)
         return task.snapshot()
     finally:
         task.close()

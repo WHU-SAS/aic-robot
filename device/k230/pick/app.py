@@ -28,16 +28,17 @@ def load(root):
 
 def log(event,details=None,persist=True):
     record={'event':event,'ticks_ms':time.ticks_ms(),'details':details}
-    print('AIC_PICK '+json.dumps(record))
+    text=json.dumps(record)
+    print('AIC_PICK '+text)
     if not persist:return
     try:
-        with open('/sdcard/aic/pick/events.jsonl','a') as f:f.write(json.dumps(record)+'\n')
+        with open('/sdcard/aic/pick/events.jsonl','a') as f:f.write(text+'\n')
     except OSError as exc:print('LOG_ERROR '+str(exc))
 
 
 def wait_for_wake(config,warmup_chunks=32,on_command=None):
-    # Release audio stream and KWS before camera/media initialization. A fresh
-    # engine after each pick discards buffered audio and repeated wake events.
+    # Release this round's audio/KWS; a fresh engine avoids old audio/queued wakes.
+    # Standalone opens the camera after return; tracking may keep it open.
     from wake_word import engine,CHUNK
     from media.pyaudio import PyAudio,paInt16
     eng=audio=stream=None

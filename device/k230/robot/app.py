@@ -1,6 +1,7 @@
 """Standalone voice entry: continuous approach, park, then grasp the same target.
 
-Boot only listens. The ready command sends pose1; pick wake first sends pose2.
+Tracking boot prepares its camera, then listens without actuator motion.
+The ready command sends pose1; pick wake first sends pose2.
 Successful execution ends at lift/holding; no automatic release, return or PID writes.
 """
 import gc
@@ -72,8 +73,8 @@ def archive(config, frames, status, error=None):
             'archive_complete':saved['archive_complete']}
 
 
-def tracking_task(config, ready_dispatched=False):
-    """Candidate continuous task; keep one camera through parking and grasp."""
+def tracking_task(config, ready_dispatched=False, camera=None):
+    """Keep one camera through parking/grasp; the voice owner may lend it."""
     entered_at = time.ticks_ms()
     import app as arm
     from ground_projection import GroundProjection
@@ -92,7 +93,9 @@ def tracking_task(config, ready_dispatched=False):
     projection = GroundProjection(model['K'], model['D'], model['T'], model['plane'],
         model.get('forward_axis_Base'), model.get('motion_origin_Base_mm'))
     tracker = BlueTracker(car['tracking'], projection)
-    camera = CameraSession(car['vision'])
+    owns_camera = camera is None
+    if owns_camera:
+        camera = CameraSession(car['vision'])
     link = task = None
     frames, result = [], None
     geometry = Geometry(config['arm']['model'], config['arm']['pick'], 0)
@@ -121,9 +124,11 @@ def tracking_task(config, ready_dispatched=False):
         return dict(state, held_center_pixel=projection.base_to_pixel([p*1000 for p in midpoint]))
     try:
         link = MotorLink()
-        camera_started_at = time.ticks_ms()
-        camera.open()
-        camera_ready_at = time.ticks_ms()
+        camera_started_at = camera_ready_at = None
+        if owns_camera:
+            camera_started_at = time.ticks_ms()
+            camera.open()
+            camera_ready_at = time.ticks_ms()
         task = TrackingTask(capture,
             lambda image, frame:track_coarse(image, frame, tracker.detect_frame),
             link, projection, car, time.ticks_ms,
@@ -133,12 +138,15 @@ def tracking_task(config, ready_dispatched=False):
             reset_tracker=tracker.reset)
         task.metrics.update(task_entered_at_ms=entered_at,
             camera_started_at_ms=camera_started_at, camera_ready_at_ms=camera_ready_at,
-            camera_open_ms=age_ms(camera_ready_at, camera_started_at),
+            camera_open_ms=age_ms(camera_ready_at, camera_started_at) if owns_camera else 0,
+            camera_reused=not owns_camera,
             task_setup_ms=age_ms(time.ticks_ms(), entered_at))
         task.arm_context = held_context
         while task.status != 'succeeded':
             task.step()
-            time.sleep_ms(5)
+            delay = task.idle_delay_ms()
+            if delay:
+                time.sleep_ms(delay)
         result = task.snapshot()
         return result
     finally:
@@ -147,7 +155,8 @@ def tracking_task(config, ready_dispatched=False):
                 task.close()
         finally:
             try:
-                camera.close()
+                if owns_camera:
+                    camera.close()
             finally:
                 if link is not None:
                     link.close()
@@ -168,7 +177,7 @@ def tracking_task(config, ready_dispatched=False):
             emit('log_error',{'error':str(exc)})
 
 
-def dispatch(action, config, ready_dispatched=False):
+def dispatch(action, config, ready_dispatched=False, camera=None):
     import app as arm
     if action == 'ready':
         if not ready_dispatched:arm.run_ready(config['arm'])
@@ -176,6 +185,8 @@ def dispatch(action, config, ready_dispatched=False):
     if action != 'pick':
         raise ValueError('Unknown robot voice action: ' + str(action))
     if config['car'].get('tracking_task', {}).get('enabled'):
+        if camera is not None:
+            return tracking_task(config, ready_dispatched, camera=camera)
         return tracking_task(config, ready_dispatched)
     from robot_task import execute_task
     if not ready_dispatched:arm.run_ready(config['arm'],pose=2,immediate=True)
@@ -224,17 +235,39 @@ def run_forever(root):
                         'ready_command':'回准备位', 'startup_motion':False,
                         'ready_command_pose':1,'pick_wake_response_pose':2,
                         'wait_for_ready_arrival':False})
-    warmup = 32
-    while True:
-        response,respond = arm.make_wake_response(config['arm'])
-        action = arm.wait_for_wake(config['voice'], warmup,on_command=respond)
-        warmup = 0
-        try:
-            if response['error'] is not None:raise response['error']
-            result = dispatch(action, config,ready_dispatched=response['sent'])
-            emit('task_finished', {'status':result['status'],'grasp_confirmed':result.get('grasp_confirmed'),
-                                   'grip_confirmation':result.get('grip_confirmation')})
-        except Exception as exc:
-            emit('task_error', {'error':str(exc)})
-        finally:
-            gc.collect()
+    camera = None
+    try:
+        if config.get('car', {}).get('tracking_task', {}).get('enabled'):
+            from camera import CameraSession
+            camera = CameraSession(config['car']['vision'])
+            started = time.ticks_ms()
+            try:
+                # Keep the accepted exposure warmup, before listening rather
+                # than after each wake. Audio owns only its streams/KWS engine.
+                camera.open()
+                emit('camera_prepared', {'camera_open_ms':time.ticks_diff(time.ticks_ms(),started),
+                                         'reused_between_tasks':True})
+            except Exception as exc:
+                camera.close()
+                camera = None
+                emit('camera_prepare_error', {'error':str(exc)})
+        warmup = 32
+        while True:
+            response,respond = arm.make_wake_response(config['arm'])
+            action = arm.wait_for_wake(config['voice'], warmup,on_command=respond)
+            warmup = 0
+            try:
+                if response['error'] is not None:raise response['error']
+                if camera is None:
+                    result = dispatch(action, config,ready_dispatched=response['sent'])
+                else:
+                    result = dispatch(action, config,ready_dispatched=response['sent'],camera=camera)
+                emit('task_finished', {'status':result['status'],'grasp_confirmed':result.get('grasp_confirmed'),
+                                       'grip_confirmation':result.get('grip_confirmation')})
+            except Exception as exc:
+                emit('task_error', {'error':str(exc)})
+            finally:
+                gc.collect()
+    finally:
+        if camera is not None:
+            camera.close()

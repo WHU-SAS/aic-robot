@@ -221,6 +221,140 @@ class TargetMemoryTests(unittest.TestCase):
             self.assertEqual(state['version'],0,state)
             self.assertNotEqual(state['movement_state'],'suspected')
 
+    def test_arc_wheel_model_moving65px_with_nearly_fixed_image_is_not_target_motion(self):
+        self.seed()
+        # Real run7466: an ARC's nominal axle model moved the expected box
+        # about65px while the observed blue box barely moved. Wheel travel is
+        # real feedback, not proof of the body pose or external target motion.
+        for unused in range(8):
+            state=self.memory.update(self.coarse(),[(0,13)],motion_state={'run':1})
+            self.assertEqual(state['version'],0)
+            self.assertEqual(state['movement_state'],'consistent')
+            self.assertTrue(state['motion_model_uncertain'])
+            self.assertFalse(state['needs_precise'])
+            self.assertTrue(state['anchor_valid'])
+        # Do not carry the preceding ego-model residual into the first
+        # stationary frames and then interrupt the final fine verification.
+        for unused in range(4):
+            state=self.memory.update(self.coarse(),motion_state={'run':0})
+            self.assertEqual(state['version'],0)
+            self.assertFalse(state['motion_model_uncertain'])
+            self.assertFalse(state['needs_precise'])
+
+    def test_field_arc_counts_and_box_expose_model_error_in_current_calibration(self):
+        from tools.deploy.k230_car_align import build_bundle
+        from device.k230.car.ground_projection import GroundProjection
+        config=build_bundle(near_parking=True)[0];p=config['projection']
+        self.projection=GroundProjection(p['K'],p['D'],p['T'],p['plane'],
+            p['forward_axis_Base'],p['motion_origin_Base_mm'])
+        self.memory=TargetMemory(self.projection,config)
+        # 7466 ARC: a42421->42947, b-38066->-38074; observed box
+        # [581,565,182,289] barely changed. The calibrated wheel model predicts
+        # 63.6px. This ray supplies a coarse proxy, not measured fine truth.
+        box=[581,565,182,289];pixel=[672,709.5]
+        def observation():
+            value=self.visual(self.projection.pixel_to_plane(pixel,0),
+                              bbox_px=box,center_pixel=pixel)
+            value.update(bbox_px=box,center_pixel=pixel)
+            return value
+        initial=observation();self.memory.update(initial)
+        self.memory.bind_precise(self.precise(initial,
+            self.projection.pixel_to_plane(pixel,10)),initial,0)
+        scale=config['mm_per_count']
+        first=self.memory.update(observation(),[(526*scale,8*scale)],motion_state={'run':1})
+        self.assertGreater(first['residual_px'],60)
+        self.assertTrue(first['motion_model_uncertain'])
+        second=self.memory.update(observation(),motion_state={'run':1})
+        self.assertEqual(second['version'],0)
+        self.assertFalse(second['needs_precise'])
+        self.assertEqual(second['movement_state'],'consistent')
+
+    def test_wheel_increments_still_mean_motion_when_status_has_just_stopped(self):
+        self.seed()
+        for unused in range(3):
+            state=self.memory.update(self.coarse(),[(0,13)],motion_state={'run':0})
+            self.assertEqual(state['version'],0)
+            self.assertTrue(state['motion_model_uncertain'])
+            self.assertNotEqual(state['movement_state'],'suspected')
+
+    def test_commanded_motion_does_not_need_encoder_counts_to_enter_motion_policy(self):
+        self.seed()
+        # A stalled/quantized/weak drive may report no increment. The car is
+        # still in its motion phase and slow image changes are not independent
+        # proof that the human moved the cube.
+        for index in range(1,10):
+            state=self.memory.update(self.coarse((500,30+4*index,0)),
+                                     motion_state={'run':1})
+            self.assertEqual(state['version'],0)
+            self.assertEqual(state['movement_state'],'consistent')
+            self.assertFalse(state['needs_precise'])
+        # The mandatory stopped fine pose, rather than an ideal wheel model,
+        # resolves a possible slow displacement in the field of view.
+        current=self.coarse((500,66,0))
+        self.memory.update(current,motion_state={'run':0})
+        fine=self.precise(current,(490,71,10))
+        self.assertTrue(self.memory.bind_precise(fine,current,0))
+        self.assertEqual(self.memory.last_precise['cube_center_Base_mm'],[490,71,10])
+
+    def test_observed_image_jump_during_motion_still_invalidates_inflight_fine(self):
+        coarse,fine=self.seed()
+        first=self.memory.update(self.visual((500,330,0),associated=False,
+            reason='unassociated_blue'),motion_state={'run':1})
+        self.assertEqual(first['event'],'suspected')
+        self.assertEqual(first['version'],0)
+        second=self.memory.update(self.visual((500,340,0),associated=False,
+            reason='unassociated_blue'),motion_state={'run':1})
+        self.assertTrue(second['confirmed_moved'])
+        self.assertEqual(second['reason'],'visual_discontinuity')
+        self.assertEqual(second['version'],1)
+        self.assertFalse(self.memory.bind_precise(fine,coarse,0))
+
+    def test_moving_visual_jump_can_be_confirmed_on_first_stationary_frame(self):
+        self.seed()
+        self.memory.update(self.visual((500,330,0)),motion_state={'run':1})
+        state=self.memory.update(self.visual((500,340,0)),motion_state={'run':0})
+        self.assertEqual(state['version'],1)
+        self.assertEqual(state['reason'],'visual_discontinuity')
+
+    def test_moving_single_frame_jump_and_return_do_not_create_a_new_target(self):
+        self.seed()
+        self.memory.update(self.visual((500,330,0)),motion_state={'run':1})
+        for unused in range(4):
+            state=self.memory.update(self.coarse(),motion_state={'run':1})
+            self.assertEqual(state['version'],0)
+            self.assertFalse(state['needs_precise'])
+        self.assertEqual(state['movement_state'],'consistent')
+
+    def test_moving_colour_region_growth_is_not_an_independent_position_jump(self):
+        self.seed()
+        for unused in range(3):
+            state=self.memory.update(self.visual((500,330,0),
+                bbox_px=[890,490,160,60]),motion_state={'run':1})
+            self.assertEqual(state['version'],0)
+            self.assertNotEqual(state['event'],'suspected')
+            self.assertFalse(state['needs_precise'])
+
+    def test_unknown_and_shape_discontinuity_do_not_confirm_a_moving_visual_jump(self):
+        self.seed()
+        self.memory.update(self.visual((500,330,0)),motion_state={'run':1})
+        self.memory.update(self.absent(),motion_state={'run':1})
+        state=self.memory.update(self.visual((500,330,0)),motion_state={'run':1})
+        self.assertEqual(state['version'],0)
+        # The other side of a gap has no same-frame identity proof; a large
+        # aspect/size change alone is not a confirmed new object position.
+        state=self.memory.update(self.visual((500,-330,0),bbox_px=[250,400,4,4]),
+                                 motion_state={'run':1})
+        self.assertEqual(state['version'],0)
+
+    def test_moving_target_explicitly_leaving_view_still_invalidates(self):
+        coarse,fine=self.seed()
+        self.memory.update(self.visual((500,-600,0),distance_valid=False,
+            edge_directions=['left']),motion_state={'run':1})
+        state=self.memory.update(self.absent(),motion_state={'run':1})
+        self.assertEqual(state['event'],'exited')
+        self.assertEqual(state['version'],1)
+        self.assertFalse(self.memory.bind_precise(fine,coarse,0))
+
     def test_observable_slow_whole_box_translation_accumulates_in_short_window(self):
         self.seed()
         moved=False

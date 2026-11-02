@@ -37,7 +37,11 @@ class Geometry:
         ts=self.transforms(q);pts={};lows={}
         for link in ('wan2','zhua'):
             t=ts[link];pts[link]=transform(t,self.points[link]['tip'])
-            lows[link]=min(dot(t[2][:3],v)+t[2][3] for v in self.points[link]['hull'])
+            nx,ny,nz=t[2][:3];height=t[2][3]
+            # Same vertices and summation order; avoid a slice, zip and Python
+            # dot call for each of the935 gripper hull vertices.
+            lows[link]=min(sum((nx*v[0],ny*v[1],nz*v[2]))+height
+                           for v in self.points[link]['hull'])
         return [(a+b)/2 for a,b in zip(pts['wan2'],pts['zhua'])],pts,lows,ts
     def alignment_midpoint(self,q):
         q=list(q);q[5]=self.open_angle;mid,pts,low,t=self.metrics(q)

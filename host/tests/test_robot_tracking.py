@@ -2,8 +2,9 @@
 import copy
 import json
 import unittest
+from unittest.mock import Mock, patch
 from host.project_paths import ROOT
-from device.k230.robot.tracking import TrackingTask, ReobserveRequired
+from device.k230.robot.tracking import TrackingTask, ReobserveRequired, run_tracking
 from device.k230.arm.pick_execution import PickExecution
 from device.k230.car.ground_projection import GroundProjection
 from device.k230.car.near_control import target_x
@@ -237,6 +238,27 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertEqual(result['metrics']['arm_attempts'],1)
         self.assertLessEqual(result['metrics']['max_observation_gap_ms'],275)
         self.assertLessEqual(len(self.task.evidence),2)
+
+    def test_running_chassis_model_disagreement_does_not_cancel_fixed_target(self):
+        self.task._observe(force_status=True)
+        version = self.task.memory.version
+        self.motor.run = 1
+        # Real failed ARC increments: the image stayed still while wheel
+        # odometry predicted a large yaw. Exercise coordinator STATUS wiring.
+        self.motor.a += 526
+        self.motor.b -= 8
+        self.clock.advance(100)
+        self.task._observe(force_status=True)
+        self.assertEqual(self.task.memory.version, version)
+        self.assertTrue(self.task.target['motion_model_uncertain'])
+        self.assertEqual(self.task.metrics['target_changes'], 0)
+        self.motor.run = 0
+        for unused in range(4):
+            self.clock.advance(250)
+            self.task._observe(force_status=True)
+        self.assertEqual(self.task.memory.version, version)
+        self.assertEqual(self.task.metrics['target_changes'], 0)
+        self.assertNotEqual(self.task.target['movement_state'], 'suspected')
 
     def test_brief_unknown_during_static_compute_reuses_original_image(self):
         original=self.task.track
@@ -597,7 +619,7 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertEqual(result['metrics']['planning_steps'],1001)
         self.assertLessEqual(result['metrics']['max_observation_gap_ms'],275)
 
-    def _timed_prehover_run(self,stationary_period,status_period):
+    def _timed_prehover_run(self,stationary_period,status_period,adaptive_idle=False):
         self.setUp()
         self.task.stationary_period=stationary_period
         self.task.stationary_status_period=status_period
@@ -614,7 +636,8 @@ class RobotTrackingTests(unittest.TestCase):
                    'frame_id':observation['frame_id'],'execution':original(observation,version)}
         self.task.begin_arm=plan
         for unused in range(2000):
-            self.tick()
+            self.task.step()
+            self.clock.advance(self.task.idle_delay_ms() if adaptive_idle else 5)
             goals=[event for arm in self.arms for event in arm.io.events if event[0]=='goals']
             if goals:
                 at=goals[0][1]
@@ -642,6 +665,76 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertTrue(all(row['motor_received']>=row['at'] for row in critical))
         self.assertEqual(new['target_changes'],0)
         self.costed_comparison={'old':old,'new':new}
+
+    def test_idle_delay_skips_only_progressing_stopped_background_work(self):
+        self.assertEqual(self.task.idle_delay_ms(),5)
+        self.task.job={'purpose':'static'}
+        self.task.target={'movement_state':'consistent'}
+        self.assertEqual(self.task.idle_delay_ms(),0)
+        self.task.job=None;self.task.planning={'iterator':iter(())}
+        self.assertEqual(self.task.idle_delay_ms(),0)
+        self.task.target['movement_state']='unknown'
+        self.assertEqual(self.task.idle_delay_ms(),0)
+        for attribute,value in (('fault','IO wait'),('arm',object()),('state',{'run':1}),
+                                ('target',{'movement_state':'suspected'})):
+            with self.subTest(attribute=attribute):
+                previous=getattr(self.task,attribute)
+                setattr(self.task,attribute,value)
+                self.assertEqual(self.task.idle_delay_ms(),5)
+                setattr(self.task,attribute,previous)
+        self.task.planning=None;self.task.complete={'purpose':'static'}
+        self.assertEqual(self.task.idle_delay_ms(),5)
+
+    def test_stopped_compute_skips_slice_sleeps_but_keeps_both_fresh_checks(self):
+        fixed=self._timed_prehover_run(250,500)
+        active=self._timed_prehover_run(250,500,adaptive_idle=True)
+        self.assertLess(active['first_goal_at'],fixed['first_goal_at'])
+        for key in ('completing','before_arm'):
+            fresh=[row for row in active['observations'] if row[key]]
+            self.assertTrue(fresh,key)
+            self.assertTrue(all(row['motor_received']>=row['at'] for row in fresh))
+        self.assertEqual(active['target_changes'],0)
+
+    def test_run_tracking_uses_idle_delay_without_zero_sleep_calls(self):
+        task=Mock(status='running')
+        calls=[]
+        def step():
+            calls.append('step')
+            if len(calls)==3:task.status='succeeded'
+        task.step.side_effect=step
+        task.idle_delay_ms.side_effect=[0,5,5]
+        task.snapshot.return_value={'status':'succeeded'}
+        sleep=Mock()
+        with patch('device.k230.robot.tracking.TrackingTask',return_value=task):
+            self.assertEqual(run_tracking(sleep_ms=sleep),{'status':'succeeded'})
+        self.assertEqual([call.args[0] for call in sleep.call_args_list],[5,5])
+        task.close.assert_called_once()
+
+    def test_adaptive_idle_still_observes_motion_and_unknown_before_first_hover(self):
+        original=self.task.begin_arm
+        hidden=[]
+        track=self.task.track
+        def observe(point,frame):
+            if self.task.planning is not None and not hidden:
+                self.hide_frames=1;hidden.append(frame['frame_id'])
+            return track(point,frame)
+        def plan(observation,version):
+            for unused in range(200):
+                self.clock.advance(2)
+                yield {'stage':'candidate','target_version':version}
+            yield {'stage':'complete','target_version':version,'frame_id':observation['frame_id'],
+                   'execution':original(observation,version)}
+        self.task.track=observe;self.task.begin_arm=plan
+        self.move_when=lambda:self.task.planning is not None
+        for unused in range(1800):
+            self.task.step()
+            self.clock.advance(self.task.idle_delay_ms())
+            if self.task.status=='succeeded':break
+        self.assertTrue(hidden)
+        self.assertEqual(self.task.status,'succeeded',self.task.snapshot())
+        self.assertGreaterEqual(self.task.metrics['target_changes'],1)
+        self.assertFalse(any(event[0]=='goals' for event in self.arms[0].io.events))
+        self.assertTrue(any(version>0 for stamp,observation,version in self.handoffs))
 
     def test_motion_and_moving_fine_keep_original_camera_and_status_cadence(self):
         self.x=650

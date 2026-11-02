@@ -318,11 +318,13 @@ class DriveController:
         self.parking = None
         if verdict['status'] == 'not_parked':
             self._bind_anchor(observation, paired)
-            if request and request['initial']:
-                plan = self._near_plan(coarse_plan, now)
-                if plan['status'] == 'follow':
-                    self.phase = 'following'
-                    return None
+            plan = self._near_plan(coarse_plan, now)
+            if (plan['status'] == 'follow' and
+                    not verdict['window']['longitudinal_allowed']):
+                if not request['initial']:
+                    self.corrections += 1
+                self.phase = 'following'
+                return None
             correction = correction_plan(verdict, self.projection,
                                          self.config['workspace'], self.near)
             if correction.get('status') == 'arc':

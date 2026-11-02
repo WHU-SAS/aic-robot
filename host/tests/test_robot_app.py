@@ -117,6 +117,82 @@ class RobotAppTests(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt):board.run_forever('/release')
         ready.assert_not_called();task.assert_not_called()
 
+    def test_tracking_prepares_camera_once_before_listening_and_lends_across_tasks(self):
+        board=app();arm=arm_app();camera=Mock();trace=[];waits=[]
+        camera.open.side_effect=lambda:trace.append('camera_open')
+        camera.close.side_effect=lambda:trace.append('camera_close')
+        config={'arm':{},'voice':{},'car':{'vision':{'sampling':{'warmup_frames':30}},
+            'tracking_task':{'enabled':True}}}
+        def wait(voice,warmup,on_command):
+            waits.append(warmup);trace.append('voice')
+            if len(waits)>3:raise KeyboardInterrupt()
+            on_command('pick');return 'pick'
+        def dispatch(action,actual,ready_dispatched=False,camera=None):
+            self.assertIs(actual,config);self.assertIs(camera,prepared)
+            self.assertTrue(ready_dispatched)
+            trace.append('task')
+            if len(waits)==2:raise ValueError('retry scene')
+            return {'status':'succeeded'}
+        prepared=camera
+        factory=Mock(return_value=camera)
+        with patch.dict(sys.modules,{'app':arm,'camera':SimpleNamespace(CameraSession=factory)}),\
+             patch.object(arm,'wait_for_wake',side_effect=wait),patch.object(arm,'run_ready') as ready,\
+             patch.object(board,'load',return_value=config),patch.object(board,'emit'),\
+             patch.object(board,'dispatch',side_effect=dispatch),\
+             patch.object(board.time,'ticks_ms',lambda:0,create=True),\
+             patch.object(board.time,'ticks_diff',lambda a,b:a-b,create=True):
+            with self.assertRaises(KeyboardInterrupt):board.run_forever('/release')
+        factory.assert_called_once_with(config['car']['vision'])
+        camera.open.assert_called_once();camera.close.assert_called_once()
+        self.assertEqual(trace,['camera_open','voice','task','voice','task','voice','task',
+                                'voice','camera_close'])
+        self.assertEqual(waits,[32,0,0,0]);self.assertEqual(ready.call_count,3)
+
+    def test_failed_camera_preparation_retains_voice_and_original_task_open_path(self):
+        board=app();arm=arm_app();camera=Mock();waits=[]
+        camera.open.side_effect=ValueError('camera unavailable')
+        config={'arm':{},'voice':{},'car':{'vision':{},'tracking_task':{'enabled':True}}}
+        def wait(voice,warmup,on_command):
+            waits.append(warmup)
+            if len(waits)>1:raise KeyboardInterrupt()
+            on_command('pick');return 'pick'
+        with patch.dict(sys.modules,{'app':arm,'camera':SimpleNamespace(CameraSession=lambda cfg:camera)}),\
+             patch.object(arm,'wait_for_wake',side_effect=wait),patch.object(arm,'run_ready'),\
+             patch.object(board,'load',return_value=config),patch.object(board,'emit') as emit,\
+             patch.object(board,'dispatch',return_value={'status':'succeeded'}) as task,\
+             patch.object(board.time,'ticks_ms',lambda:0,create=True):
+            with self.assertRaises(KeyboardInterrupt):board.run_forever('/release')
+        camera.close.assert_called_once()
+        task.assert_called_once_with('pick',config,ready_dispatched=True)
+        emit.assert_any_call('camera_prepare_error',{'error':'camera unavailable'})
+
+    def test_tracking_loop_uses_task_idle_delay_and_keeps_waiting_sleeps(self):
+        board=app();camera=Mock();task=Mock(status='running');steps=[]
+        def step():
+            steps.append(True)
+            if len(steps)==3:task.status='succeeded'
+        task.step.side_effect=step
+        task.idle_delay_ms.side_effect=[0,5,5]
+        task.snapshot.return_value={'status':'succeeded'}
+        modules={'app':SimpleNamespace(),
+            'ground_projection':SimpleNamespace(GroundProjection=Mock()),
+            'camera':SimpleNamespace(CameraSession=Mock()),
+            'motor_link':SimpleNamespace(MotorLink=Mock()),
+            'blue_tracker':SimpleNamespace(BlueTracker=Mock(),age_ms=lambda a,b:a-b),
+            'vision_runtime':SimpleNamespace(track_coarse=Mock()),
+            'physical_side_session':SimpleNamespace(FineSession=Mock()),
+            'cooperative_static_session':SimpleNamespace(CooperativeStaticPickSession=Mock()),
+            'robot_tracking':SimpleNamespace(TrackingTask=Mock(return_value=task),ReobserveRequired=ValueError),
+            'kinematics':SimpleNamespace(Geometry=Mock())}
+        config={'arm':{'model':{},'pick':{}},'car':{'projection':dict(K=[],D=[],T=[],plane={}),
+            'tracking':{},'vision':{},'tracking_task':{'period_ms':100}}}
+        with patch.dict(sys.modules,modules),patch.object(board.time,'ticks_ms',lambda:0,create=True),\
+             patch.object(board.time,'sleep_ms',Mock(),create=True) as sleep,\
+             patch('builtins.open',mock_open()):
+            board.tracking_task(config,ready_dispatched=True,camera=camera)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list],[5,5])
+        task.close.assert_called_once();camera.open.assert_not_called();camera.close.assert_not_called()
+
     def test_failed_voice_response_cleans_audio_and_never_enters_car_dispatch(self):
         board=app();arm=arm_app();trace=[];waits=[]
         def wait(config,warmup,on_command):

@@ -89,6 +89,119 @@ class TrackingDriveTests(unittest.TestCase):
         self.assertEqual(result['phase'],'following')
         self.assertFalse(result['allow_arm'])
 
+    def test_stopped_recheck_with_forward_gap_resumes_the_continuous_curve(self):
+        self.update(1000)
+        self.update(1100,450,run=True)
+        self.update(1200,443,run=True,travel=7,
+                    precise=self.precise(1100,400,'moving'))
+        result=self.update(1300,self.target+80,run=True,travel=160)
+        self.assertEqual(result['command'],'STOP')
+        self.update(1400,self.target+80,travel=160,reason=1)
+        result=self.update(1450,self.target+80,travel=160,reason=1)
+        self.assertEqual(result['request_fine'],'static')
+        self.assertFalse(self.drive._fine_request['initial'])
+        # Actual verification can reveal that the nominal wheel prediction
+        # stopped early. The new real image, not that old prediction, owns it.
+        result=self.update(1550,self.target+80,travel=160,reason=1,
+            precise=self.precise(1450,self.target+80))
+        self.assertEqual(result['command'],'FOLLOW,70,70')
+        self.assertEqual(result['corrections'],1)
+        self.assertFalse(result['allow_arm'])
+
+    def test_forward_recheck_runs_to_one_final_photo_in_an_independent_world_plant(self):
+        self.update(1000);self.update(1100,450,run=True)
+        self.update(1200,443,run=True,travel=7,
+                    precise=self.precise(1100,400,'moving'))
+        self.update(1300,self.target+80,run=True,travel=160)
+        self.update(1400,self.target+80,travel=160,reason=1)
+        self.update(1450,self.target+80,travel=160,reason=1)
+        complete=self.precise(1450,self.target+80)
+        plant=PlanarPlant(self.point(self.target+80),self.projection.normal,
+            self.config['track_width_mm'],self.projection.forward_axis_Base,
+            self.projection.motion_origin_Base_mm)
+        plant.vl=plant.vr=0
+        left=right=160.;desired=(0,0);running=False;reason=1
+        job=None;requests=[];stops=0;stopped_ms=0;cruise_samples=0
+        for index in range(150):
+            now=1550+index*100;point=plant.center()
+            coarse=self.coarse(now,point[0])
+            coarse['center_pixel']=self.projection.base_to_pixel(point)
+            coarse['ground_contact_proxy_Base_mm']=[
+                point[k]-10*self.projection.normal[k] for k in range(3)]
+            if job is not None and now>=job['result_ready_ms']:
+                complete=job;job=None
+            result=self.drive.update(coarse,self.state(now,running,left,right,reason),now,
+                precise=complete,target_version=1,fine_pending=job is not None)
+            complete=None
+            if result['allow_arm']:
+                self.assertEqual(requests,['static'])
+                self.assertEqual(stops,1)
+                self.assertGreaterEqual(cruise_samples,3)
+                self.assertTrue(result['parking']['verification']['accepted'])
+                return
+            command=result['command']
+            if command:
+                fields=command.split(',');name=fields[0]
+                self.assertIn(name,('FOLLOW','SPEED','STOP'),result)
+                if name in ('FOLLOW','SPEED'):
+                    desired=tuple(map(int,fields[1:]));running=True;reason=0
+                    if point[0]-self.target>36:
+                        self.assertAlmostEqual(sum(desired)/2,70,delta=1)
+                        cruise_samples+=1
+                else:
+                    stops+=1;running=False;reason=1;desired=(0,0);stopped_ms=0
+            if result['request_fine']:
+                self.assertFalse(running)
+                purpose=result['request_fine'];requests.append(purpose)
+                job=self.precise(now,point[0],purpose)
+                job['observation']['cube_center_Base_mm']=list(point)
+                job['paired_coarse']=coarse;job['request_id']=result['fine_request_id']
+                job['result_ready_ms']=now+800
+            for unused in range(10):
+                if running:
+                    dl,dr=plant.step(desired[0],desired[1],.01)
+                else:
+                    stopped_ms+=10;damping=math.exp(-.01/.12)
+                    plant.vl*=damping;plant.vr*=damping
+                    if stopped_ms>=500:plant.vl=plant.vr=0
+                    dl,dr=plant.advance(.01)
+                left+=dl;right+=dr
+        self.fail({'decision':result,'point':plant.center(),'requests':requests})
+
+    def test_lateral_only_recheck_does_not_add_a_tiny_forward_stop(self):
+        for offset in (20,40):
+            with self.subTest(offset=offset):
+                self.setUp();self.update(1000);self.update(1100,450,run=True)
+                self.update(1200,443,run=True,travel=7,
+                    precise=self.precise(1100,400,'moving'))
+                x=self.target+1
+                self.update(1300,x,run=True,travel=160)
+                self.update(1400,x,travel=160,reason=1)
+                self.update(1450,x,travel=160,reason=1)
+                complete=self.precise(1450,x)
+                complete['observation']['cube_center_Base_mm']=self.point(x,offset)
+                complete['paired_coarse']=self.coarse(1450,x,offset)
+                result=self.update(1550,x,travel=160,reason=1,
+                    coarse=self.coarse(1550,x,offset),precise=complete)
+                self.assertEqual(result['phase'],'correcting')
+                self.assertTrue(result['command'].startswith('ARC,'),result)
+                left,right=map(int,result['command'].split(',')[1:])
+                self.assertLess(left,0);self.assertGreater(right,0)
+                self.assertEqual(result['corrections'],1)
+                self.assertFalse(result['allow_arm'])
+
+    def test_initial_lateral_only_offset_uses_one_arc_instead_of_a_tiny_forward_stop(self):
+        for offset in (20,40):
+            with self.subTest(offset=offset):
+                self.setUp();x=self.target+1;self.request_static(x=x)
+                complete=self.precise(1050,x)
+                complete['observation']['cube_center_Base_mm']=self.point(x,offset)
+                complete['paired_coarse']=self.coarse(1050,x,offset)
+                result=self.update(1150,x,coarse=self.coarse(1150,x,offset),precise=complete)
+                self.assertTrue(result['command'].startswith('ARC,'),result)
+                self.assertEqual(result['corrections'],1)
+                self.assertFalse(result['allow_arm'])
+
     def test_moving_fine_does_not_slow_cruise_and_corrects_heading_baseline(self):
         self.update(1000)
         result = self.update(1100,450,run=True)
