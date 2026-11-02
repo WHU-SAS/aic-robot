@@ -293,27 +293,48 @@ def localize(im,K,D,T,table_plane=None):
 
 
 def _localize_legacy(im,K,D,T,table_plane=None):
+    # Synchronous compatibility entry drains the exact same candidate sequence.
+    steps=_localize_legacy_steps(im,K,D,T,table_plane)
+    try:
+        for step in steps:
+            if step['stage']=='complete':return step['result']
+    finally:_close_localize_steps(steps)
+    raise RuntimeError('Legacy localization ended without a result')
+
+
+def _localize_legacy_steps(im,K,D,T,table_plane=None):
     if im.shape[:2]!=(960,1280):raise ValueError('Expected 1280x960 BGR frame')
     hsv=cv2.cvtColor(im,cv2.COLOR_BGR2HSV)
     table=table_context(T,table_plane)
+    yield {'stage':'legacy_hsv'}
     direct=fast_sides(im,K,D,hsv,table)
+    yield {'stage':'legacy_direct_sides'}
     if direct is not None:
         center=direct['poses'][0]['cube_center_Camera_mm']
         direct['cube_center_Camera_mm']=center
         direct['cube_center_Base_mm']=[sum(T[i][j]*center[j] for j in range(3))+T[i][3] for i in range(3)]
-        return direct
-    result=basic_face(hsv,K,D) or dim_face(hsv,K,D)
+        yield {'stage':'complete','result':direct}
+        return
+    result=basic_face(hsv,K,D)
+    yield {'stage':'legacy_basic_face'}
+    if not result:
+        result=dim_face(hsv,K,D)
+        yield {'stage':'legacy_dim_face'}
     initial=result
     selected=prefer_sides(im,K,D,result,table)
+    yield {'stage':'legacy_prefer_sides'}
     if selected is not None:
         center=selected['poses'][0]['cube_center_Camera_mm']
         selected['cube_center_Camera_mm']=center
         selected['cube_center_Base_mm']=[sum(T[i][j]*center[j] for j in range(3))+T[i][3] for i in range(3)]
-        return selected
+        yield {'stage':'complete','result':selected}
+        return
     if result is not None and shallow_face(result['face_quad_px']):
         side=split_face(hsv,K,D)
+        yield {'stage':'legacy_split_side'}
         if side is None or not adjacent_side(result['face_quad_px'],side['face_quad_px']):
             independent=independent_adjacent_side(im,K,D,result['face_quad_px'])
+            yield {'stage':'legacy_adjacent_side'}
             if independent is not None:side=independent
         if side is not None and adjacent_side(result['face_quad_px'],side['face_quad_px']):
             side['preferred_over_top']={'face_quad_px':result['face_quad_px'],
@@ -321,8 +342,10 @@ def _localize_legacy(im,K,D,T,table_plane=None):
                 'reason':'Verified adjacent physical side has larger image extent than bright top'}
             result=side
     evidence=internal_seam(hsv,result['face_quad_px']) if result and 'preferred_over_top' not in result else None
+    yield {'stage':'legacy_internal_seam'}
     if evidence is not None:
         whole=result;separated=split_face(hsv,K,D)
+        yield {'stage':'legacy_separate_outline'}
         result=separated if separated and separated_face_inside(whole['face_quad_px'],separated['face_quad_px']) else None
         if result is not None:
             result['rejected_multiface_outline']={'boundary_method':whole['boundary_method'],
@@ -330,23 +353,101 @@ def _localize_legacy(im,K,D,T,table_plane=None):
                 'interior_seam':evidence}
     elif result is None:
         result=split_face(hsv,K,D)
-    result=result or gradient_side(im,hsv,K,D) or detect_reflection_face(im,K,D,pose_candidates)
+        yield {'stage':'legacy_split_fallback'}
+    if not result:
+        result=gradient_side(im,hsv,K,D)
+        yield {'stage':'legacy_gradient_side'}
+    if not result:
+        result=detect_reflection_face(im,K,D,pose_candidates)
+        yield {'stage':'legacy_reflection_face'}
     if result is not initial:
         selected=prefer_sides(im,K,D,result,table)
+        yield {'stage':'legacy_prefer_sides'}
         if selected is not None:
             for key in ('rejected_multiface_outline','preferred_over_top'):
                 if key in result:selected.setdefault(key,result[key])
             result=selected
     if result is not None and 'side_selection' not in result and shallow_face(result['face_quad_px']):
         result=validate_top_boundary(im,K,D,result)
+        yield {'stage':'legacy_top_boundary'}
         if result['status']!='complete_face_candidate':raise ValueError(result['reason'])
     if result is None:raise ValueError('No reliable physical blue20mm face')
     if table is not None and 'side_selection' not in result:
         result=constrain_face(result,table,'top' if shallow_face(result['face_quad_px']) else 'side')
+        yield {'stage':'legacy_table_constraint'}
         if result is None:raise ValueError('No face pose consistent with upright cube on calibrated table')
     result.setdefault('status','complete_face_candidate')
     result.setdefault('vision_path','legacy_recovery')
     center=result['poses'][0]['cube_center_Camera_mm']
     result['cube_center_Camera_mm']=center
     result['cube_center_Base_mm']=[sum(T[i][j]*center[j] for j in range(3))+T[i][3] for i in range(3)]
-    return result
+    yield {'stage':'complete','result':result}
+    return
+
+
+def _close_localize_steps(steps):
+    close=getattr(steps,'close',None)
+    if close is not None:close()
+
+
+def _shared_side_steps(im,K,D,T,table_plane):
+    try:from ..vision.physical_side import localize_steps as sides
+    except ImportError:
+        try:from physical_side import localize_steps as sides
+        except ImportError:from device.k230.vision.physical_side import localize_steps as sides
+    intr={'camera_matrix':K,'distortion_coefficients':D,'image_width':1280,'image_height':960}
+    # Match the old synchronous shared-side wrapper. The outer session retains
+    # the actual capture identity; internal results never renew its timestamp.
+    frame={'frame_id':'synchronous_current_image','capture_timestamp_ms':None,
+           'image_size_px':[1280,960],'clock_domain':None,'timestamp_source':'unavailable'}
+    steps=sides(im,frame,None,intr,{'T_Base_from_Camera_mm':T},table_plane)
+    try:
+        for event in steps:yield event
+    finally:_close_localize_steps(steps)
+
+
+def localize_steps(im,K,D,T,table_plane=None):
+    """Yield the existing full localizer, ending with one raw ``result``.
+
+    Same shared-side default search, then the same legacy recovery order and
+    thresholds. No partial step supplies a target. A cv2/pose or legacy candidate
+    primitive is still synchronous: yields are cooperative, not a time limit.
+    Closing the generator cancels remaining work without camera/UART actions.
+    """
+    if table_plane is None:
+        steps=_localize_legacy_steps(im,K,D,T,table_plane)
+        try:
+            for event in steps:yield event
+        finally:_close_localize_steps(steps)
+        return
+    clock=getattr(time,'ticks_ms',None) or (lambda:int(time.monotonic()*1000))
+    difference=getattr(time,'ticks_diff',None) or (lambda a,b:a-b)
+    start=clock();observation=None
+    try:
+        steps=_shared_side_steps(im,K,D,T,table_plane)
+        try:
+            for event in steps:
+                if event['stage']=='complete':
+                    observation=event['observation']
+                else:
+                    detail=dict(event);detail['stage']='shared_'+event['stage']
+                    yield detail
+        finally:_close_localize_steps(steps)
+        if observation is None:raise RuntimeError('Shared localization ended without a result')
+        if observation['status']!='localized':raise ValueError(observation['reason'])
+        result=observation['payload']
+    except ValueError as exc:
+        fast_ms=difference(clock(),start);recovery=clock()
+        steps=_localize_legacy_steps(im,K,D,T,table_plane)
+        try:
+            for event in steps:
+                if event['stage']=='complete':
+                    result=event['result']
+                    result['shared_side_recovery']={'fast_side_reason':str(exc),
+                        'fast_side_ms':fast_ms,'legacy_recovery_ms':difference(clock(),recovery)}
+                    yield {'stage':'complete','result':result}
+                else:yield event
+        finally:_close_localize_steps(steps)
+        return
+    result['shared_side_processing_ms']=difference(clock(),start)
+    yield {'stage':'complete','result':result}

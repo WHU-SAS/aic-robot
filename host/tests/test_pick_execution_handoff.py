@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 from host.project_paths import ROOT
 from host.tests.test_pick_handoff import load_app, observation, car_source
 from tools.deploy.k230_pick import build_bundle
+from device.k230.pick.kinematics import Geometry, NoPickSolution
 
 
 class CooperativePickHandoffTests(unittest.TestCase):
@@ -129,6 +130,78 @@ class CooperativePickHandoffTests(unittest.TestCase):
             h.geometry.plan.side_effect = ValueError('No complete plan')
             with self.assertRaisesRegex(ValueError, 'No complete plan'):self.begin()
             h.read.assert_called_once()
+            h.factory.assert_not_called()
+            for callback in h.forbidden.values():callback.assert_not_called()
+
+    def test_only_typed_no_solution_becomes_recoverable_pick_plan_unavailable(self):
+        with self.harness() as h, patch.object(self.app._kinematics,
+                'NoPickSolution', NoPickSolution, create=True):
+            h.geometry.plan.side_effect = NoPickSolution('No complete four-stage IK: scene')
+            with self.assertRaises(self.app.PickPlanUnavailable) as caught:
+                self.begin()
+            self.assertIs(type(caught.exception), self.app.PickPlanUnavailable)
+            self.assertEqual(str(caught.exception), 'No complete four-stage IK: scene')
+            h.read.assert_called_once()
+            h.factory.assert_not_called()
+            for callback in h.forbidden.values():callback.assert_not_called()
+
+    def test_common_plan_value_error_is_not_reclassified_even_with_typed_support(self):
+        with self.harness() as h, patch.object(self.app._kinematics,
+                'NoPickSolution', NoPickSolution, create=True):
+            h.geometry.plan.side_effect = ValueError('Numerical input invalid')
+            with self.assertRaises(ValueError) as caught:self.begin()
+            self.assertIs(type(caught.exception), ValueError)
+            h.factory.assert_not_called()
+
+    def test_geometry_constructor_and_factory_errors_are_not_scene_retries(self):
+        for component in ('geometry', 'factory'):
+            with self.subTest(component=component), self.harness() as h, \
+                    patch.object(self.app._kinematics, 'NoPickSolution', NoPickSolution, create=True):
+                if component == 'geometry':h.construct.side_effect = ValueError('Bad model config')
+                else:h.factory.side_effect = ValueError('Bad execution policy')
+                with self.assertRaises(ValueError) as caught:self.begin()
+                self.assertIs(type(caught.exception), ValueError)
+                for callback in h.forbidden.values():callback.assert_not_called()
+
+    def test_calibration_errors_remain_plain_value_error_with_typed_support(self):
+        self.source['intrinsics']['camera_matrix'][0][0] += 1
+        with self.harness() as h, patch.object(self.app._kinematics,
+                'NoPickSolution', NoPickSolution, create=True):
+            with self.assertRaises(ValueError) as caught:self.begin()
+            self.assertIs(type(caught.exception), ValueError)
+            h.read.assert_not_called()
+            h.factory.assert_not_called()
+
+    def test_legacy_dry_and_live_handoff_keep_original_no_solution_subtype(self):
+        for live in (False, True):
+            with self.subTest(live=live), self.harness() as h, \
+                    patch.object(self.app._kinematics, 'NoPickSolution', NoPickSolution, create=True):
+                h.geometry.plan.side_effect = NoPickSolution('No complete four-stage IK: legacy')
+                kwargs = {'execute':True} if live else {'start_counts':self.start}
+                with self.assertRaises(NoPickSolution) as caught:
+                    self.app.run_from_observation(self.config, self.observation,
+                        source_config=self.source, **kwargs)
+                self.assertIs(type(caught.exception), NoPickSolution)
+                self.assertIsInstance(caught.exception, ValueError)
+                h.factory.assert_not_called()
+                for callback in h.forbidden.values():callback.assert_not_called()
+
+    def test_real_far_scene_has_typed_no_solution_with_both_wrist_modes(self):
+        for wrist in (False, True):
+            with self.subTest(wrist=wrist):
+                pick = copy.deepcopy(self.config['pick'])
+                pick['wrist_alignment_enabled'] = wrist
+                geometry = Geometry(self.config['model'], pick, -60.)
+                with self.assertRaisesRegex(NoPickSolution, 'No complete four-stage IK:') as caught:
+                    geometry.plan([2., 0.], self.start)
+                self.assertIs(type(caught.exception), NoPickSolution)
+                self.assertIsInstance(caught.exception, ValueError)
+
+    def test_real_far_cooperative_handoff_exposes_only_the_public_recovery_type(self):
+        self.observation['cube_center_Base_mm'] = [2000., 0., -50.]
+        with self.harness() as h, patch.object(self.app, 'Geometry', Geometry), \
+                patch.object(self.app._kinematics, 'NoPickSolution', NoPickSolution, create=True):
+            with self.assertRaises(self.app.PickPlanUnavailable):self.begin()
             h.factory.assert_not_called()
             for callback in h.forbidden.values():callback.assert_not_called()
 

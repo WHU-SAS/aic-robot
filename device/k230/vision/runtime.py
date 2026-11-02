@@ -80,6 +80,16 @@ def track_coarse(image,frame,detector):
     if 'cube_center_Base_mm' in raw:raise ValueError('A coarse observation cannot claim a precise cube center')
     if raw.get('timestamp_ms',result['capture_timestamp_ms'])!=result['capture_timestamp_ms']:
         raise ValueError('Detector timestamp differs from captured frame')
+    evidence=raw.get('visual_evidence')
+    if evidence is not None:
+        if (not isinstance(evidence,dict) or
+                evidence.get('timestamp_ms')!=result['capture_timestamp_ms'] or
+                'cube_center_Base_mm' in evidence):
+            raise ValueError('Visual evidence must describe the same coarse frame')
+        evidence=dict(evidence)
+        if evidence.get('distance_valid') is not True:
+            evidence.pop('ground_contact_proxy_Base_mm',None)
+        raw=dict(raw,visual_evidence=evidence)
     status=raw.get('status')
     if status not in ('tracking','confirming','lost','no_target'):raise ValueError('Unknown coarse observation status')
     raw=dict(raw)
@@ -87,7 +97,7 @@ def track_coarse(image,frame,detector):
         for key in ('bbox_px','center_pixel','image_midline_error_px','pixels','confirmations','ground_contact_proxy_Base_mm'):
             raw.pop(key,None)
     result.update(status=status,payload=raw,processing_ms=_elapsed(started))
-    for key in ('bbox_px','center_pixel','image_midline_error_px','pixels','confirmations','ground_contact_proxy_Base_mm'):
+    for key in ('bbox_px','center_pixel','image_midline_error_px','pixels','confirmations','ground_contact_proxy_Base_mm','visual_evidence'):
         if key in raw:result[key]=raw[key]
     result['quality']={key:raw[key] for key in ('pixels','confirmations') if key in raw}
     return result

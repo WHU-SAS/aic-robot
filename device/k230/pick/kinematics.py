@@ -6,6 +6,10 @@ except ImportError:
     from numeric import dot,norm,matmul,matvec,rotation,rigid,transform,identity
 
 
+class NoPickSolution(ValueError):
+    """The existing four-stage search exhausted its scene pose candidates."""
+
+
 class Geometry:
     def __init__(self,model,pick,table_z_mm):
         self.model=model;self.pick=pick;self.table_z_m=table_z_mm/1000
@@ -99,28 +103,75 @@ class Geometry:
                 'link_clearance_above_table_mm':{k:(v-self.table_z_m)*1000 for k,v in low.items()},
                 'cube_offset_toward_moving_finger_mm':self.pick['cube_offset_toward_moving_finger_mm']}
     def plan(self,xy,start,orientation=None):
+        steps=self.plan_steps(xy,start,orientation)
+        try:
+            for event in steps:
+                if event['stage']=='complete':return event['plan']
+        finally:
+            close=getattr(steps,'close',None)
+            if close is not None:close()
+        raise RuntimeError('Planning ended without a result')
+
+    def plan_steps(self,xy,start,orientation=None):
+        """Original candidate order, yielding between IK stages and reports.
+
+        Progress is not an executable goal. Only the final complete event owns
+        a full plan. Individual FK/analytic solves remain synchronous primitives.
+        """
+        xy=list(xy);start=list(start)
         if self.pick.get('wrist_alignment_enabled') is True:
             try:
-                from .wrist_plan import plan
+                from .wrist_plan import plan_steps
             except ImportError:
-                from wrist_plan import plan
-            return plan(self,xy,start,orientation,self._plan_held)
-        return self._plan_held(xy,start)
+                from wrist_plan import plan_steps
+            steps=plan_steps(self,xy,start,orientation,self._plan_held_steps)
+        else:
+            steps=self._plan_held_steps(xy,start)
+        try:
+            for event in steps:
+                if event['stage']=='complete':
+                    yield {'stage':'complete','plan':event['result']}
+                else:yield event
+        finally:
+            close=getattr(steps,'close',None)
+            if close is not None:close()
 
     def _plan_held(self,xy,start):
+        steps=self._plan_held_steps(xy,start)
+        try:
+            for event in steps:
+                if event['stage']=='complete':return event['result']
+        finally:
+            close=getattr(steps,'close',None)
+            if close is not None:close()
+        raise RuntimeError('Held-wrist planning ended without a result')
+
+    def _plan_held_steps(self,xy,start):
         q0=self.angles(start);q5=q0[4];failures=[]
         for tilt in sorted([20,25,30,35,40,45],key=lambda t:abs(t-25)):
+            yield {'stage':'held_tilt','tilt_deg':tilt}
             try:
                 hover,qh=self.solve(xy,self.pick['hover_tip_height_mm']/1000,tilt,q0,q5)
+                yield {'stage':'held_hover_solved','tilt_deg':tilt}
                 low,ql=self.solve(xy,self.pick['descend_tip_height_mm']/1000,tilt,qh,q5)
+                yield {'stage':'held_descend_solved','tilt_deg':tilt}
                 angle,width=self.nominal_contact(ql)
                 qc=list(ql);qc[5]=angle;nominal=self.counts(qc)[5]
                 close=list(low);close[5]=nominal-self.pick['extra_closing_counts']
+                yield {'stage':'held_close_solved','tilt_deg':tilt}
                 lift,qu=self.solve(xy,self.pick['lift_tip_height_mm']/1000,tilt,ql,q5);lift[5]=close[5]
-                return {'hover':hover,'descend':low,'close':close,'lift':lift,'tilt_deg':tilt,
+                yield {'stage':'held_lift_solved','tilt_deg':tilt}
+                reports={}
+                for name,counts in [('hover',hover),('descend',low),('close',close),('lift',lift)]:
+                    reports[name]=self.report(counts)
+                    yield {'stage':'held_fk_report','name':name,'tilt_deg':tilt}
+                result={'hover':hover,'descend':low,'close':close,'lift':lift,'tilt_deg':tilt,
                         'extra_closing_counts':self.pick['extra_closing_counts'],
                         'cube_offset_toward_moving_finger_mm':self.pick['cube_offset_toward_moving_finger_mm'],
-                        'target_xy_Base_mm':[v*1000 for v in xy],
-                        'target_FK':{k:self.report(v) for k,v in [('hover',hover),('descend',low),('close',close),('lift',lift)]}}
-            except ValueError as exc:failures.append(str(exc))
-        raise ValueError('No complete four-stage IK: '+str(failures))
+                        'target_xy_Base_mm':[v*1000 for v in xy], 'target_FK':reports}
+                yield {'stage':'complete','result':result}
+                return
+            except ValueError as exc:
+                failures.append(str(exc))
+                yield {'stage':'held_candidate_rejected','tilt_deg':tilt,'reason':str(exc)}
+        raise NoPickSolution('No complete four-stage IK: '+str(failures))

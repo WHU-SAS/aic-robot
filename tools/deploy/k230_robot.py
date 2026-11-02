@@ -7,6 +7,7 @@ from host.project_paths import ROOT, bootstrap
 bootstrap()
 import argparse
 import base64
+import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from device.k230.car.ground_projection import GroundProjection
@@ -46,7 +47,7 @@ def _paired_config(car, arm):
         raise ValueError('Car projection differs from the paired calibration')
 
 
-def build_bundle(pick_config=None):
+def build_bundle(pick_config=None, tracking=False):
     car, car_files, _, _ = car_bundle(near_parking=True)
     arm, arm_files, _ = arm_bundle(DEFAULT_PICK_CONFIG if pick_config is None else pick_config)
     _paired_config(car, arm)
@@ -67,12 +68,25 @@ def build_bundle(pick_config=None):
         if name in files and digest(files[name]) != digest(data):
             raise ValueError('Common file differs: ' + name)
         files[name] = data
+    if tracking:
+        car['tracking_task'] = json.loads((ROOT / 'configs/car/tracking_task.json').read_text())
+        for name, path in (
+                ('target_memory.py', 'device/k230/car/target_memory.py'),
+                ('tracking_drive.py', 'device/k230/car/tracking_drive.py'),
+                ('robot_tracking.py', 'device/k230/robot/tracking.py'),
+                ('cooperative_static_session.py', 'device/k230/vision/cooperative_static_session.py')):
+            files[name] = (ROOT / path).read_bytes()
     files['config.json'] = encoded(config)
     manifest = {'schema':'aic.robot.v1', 'trigger':'思达思达',
         'startup_motion':False, 'pc_runtime_required':False,
         'completion':'arm_stage_completed_with_encoder_grip_confirmation',
         'files':{name:{'bytes':len(data), 'sha256':digest(data)}
                  for name, data in sorted(files.items())}}
+    if tracking:
+        manifest.update(mode='continuous_tracking',
+            completion='encoder_grip_confirmed_after_lift',
+            continuous_observation=True, requires_mspm0_arc=True,
+            physical_tracking_validated=False)
     manifest['release_id'] = digest(encoded(manifest))[:16]
     files['manifest.json'] = encoded(manifest)
     return config, files, manifest
@@ -127,10 +141,11 @@ def main(argv=None):
     parser.add_argument('--install', action='store_true')
     parser.add_argument('--activate', action='store_true')
     parser.add_argument('--pick-config', type=Path, help='override the accepted wrist-aligned arm stage profile used by default')
+    parser.add_argument('--tracking', action='store_true', help='build the new persistent tracking candidate; default keeps the single-task comparison')
     args = parser.parse_args(argv)
     if args.activate and not args.install:
         parser.error('--activate requires --install')
-    config, files, manifest = build_bundle(args.pick_config)
+    config, files, manifest = build_bundle(args.pick_config, tracking=True) if args.tracking else build_bundle(args.pick_config)
     remote = REMOTE + '/releases/' + manifest['release_id']
     stamp = datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y%m%d_%H%M%S_%f')
     output = ROOT / 'data/deployments' / ('k230_robot_' + stamp)

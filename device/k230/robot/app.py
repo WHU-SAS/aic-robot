@@ -72,14 +72,105 @@ def archive(config, frames, status, error=None):
             'archive_complete':saved['archive_complete']}
 
 
+def tracking_task(config, ready_dispatched=False):
+    """Candidate continuous task; keep one camera through parking and grasp."""
+    import app as arm
+    from ground_projection import GroundProjection
+    from motor_link import MotorLink
+    from camera import CameraSession
+    from blue_tracker import BlueTracker, age_ms
+    from vision_runtime import track_coarse
+    from physical_side_session import FineSession
+    from cooperative_static_session import CooperativeStaticPickSession
+    from robot_tracking import TrackingTask, ReobserveRequired
+    from kinematics import Geometry
+    if not ready_dispatched:
+        arm.run_ready(config['arm'], pose=2, immediate=True)
+    car = config['car']
+    model = car['projection']
+    projection = GroundProjection(model['K'], model['D'], model['T'], model['plane'],
+        model.get('forward_axis_Base'), model.get('motion_origin_Base_mm'))
+    tracker = BlueTracker(car['tracking'], projection)
+    camera = CameraSession(car['vision'])
+    link = task = None
+    frames, result = [], None
+    geometry = Geometry(config['arm']['model'], config['arm']['pick'], 0)
+    def capture():
+        os.exitpoint()
+        return camera.capture()
+    def begin(observation, version):
+        def steps():
+            try:
+                yield from arm.begin_from_observation_steps(config['arm'], observation,
+                    version, source_config=car)
+            except arm.PickPlanUnavailable as exc:
+                raise ReobserveRequired(str(exc))
+        return steps()
+    def held_context(state):
+        sample = state.get('last_sample') or {}
+        if (state.get('phase') not in ('lift', 'complete') or
+                state.get('grasp_confirmed') is not True or
+                sample.get('axes') != [1,2,3,4,5,6] or
+                not 0 <= age_ms(time.ticks_ms(), sample.get('timestamp_ms', -10000)) <=
+                2*car['tracking_task']['period_ms']):
+            return state
+        # This FK point is a broad visual association reference, never a new
+        # measured cube centre or parking/grasp authority.
+        midpoint = geometry.metrics(geometry.angles(sample['positions']))[0]
+        return dict(state, held_center_pixel=projection.base_to_pixel([p*1000 for p in midpoint]))
+    try:
+        link = MotorLink()
+        camera.open()
+        task = TrackingTask(capture,
+            lambda image, frame:track_coarse(image, frame, tracker.detect_frame),
+            link, projection, car, time.ticks_ms,
+            begin,
+            lambda c, clock:FineSession(c, clock, purpose='car_moving_range'),
+            CooperativeStaticPickSession, frames, emit=emit,
+            reset_tracker=tracker.reset)
+        task.arm_context = held_context
+        while task.status != 'succeeded':
+            task.step()
+            time.sleep_ms(5)
+        result = task.snapshot()
+        return result
+    finally:
+        try:
+            if task is not None:
+                task.close()
+        finally:
+            try:
+                camera.close()
+            finally:
+                if link is not None:
+                    link.close()
+        record = result or (task.snapshot() if task is not None else
+                            {'status':'tracking_initialization_interrupted'})
+        record.update(ready_pose2_goal_sent=True,ready_pose2_arrival_checked=False,
+            arm_started_scope='grasp_after_parking')
+        try:
+            record['evidence'] = archive(config, frames, record['status'])
+        except Exception as exc:
+            record['archive_error'] = str(exc)
+            emit('vision_archive_error', {'error':str(exc)})
+        frames.clear()
+        try:
+            with open('/sdcard/aic/robot/runs.jsonl','a') as stream:
+                stream.write(json.dumps(record)+'\n')
+        except OSError as exc:
+            emit('log_error',{'error':str(exc)})
+
+
 def dispatch(action, config, ready_dispatched=False):
     import app as arm
-    from robot_task import execute_task
     if action == 'ready':
         if not ready_dispatched:arm.run_ready(config['arm'])
         return {'status':'ready_dispatched', 'ready_pose':1, 'arrival_checked':False}
     if action != 'pick':
         raise ValueError('Unknown robot voice action: ' + str(action))
+    if config['car'].get('tracking_task', {}).get('enabled'):
+        return tracking_task(config, ready_dispatched)
+    from robot_task import execute_task
     if not ready_dispatched:arm.run_ready(config['arm'],pose=2,immediate=True)
     frames, parking = [], []
     result, error, arm_started = None, None, False

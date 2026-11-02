@@ -89,13 +89,27 @@ class PickExecutionTests(unittest.TestCase):
         self.plan = copy.deepcopy(PLAN)
         self.policy = dict(POLICY)
         self.policy.update(policy or {})
+        self.emitted = []
         self.execution = PickExecution(self.plan, self.policy, self.io, 7,
-                                       self.clock.now, self.clock.diff)
+                                       self.clock.now, self.clock.diff,
+                                       emit=lambda name, details: self.emitted.append((name, details)))
         return self.execution
 
-    def step(self, after=0, version=7):
+    def step(self, after=0, version=7, allow_success=None):
         self.clock.advance(after)
-        return self.execution.step(target_version=version)
+        kwargs = {'target_version': version}
+        if allow_success is not None:
+            kwargs['allow_success'] = allow_success
+        return self.execution.step(**kwargs)
+
+    def observe(self, duration, allow_success=None):
+        """Advance real sampling turns, not just two distant clock endpoints."""
+        state = self.execution.snapshot()
+        while duration:
+            interval = min(50, duration)
+            state = self.step(interval, allow_success=allow_success)
+            duration -= interval
+        return state
 
     def goals(self):
         return [e for e in self.io.events if e[0] == 'goals']
@@ -246,7 +260,7 @@ class PickExecutionTests(unittest.TestCase):
         self.begin_lift(delta=30)
         state = self.step(50)
         self.assertEqual(state['status'], 'running')
-        self.step(150)
+        self.observe(150)
         self.assertNotEqual(self.step(49)['status'], 'succeeded')
         state = self.step(1)
         self.assertEqual(state['status'], 'succeeded')
@@ -262,7 +276,7 @@ class PickExecutionTests(unittest.TestCase):
             self.assertNotEqual(self.step(50)['status'], 'succeeded')
         self.io.positions[1] -= 1  # exactly +10 is accepted
         self.step(50)
-        self.assertNotEqual(self.step(150)['status'], 'succeeded')
+        self.assertNotEqual(self.observe(150)['status'], 'succeeded')
         self.assertEqual(self.step(50)['status'], 'succeeded')
 
     def test_lift_gate_is_same_round_not_latched_per_axis(self):
@@ -276,18 +290,18 @@ class PickExecutionTests(unittest.TestCase):
             self.assertNotEqual(self.step(50)['status'], 'succeeded')
         self.io.positions[1] -= 11
         self.step(50)
-        self.assertNotEqual(self.step(150)['status'], 'succeeded')
+        self.assertNotEqual(self.observe(150)['status'], 'succeeded')
         self.assertEqual(self.step(50)['status'], 'succeeded')
 
     def test_lift_out_of_band_keeps_grip_and_restarts_fixed_band_timer(self):
         self.make()
         self.begin_lift()
         self.step(50)
-        self.step(150)
+        self.observe(150)
         self.io.positions[5] += 2
         self.assertEqual(self.step(50)['status'], 'running')
         self.assertEqual(self.ready(), [])
-        self.assertNotEqual(self.step(150)['status'], 'succeeded')
+        self.assertNotEqual(self.observe(150)['status'], 'succeeded')
         self.assertEqual(self.step(50)['status'], 'succeeded')
 
     def test_lift_drift_never_passes_merely_because_adjacent_changes_are_one(self):
@@ -315,19 +329,74 @@ class PickExecutionTests(unittest.TestCase):
         self.step(50)
         self.io.positions[5] += 2
         self.step(50)
-        self.step(100)
+        self.observe(100)
         self.assertEqual(self.step(50)['status'], 'succeeded')
 
     def test_lift_losing_arrival_resets_success_interval(self):
         self.make()
         self.begin_lift()
         self.step(50)
-        self.step(150)
+        self.observe(150)
         self.io.positions[3] += 11
         self.assertNotEqual(self.step(50)['status'], 'succeeded')
         self.io.positions[3] -= 11
         self.step(50)
-        self.assertNotEqual(self.step(150)['status'], 'succeeded')
+        self.assertNotEqual(self.observe(150)['status'], 'succeeded')
+        self.assertEqual(self.step(50)['status'], 'succeeded')
+
+    def test_lift_one_second_observation_gap_does_not_count_as_stability(self):
+        self.make()
+        self.begin_lift()
+        self.step(50)  # first arrived sample starts observation
+        state = self.step(1000)
+        self.assertEqual(state['status'], 'running')
+        self.assertIs(state['grasp_confirmed'], True)
+        self.assertEqual(self.ready(), [])
+        self.assertIn('lift_observation_gap', [name for name, details in self.emitted])
+        self.assertNotEqual(self.observe(150)['status'], 'succeeded')
+        self.assertEqual(self.step(50)['status'], 'succeeded')
+
+    def test_lift_observation_gap_limit_is_twice_existing_poll_period(self):
+        for gap, resets in ((100, False), (101, True)):
+            with self.subTest(gap=gap):
+                self.make()
+                self.begin_lift()
+                self.step(50)
+                self.assertEqual(self.step(gap)['status'], 'running')
+                if resets:
+                    self.assertNotEqual(self.observe(150)['status'], 'succeeded')
+                    state = self.step(50)
+                else:
+                    state = self.observe(100)
+                self.assertEqual(state['status'], 'succeeded')
+                self.assertEqual('lift_observation_gap' in [e[0] for e in self.emitted], resets)
+
+    def test_gap_restarts_fixed_band_and_later_jitter_restarts_it_again(self):
+        self.make()
+        self.begin_lift()
+        self.step(50)
+        self.io.positions[5] += 2
+        self.assertEqual(self.step(1000)['status'], 'running')
+        self.io.positions[5] += 1
+        self.assertEqual(self.step(50)['status'], 'running')
+        self.io.positions[5] += 1  # adjacent +1, but outside fixed reference +2
+        self.assertEqual(self.step(50)['status'], 'running')
+        self.assertNotEqual(self.observe(150)['status'], 'succeeded')
+        result = self.step(50)
+        self.assertEqual(result['status'], 'succeeded')
+        self.assertEqual(result['grip_confirmation']['stable_reference'], self.io.positions[5])
+        self.assertEqual(self.ready(), [])
+
+    def test_observation_gap_crossing_ticks_wrap_still_restarts_stability(self):
+        self.make(clock=Clock(start=1400, period=2048))
+        self.begin_lift()
+        self.step(50)
+        before = self.clock.now()
+        state = self.step(1000)
+        self.assertLess(self.clock.now(), before)
+        self.assertEqual(state['status'], 'running')
+        self.assertIn('lift_observation_gap', [name for name, details in self.emitted])
+        self.assertNotEqual(self.observe(150)['status'], 'succeeded')
         self.assertEqual(self.step(50)['status'], 'succeeded')
 
     def test_lift_delta29_recovers_on_first_valid_sample(self):
@@ -364,7 +433,7 @@ class PickExecutionTests(unittest.TestCase):
         self.make()
         self.begin_lift()
         self.step(50)
-        self.step(150)
+        self.observe(150)
         self.io.fail_read = True
         unknown = self.step(50)
         self.assertNotEqual(unknown['status'], 'succeeded')
@@ -372,7 +441,7 @@ class PickExecutionTests(unittest.TestCase):
         self.assertIsNone(unknown['grasp_confirmed'])
         self.assertEqual(self.ready(), [])
         self.step(50)
-        self.assertNotEqual(self.step(150)['status'], 'succeeded')
+        self.assertNotEqual(self.observe(150)['status'], 'succeeded')
         self.assertEqual(self.step(50)['status'], 'succeeded')
 
     def test_recovery_reobserves_at_500ms_without_any_arrival_read(self):
@@ -502,11 +571,83 @@ class PickExecutionTests(unittest.TestCase):
         self.make()
         self.begin_lift()
         self.step(50)
-        self.step(200)
+        self.observe(200)
         self.assertEqual(self.execution.snapshot()['status'], 'succeeded')
         before = list(self.io.events)
         self.step(500)
         self.assertEqual(self.io.events, before)
+
+    def test_success_can_be_deferred_without_stopping_fresh_feedback(self):
+        self.make()
+        self.begin_lift()
+        deferred = self.observe(250, allow_success=False)
+        self.assertEqual(deferred['status'], 'running')
+        self.assertEqual(deferred['phase'], 'lift')
+        self.assertTrue(deferred['success_ready'])
+        self.assertIs(deferred['grasp_confirmed'], True)
+        before = len(self.reads())
+        self.assertTrue(self.step(50, allow_success=False)['success_ready'])
+        self.assertEqual(len(self.reads()), before + 1)
+        # Merely allowing success cannot commit stale feedback between polls.
+        self.assertEqual(self.step(allow_success=True)['status'], 'running')
+        self.assertEqual(len(self.reads()), before + 1)
+        accepted = self.step(50, allow_success=True)
+        self.assertEqual(accepted['status'], 'succeeded')
+        self.assertEqual(len(self.reads()), before + 2)
+        self.assertEqual(self.ready(), [])
+
+    def test_grip_loss_during_deferred_success_still_recovers_immediately(self):
+        self.make()
+        self.begin_lift()
+        self.assertTrue(self.observe(250, allow_success=False)['success_ready'])
+        self.io.positions[5] = self.plan['close'][5] + 29
+        state = self.step(50, allow_success=False)
+        self.assertEqual(state['status'], 'recovering')
+        self.assertFalse(state['success_ready'])
+        self.assertIsNone(state['grasp_confirmed'])
+        self.assertIs(state['grip_confirmation']['grasp_confirmed'], False)
+        self.assertEqual(state['recovery_reason'], 'grip_lost')
+        self.assertEqual(len(self.ready()), 1)
+
+    def test_target_change_during_deferred_success_is_not_swallowed_by_terminal_state(self):
+        self.make()
+        self.begin_lift()
+        self.assertTrue(self.observe(250, allow_success=False)['success_ready'])
+        state = self.step(50, version=8, allow_success=True)
+        self.assertEqual(state['status'], 'recovering')
+        self.assertFalse(state['success_ready'])
+        self.assertEqual(state['target_version'], 7)
+        self.assertEqual(state['recovery_reason'], 'target_version_changed')
+        self.assertEqual(len(self.ready()), 1)
+
+    def test_default_success_gate_preserves_existing_callers(self):
+        self.make()
+        self.begin_lift()
+        for _ in range(5):
+            self.clock.advance(50)
+            state = self.execution.step()
+        self.assertEqual(state['status'], 'succeeded')
+        self.assertIs(state['grasp_confirmed'], True)
+
+    def test_deferred_success_readiness_clears_on_unknown_band_exit_or_arrival_loss(self):
+        for invalidation in ('missing_feedback', 'gripper_band_exit', 'arrival_lost'):
+            with self.subTest(invalidation=invalidation):
+                self.make()
+                self.begin_lift()
+                self.assertTrue(self.observe(250, allow_success=False)['success_ready'])
+                if invalidation == 'missing_feedback':
+                    self.io.fail_read = True
+                elif invalidation == 'gripper_band_exit':
+                    self.io.positions[5] += 2
+                else:
+                    self.io.positions[1] += 11
+                state = self.step(50, allow_success=False)
+                self.assertEqual(state['status'], 'running')
+                self.assertFalse(state['success_ready'])
+                self.assertEqual(self.ready(), [])
+                if invalidation == 'missing_feedback':
+                    self.assertEqual(state['feedback_status'], 'unknown')
+                    self.assertIsNone(state['grasp_confirmed'])
 
     def test_timers_work_across_board_tick_wrap(self):
         self.make(clock=Clock(start=980, period=1024))

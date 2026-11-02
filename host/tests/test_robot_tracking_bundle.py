@@ -1,0 +1,84 @@
+"""The explicit offline tracking candidate includes its complete runtime."""
+import ast
+import importlib.util
+import json
+import sys
+from types import SimpleNamespace
+import unittest
+from unittest.mock import Mock, mock_open, patch
+from host.project_paths import ROOT
+from tools.deploy.k230_robot import build_bundle
+
+
+def board_app():
+    spec=importlib.util.spec_from_file_location('tracking_board_app',ROOT/'device/k230/robot/app.py')
+    module=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TrackingBundleTests(unittest.TestCase):
+    def test_candidate_has_full_runtime_with_no_counter_limit_or_calibration_change(self):
+        baseline=build_bundle()
+        config,files,manifest=build_bundle(tracking=True)
+        expected=dict(baseline[0]['car'])
+        expected['tracking_task']=json.loads((ROOT/'configs/car/tracking_task.json').read_text())
+        self.assertEqual(config['car'],expected)
+        self.assertEqual(config['arm'],baseline[0]['arm'])
+        self.assertTrue(config['car']['tracking_task']['enabled'])
+        self.assertEqual(manifest['mode'],'continuous_tracking')
+        self.assertTrue(manifest['continuous_observation'])
+        self.assertFalse(manifest['physical_tracking_validated'])
+        for name in ('robot_tracking.py','target_memory.py','tracking_drive.py',
+                     'cooperative_static_session.py'):
+            self.assertIn(name,files.keys())
+            ast.parse(files[name])
+        self.assertIn(b'class PickExecution:',files['control.py'])
+        self.assertNotEqual(manifest['release_id'],baseline[2]['release_id'])
+
+    def test_enabled_config_uses_new_entry_and_preserves_already_sent_ready(self):
+        app=board_app();arm=SimpleNamespace(run_ready=Mock())
+        config={'car':{'tracking_task':{'enabled':True}},'arm':{}}
+        with patch.dict(sys.modules,{'app':arm}),\
+             patch.object(app,'tracking_task',return_value={'status':'succeeded'}) as tracking,\
+             patch.object(app,'approach') as old:
+            result=app.dispatch('pick',config,ready_dispatched=True)
+        tracking.assert_called_once_with(config,True)
+        old.assert_not_called();arm.run_ready.assert_not_called()
+        self.assertEqual(result['status'],'succeeded')
+
+    def test_task_keeps_one_camera_and_uart_until_tracking_finishes(self):
+        app=board_app();config=build_bundle(tracking=True)[0];trace=[]
+        camera,link=Mock(),Mock()
+        camera.open.side_effect=lambda:trace.append('camera_open')
+        camera.close.side_effect=lambda:trace.append('camera_close')
+        link.close.side_effect=lambda:trace.append('motor_close')
+        task=Mock(status='running')
+        def step():
+            trace.append('tracking_step')
+            self.assertNotIn('camera_close',trace)
+            task.status='succeeded'
+        task.step.side_effect=step
+        task.snapshot.return_value={'status':'succeeded'}
+        task.close.side_effect=lambda:trace.append('task_close')
+        arm=SimpleNamespace(run_ready=Mock(),begin_from_observation=Mock(),
+                            PickPlanUnavailable=ValueError)
+        modules={
+            'app':arm,'ground_projection':SimpleNamespace(GroundProjection=Mock()),
+            'camera':SimpleNamespace(CameraSession=Mock(return_value=camera)),
+            'motor_link':SimpleNamespace(MotorLink=Mock(return_value=link)),
+            'blue_tracker':SimpleNamespace(BlueTracker=Mock(),age_ms=lambda a,b:a-b),
+            'vision_runtime':SimpleNamespace(track_coarse=Mock()),
+            'physical_side_session':SimpleNamespace(FineSession=Mock()),
+            'cooperative_static_session':SimpleNamespace(CooperativeStaticPickSession=Mock()),
+            'robot_tracking':SimpleNamespace(TrackingTask=Mock(return_value=task),ReobserveRequired=ValueError),
+            'kinematics':SimpleNamespace(Geometry=Mock())}
+        with patch.dict(sys.modules,modules),patch.object(app.time,'ticks_ms',lambda:0,create=True),\
+             patch.object(app.time,'sleep_ms',Mock(),create=True),patch('builtins.open',mock_open()):
+            result=app.tracking_task(config,ready_dispatched=True)
+        self.assertEqual(result['status'],'succeeded')
+        self.assertEqual(trace,['camera_open','tracking_step','task_close','camera_close','motor_close'])
+        arm.run_ready.assert_not_called();arm.begin_from_observation.assert_not_called()
+
+
+if __name__=='__main__':unittest.main()

@@ -6,9 +6,14 @@ import os,gc,json,time,math
 from camera import CameraSession
 from vision import localize
 from vision_runtime import localize_precise
+import kinematics as _kinematics
 from kinematics import Geometry
 from control import run_pick_stage_direct,run_ready_direct
 from voice_commands import registered_commands,resolve_events
+
+
+class PickPlanUnavailable(ValueError):
+    """A valid scene produced no complete arm plan; task may re-observe it."""
 
 
 def load(root):
@@ -299,13 +304,101 @@ def begin_from_observation(config,observation,target_version,source_config=None,
     policy.update(config['pick'].get('tracking_stage_policy',{}))
     rows=arm_snapshot(config['control'])
     start=[row['position'] for row in rows]
-    plan=_run_target(config,found,False,start_counts=start)
+    try:
+        plan=_run_target(config,found,False,start_counts=start)
+    except getattr(_kinematics,'NoPickSolution',()) as exc:
+        raise PickPlanUnavailable(str(exc))
     log('tracking_handoff_localized',{'frame_id':observation['frame_id'],
         'capture_timestamp_ms':observation['capture_timestamp_ms'],
         'cube_center_Base_mm':found['cube_center_Base_mm'],
         'target_version':target_version,'source':'accepted_static_observation'})
     if emit is None:emit=lambda event,details:log(event,details)
     return factory(config['control'],ready,plan,policy,target_version,emit=emit)
+
+
+
+def begin_from_observation_steps(config,observation,target_version,source_config=None,emit=None):
+    """Yield between read-only handoff, geometry setup and IK search steps.
+
+    The caller owns target versions and closes an obsolete planning generator.
+    All progress is bound to this original version/frame. No camera or servo
+    goal is started here. A yielded execution is inert and belongs to the caller;
+    closing planning after that handoff does not close the returned execution.
+    """
+    steps=execution=None
+    handed_off=False
+    try:
+        _same_calibration(config,source_config)
+        found=_handoff_target(observation)
+        frame_id=observation['frame_id']
+        captured_at=observation['capture_timestamp_ms']
+        import control as arm_control
+        factory=arm_control.open_pick_execution
+        ready=config['drive_ready_control']
+        policy=dict(config['pick']['standalone_stage_policy'])
+        policy.update(config['pick'].get('tracking_stage_policy',{}))
+        rows=arm_snapshot(config['control'])
+        start=[row['position'] for row in rows]
+        yield {'stage':'arm_snapshot','target_version':target_version,
+               'frame_id':frame_id,'positions':list(start)}
+
+        xy=found['cube_center_Base_mm'][:2]
+        plane=config['vision']['localization']['table_plane_Base_mm']
+        n=plane['normal']
+        table_z=(plane['offset_mm']-n[0]*xy[0]-n[1]*xy[1])/n[2]
+        geometry=Geometry(config['model'],config['pick'],table_z)
+        wrist=config['pick'].get('wrist_alignment_enabled') is True
+        orientation=None
+        if wrist:
+            from cube_orientation import estimate
+            orientation=estimate(found,config['extrinsics']['T_Base_from_Camera_mm'],plane)
+            log('cube_orientation',orientation)
+        yield {'stage':'planning_initialized','target_version':target_version,
+               'frame_id':frame_id}
+
+        try:
+            if wrist:steps=geometry.plan_steps([v/1000 for v in xy],start,orientation)
+            else:steps=geometry.plan_steps([v/1000 for v in xy],start)
+        except getattr(_kinematics,'NoPickSolution',()) as exc:
+            raise PickPlanUnavailable(str(exc))
+        while True:
+            try:
+                event=next(steps)
+            except getattr(_kinematics,'NoPickSolution',()) as exc:
+                raise PickPlanUnavailable(str(exc))
+            except StopIteration:
+                raise RuntimeError('IK planning ended without a complete plan')
+            if not isinstance(event,dict) or not isinstance(event.get('stage'),str):
+                raise RuntimeError('Malformed IK planning progress')
+            if event['stage']=='complete':
+                plan=event['plan']
+                break
+            progress=dict(event)
+            progress['target_version']=target_version
+            progress['frame_id']=frame_id
+            yield progress
+        finished=steps
+        steps=None
+        close=getattr(finished,'close',None)
+        if close is not None:close()
+        log('planned',plan)
+        if emit is None:emit=lambda event,details:log(event,details)
+        execution=factory(config['control'],ready,plan,policy,target_version,emit=emit)
+        log('tracking_handoff_localized',{'frame_id':frame_id,
+            'capture_timestamp_ms':captured_at,
+            'cube_center_Base_mm':found['cube_center_Base_mm'],
+            'target_version':target_version,'source':'accepted_static_observation'})
+        result={'stage':'complete','execution':execution,
+                'target_version':target_version,'frame_id':frame_id}
+        handed_off=True
+        yield result
+    finally:
+        try:
+            if steps is not None:
+                close=getattr(steps,'close',None)
+                if close is not None:close()
+        finally:
+            if execution is not None and not handed_off:execution.close()
 
 
 def run_once(config,execute=False):

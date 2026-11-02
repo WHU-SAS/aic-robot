@@ -15,6 +15,19 @@ ROOT_STEPS=12
 MAX_ROOTS_PER_TILT=4
 
 
+def _close_steps(steps):
+    close=getattr(steps,'close',None)
+    if close is not None:close()
+
+
+def _drain_steps(steps):
+    try:
+        for event in steps:
+            if event['stage']=='complete':return event['result']
+    finally:_close_steps(steps)
+    raise RuntimeError('Wrist planning ended without a result')
+
+
 def projected(v,n):return [a-dot(v,n)*b for a,b in zip(v,n)]
 
 
@@ -30,6 +43,10 @@ def jaw_direction(g,q):
 
 
 def roll_candidates(g,xy,tilt,orientation,initial_roll,counts):
+    return _drain_steps(roll_candidates_steps(g,xy,tilt,orientation,initial_roll,counts))
+
+
+def roll_candidates_steps(g,xy,tilt,orientation,initial_roll,counts):
     theta=math.radians(180-tilt);n=orientation['table_normal_Base']
     ref=[0.,0.,0.,theta,0.,g.open_angle]
     _,pts,_,ts=g.metrics(ref);t=ts['wan2']
@@ -84,31 +101,44 @@ def roll_candidates(g,xy,tilt,orientation,initial_roll,counts):
                             else:lo=mid;elo=em
                         roots.append(((lo+hi)/2,index,sign))
                 previous=(roll,error)
+            yield {'stage':'wrist_root_group','tilt_deg':tilt,'axis_index':index,'sign':sign}
     unique=[]
     for roll,index,sign in roots:
         if not any(abs(roll-v[0])<1e-4 and index==v[1] and sign==v[2] for v in unique):
             unique.append((roll,index,sign))
     unique.sort(key=lambda v:abs(v[0]-initial_roll))
-    return unique[:MAX_ROOTS_PER_TILT]
+    yield {'stage':'complete','result':unique[:MAX_ROOTS_PER_TILT]}
+    return
 
 
 def _elevated_stage(g,xy,height,low_tilt,seed,roll,counters):
-    # Elevated stages retain the same wrist count and midpoint, but need not
-    # match a side heading while both jaws are well above the cube.
+    return _drain_steps(_elevated_stage_steps(g,xy,height,low_tilt,seed,roll,counters))
+
+
+def _elevated_stage_steps(g,xy,height,low_tilt,seed,roll,counters):
+    # Keep the original independent high-tilt ordering and solve count.
     for tilt in sorted(HIGH_TILTS,key=lambda t:(abs(t-low_tilt),t)):
         counters['ik_calls']+=1
         try:
             counts,q=g.solve(xy,height/1000,tilt,seed,roll)
-            return counts,q,tilt
         except ValueError:
-            pass
+            yield {'stage':'wrist_elevated_solve','height_mm':height,'tilt_deg':tilt,'accepted':False}
+            continue
+        yield {'stage':'wrist_elevated_solve','height_mm':height,'tilt_deg':tilt,'accepted':True}
+        yield {'stage':'complete','result':(counts,q,tilt)}
+        return
     raise ValueError('No elevated IK with the selected fixed wrist')
 
 
 def _stages(g,xy,start,tilt,roll,orientation,counters):
+    return _drain_steps(_stages_steps(g,xy,start,tilt,roll,orientation,counters))
+
+
+def _stages_steps(g,xy,start,tilt,roll,orientation,counters):
     q0=g.angles(start)
     counters['ik_calls']+=1
     low,ql=g.solve(xy,g.pick['descend_tip_height_mm']/1000,tilt,q0,roll)
+    yield {'stage':'wrist_low_solve','tilt_deg':tilt}
     # Both open jaws must already overlap the cube before closing. A high
     # moving jaw becoming low enough only after closure is not a valid entry.
     open_low=g.metrics(ql)[2]
@@ -127,10 +157,23 @@ def _stages(g,xy,start,tilt,roll,orientation,counters):
     clearances={link:(value-g.table_z_m)*1000 for link,value in closed_low.items()}
     if min(clearances.values())<0 or max(clearances.values())>20:
         raise ValueError('Closed fingers do not both overlap the20mm cube height')
-    hover,qh,hover_tilt=_elevated_stage(g,xy,g.pick['hover_tip_height_mm'],tilt,q0,roll,counters)
-    lift,qu,lift_tilt=_elevated_stage(g,xy,g.pick['lift_tip_height_mm'],tilt,ql,roll,counters)
+    yield {'stage':'wrist_closing_geometry','tilt_deg':tilt}
+    steps=_elevated_stage_steps(g,xy,g.pick['hover_tip_height_mm'],tilt,q0,roll,counters)
+    try:
+        for event in steps:
+            if event['stage']=='complete':hover,qh,hover_tilt=event['result']
+            else:
+                detail=dict(event);detail['name']='hover';yield detail
+    finally:_close_steps(steps)
+    steps=_elevated_stage_steps(g,xy,g.pick['lift_tip_height_mm'],tilt,ql,roll,counters)
+    try:
+        for event in steps:
+            if event['stage']=='complete':lift,qu,lift_tilt=event['result']
+            else:
+                detail=dict(event);detail['name']='lift';yield detail
+    finally:_close_steps(steps)
     lift[5]=close[5]
-    return {'hover':hover,'descend':low,'close':close,'lift':lift,'tilt_deg':tilt,
+    result={'hover':hover,'descend':low,'close':close,'lift':lift,'tilt_deg':tilt,
         'hover_tilt_deg':hover_tilt,'descend_tilt_deg':tilt,'lift_tilt_deg':lift_tilt,
         'stage_tilts_deg':{'hover':hover_tilt,'descend':tilt,'close':tilt,'lift':lift_tilt},
         'opening_count':g.pick['opening_count'],'nominal_closing_count':nominal,
@@ -143,7 +186,12 @@ def _stages(g,xy,start,tilt,roll,orientation,counters):
         'alignment_reference':'open_fingertip_midpoint',
         'cube_offset_toward_moving_finger_mm':g.pick['cube_offset_toward_moving_finger_mm'],
         'target_xy_Base_mm':[v*1000 for v in xy],
-        'target_FK':{k:g.report(v) for k,v in [('hover',hover),('descend',low),('close',close),('lift',lift)]}}
+        'target_FK':{}}
+    for name,goals in [('hover',hover),('descend',low),('close',close),('lift',lift)]:
+        result['target_FK'][name]=g.report(goals)
+        yield {'stage':'wrist_fk_report','name':name}
+    yield {'stage':'complete','result':result}
+    return
 
 
 def _orientation(value):
@@ -164,6 +212,17 @@ def _orientation(value):
 
 
 def plan(g,xy,start,orientation,fallback):
+    def fallback_steps(xy,start):
+        yield {'stage':'complete','result':fallback(xy,start)}
+    return _drain_steps(plan_steps(g,xy,start,orientation,fallback_steps))
+
+
+def plan_steps(g,xy,start,orientation,fallback_steps):
+    """Advance the unchanged wrist search; only the final event has a plan.
+
+    Closing this generator closes its active child and skips all remaining
+    candidates. No thresholds, iteration limits, or IK arithmetic are changed.
+    """
     counters={'scalar_evaluations':0,'candidate_attempts':0,'ik_calls':0}
     reasons={};axis_preference=[];axis_min_rotation={}
     orientation=_orientation(orientation)
@@ -174,7 +233,12 @@ def plan(g,xy,start,orientation,fallback):
         # before a slightly less upright, small-wrist-motion solution is tried.
         candidates=[]
         for tilt in TILTS:
-            roots=roll_candidates(g,xy,tilt,orientation,q0[4],counters)
+            steps=roll_candidates_steps(g,xy,tilt,orientation,q0[4],counters)
+            try:
+                for event in steps:
+                    if event['stage']=='complete':roots=event['result']
+                    else:yield event
+            finally:_close_steps(steps)
             candidates.append((tilt,roots))
             for roll,index,sign in roots:
                 delta=abs(roll-q0[4])
@@ -185,11 +249,19 @@ def plan(g,xy,start,orientation,fallback):
                 for roll,index,sign in roots:
                     if index!=preferred_axis:continue
                     counters['candidate_attempts']+=1
+                    yield {'stage':'wrist_candidate','tilt_deg':tilt,'axis_index':index,'roll_rad':roll,'sign':sign}
                     try:
-                        result=_stages(g,xy,start,tilt,roll,orientation,counters)
-                        stage_errors={stage:math.degrees(abs(direction_error(jaw_direction(g,g.angles(result[stage])),
-                            orientation['axes_Base'][index],orientation['table_normal_Base'])))
-                            for stage in ('hover','descend','lift')}
+                        steps=_stages_steps(g,xy,start,tilt,roll,orientation,counters)
+                        try:
+                            for event in steps:
+                                if event['stage']=='complete':result=event['result']
+                                else:yield event
+                        finally:_close_steps(steps)
+                        stage_errors={}
+                        for stage in ('hover','descend','lift'):
+                            stage_errors[stage]=math.degrees(abs(direction_error(jaw_direction(g,g.angles(result[stage])),
+                                orientation['axes_Base'][index],orientation['table_normal_Base'])))
+                            yield {'stage':'wrist_direction_report','name':stage}
                         # Heading matters at the grasp pose. Elevated-stage
                         # headings are recorded rather than rejecting good reach.
                         if stage_errors['descend']>1.:
@@ -207,11 +279,19 @@ def plan(g,xy,start,orientation,fallback):
                             'stage_direction_errors_deg':stage_errors,
                             'stage_tilts_deg':dict(result['stage_tilts_deg']),'counts':dict(counters),
                             'tilt_candidates_deg':list(TILTS),'failures':reasons}
-                        return result
+                        yield {'stage':'complete','result':result}
+                        return
                     except ValueError as exc:
                         reason=str(exc);reasons[reason]=reasons.get(reason,0)+1
+                        yield {'stage':'wrist_candidate_rejected','tilt_deg':tilt,'axis_index':index,'reason':reason}
     else:reasons['No verified side orientation']=1
-    result=fallback(xy,start)
+    yield {'stage':'wrist_fallback'}
+    steps=fallback_steps(xy,start)
+    try:
+        for event in steps:
+            if event['stage']=='complete':result=event['result']
+            else:yield event
+    finally:_close_steps(steps)
     result['wrist_alignment']={'status':'held_current_fallback','reason':'No complete cube-aligned four-stage pose',
         'servo5_goal':result['hover'][4],
         'servo5_delta_from_start_deg':math.degrees(g.angles(result['hover'])[4]-q0[4]),
@@ -220,4 +300,5 @@ def plan(g,xy,start,orientation,fallback):
         'axis_preference':list(axis_preference),
         'axis_min_rotation_deg':{str(i):math.degrees(v) for i,v in axis_min_rotation.items()},
         'counts':counters,'failures':reasons}
-    return result
+    yield {'stage':'complete','result':result}
+    return

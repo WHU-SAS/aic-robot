@@ -47,6 +47,7 @@ class PickExecution:
         self.error = None
         self.grip_confirmation = None
         self.grasp_confirmed = None
+        self._success_ready = False
         self.recovery_reason = None
         self.recovery_goal_sent_ms = None
         self._invalidated = False
@@ -56,6 +57,7 @@ class PickExecution:
         self._lift_reference = None
         self._lift_stable_since = None
         self._lift_arrived = False
+        self._lift_last_sample_ms = None
 
     def _event(self, event, details=None):
         payload = {'target_version': self.target_version, 'phase': self.phase}
@@ -68,6 +70,7 @@ class PickExecution:
         if self.status not in ('running',):
             return self.snapshot()
         self._invalidated = True
+        self._success_ready = False
         self.recovery_reason = reason
         self.pending_stage = None
         self._close_window = []
@@ -78,9 +81,11 @@ class PickExecution:
         # Latch before any IO: a failed write must never resurrect an old plan.
         self.pending_stage = None
         self._invalidated = True
+        self._success_ready = False
         self._close_window = []
         self._lift_stable_since = None
         self.recovery_reason = reason
+        self._lift_last_sample_ms = None
         self.phase = 'recovery'
         self.status = 'recovering'
         # Ready2 opens the jaw; pre-recovery grip evidence is historical only.
@@ -114,11 +119,13 @@ class PickExecution:
             self._last_poll_ms = self.clock_ms()
             self.feedback_status = 'unknown'
             self.grasp_confirmed = None
+            self._success_ready = False
             self.error = str(exc)
             self._close_window = []
             self._lift_stable_since = None
             self._lift_reference = None
             self._lift_arrived = False
+            self._lift_last_sample_ms = None
             self._event('feedback_unavailable', {'error': self.error, 'axes': list(ids)})
             return None
         now = self.clock_ms()
@@ -142,6 +149,7 @@ class PickExecution:
     def _start_stage(self, name):
         self.pending_stage = None
         self.phase = name
+        self._success_ready = False
         self._last_poll_ms = None
         if name == 'descend':
             self.io.send_goals(self.plan[name], [4])
@@ -156,6 +164,7 @@ class PickExecution:
             if name == 'lift':
                 self._lift_stable_since = None
                 self._lift_arrived = False
+                self._lift_last_sample_ms = None
                 self._lift_reference = self.last_positions[5]
             self._event('stage_goal_sent', {'name': name, 'axes': [1, 2, 3, 4, 5, 6],
                         'goals': list(self.plan[name])})
@@ -187,7 +196,8 @@ class PickExecution:
                 self._event('stage_complete', {'name': 'close'})
                 self.pending_stage = 'lift'
 
-    def _lift(self, positions):
+    def _lift(self, positions, allow_success=True):
+        self._success_ready = False
         position = positions[5]
         self.grip_confirmation = self._confirmation(position)
         self.grip_confirmation['method'] = 'axis6_lift_goal_delta'
@@ -198,6 +208,17 @@ class PickExecution:
             self._recover('grip_lost')
             return
         now = self.clock_ms()
+        # A long vision/IK pause is unobserved time, not evidence of stability.
+        # Derive continuity from the existing poll cadence; no task stop/retry.
+        if self._lift_last_sample_ms is not None:
+            gap_ms = self.ticks_diff(now, self._lift_last_sample_ms)
+            gap_limit_ms = 2 * self.policy['poll_interval_ms']
+            if gap_ms > gap_limit_ms:
+                self._lift_stable_since = None
+                self._lift_reference = position
+                self._event('lift_observation_gap', {'gap_ms': gap_ms,
+                            'cadence_limit_ms': gap_limit_ms})
+        self._lift_last_sample_ms = now
         errors = [positions[i] - self.plan['lift'][i] for i in range(5)]
         arrived = all(abs(error) <= self.policy['lift_tolerance_counts'] for error in errors)
         tolerance = self.policy['lift_gripper_stable_tolerance_counts']
@@ -222,6 +243,9 @@ class PickExecution:
             self._lift_reference = position
         stable_ms = self.ticks_diff(now, self._lift_stable_since)
         if stable_ms >= self.policy['lift_gripper_stable_ms']:
+            self._success_ready = True
+            if not allow_success:
+                return
             self.status = 'succeeded'
             self.phase = 'complete'
             self.grip_confirmation.update(stable_reference=self._lift_reference,
@@ -229,9 +253,11 @@ class PickExecution:
             self._event('stage_complete', {'name': 'lift'})
             self._event('pick_succeeded', {'grip_confirmation': dict(self.grip_confirmation)})
 
-    def step(self, target_version=_UNSET_TARGET_VERSION):
+    def step(self, target_version=_UNSET_TARGET_VERSION, allow_success=True):
         """At most one dispatch/feedback turn; empty/lost grip dispatches recovery now.
 
+        allow_success=False defers only final commit for pending task evidence;
+        feedback and empty-grip recovery continue without changing thresholds.
         Failure is a reported arm fault for the task owner, not a new task-level
         give-up rule. No retries, camera actions, PID or torque-OFF writes occur.
         """
@@ -263,7 +289,7 @@ class PickExecution:
                     elif self.phase == 'close':
                         self._close(positions[0])
                     elif self.phase == 'lift':
-                        self._lift(positions)
+                        self._lift(positions, allow_success=allow_success)
         except Exception as exc:
             self.pending_stage = None
             self.status = 'fault'
@@ -292,7 +318,7 @@ class PickExecution:
         return {'status': self.status, 'phase': self.phase,
                 'target_version': self.target_version, 'pending_stage': self.pending_stage,
                 'target_valid': not self._invalidated,
-                'grasp_confirmed': self.grasp_confirmed,
+                'grasp_confirmed': self.grasp_confirmed, 'success_ready': self._success_ready,
                 'grip_confirmation': dict(self.grip_confirmation) if self.grip_confirmation else None,
                 'last_positions': list(self.last_positions), 'last_sample': self.last_sample,
                 'feedback_status': self.feedback_status, 'error': self.error,
@@ -305,6 +331,7 @@ class PickExecution:
         if self.status == 'closed':
             return
         self.pending_stage = None
+        self._success_ready = False
         self.status = 'closed'
         self.io.close()
 

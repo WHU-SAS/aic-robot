@@ -1,0 +1,449 @@
+"""Cooperative persistent task. Callbacks own hardware; no startup motion.
+
+New coarse frames are processed before accepting fine results or stepping the
+arm. A fine job owns one original image, epoch and capture time throughout.
+Scheduling budgets are soft: native CV, IK and UART calls may still block.
+"""
+try:
+    from ..car.blue_tracker import age_ms
+    from ..car.target_memory import TargetMemory
+    from ..car.tracking_drive import DriveController
+    from ..car.near_runtime import count_delta
+    from .task import handoff_observation
+except ImportError:
+    from blue_tracker import age_ms
+    from target_memory import TargetMemory
+    from tracking_drive import DriveController
+    from near_runtime import count_delta
+    from robot_task import handoff_observation
+
+
+class ReobserveRequired(ValueError):
+    """The validated target has no usable arm plan from this viewpoint."""
+
+
+class TrackingTask:
+    def __init__(self, capture, track, link, projection, config, clock_ms,
+                 begin_arm, moving_factory, static_factory, evidence=None,
+                 emit=None, reset_tracker=None):
+        self.capture, self.track, self.link = capture, track, link
+        self.config, self.clock, self.begin_arm = config, clock_ms, begin_arm
+        self.factories = {'moving': moving_factory, 'static': static_factory}
+        self.evidence = evidence if evidence is not None else []
+        self.emit = emit or (lambda event, details: None)
+        self.reset_tracker = reset_tracker or (lambda: None)
+        self.arm_context = None
+        self.memory, self.drive = TargetMemory(projection, config), DriveController(projection, config)
+        self.period = config.get('tracking_task', {}).get('period_ms', 100)
+        self.state = self.link.sync()
+        self.coarse = self.target = self.decision = None
+        self.arm = self.job = self.complete = None
+        self.planning = None
+        self.last_parking = None
+        self._parking_version = None
+        self._last_capture = self._frame_motor = None
+        self._fresh_before_arm = False
+        self._force_observe = False
+        self._arm_motor_reference = None
+        self._recovery_seen = False
+        self._missing = 0
+        self.fault = None
+        self.status = 'running'
+        self.metrics = dict(observations=0, max_observation_gap_ms=0, max_step_ms=0,
+            fine_started=0, fine_cancelled=0, arm_plans=0, arm_attempts=0, recoveries=0,
+            planning_steps=0, plans_cancelled=0, max_planning_step_ms=0,
+            target_changes=0, obsolete_frames_released=0)
+
+    def _command(self, command):
+        sent = self.clock()
+        state = self.link.expect(command)
+        state['_k230_sent_ms'], state['_k230_received_ms'] = sent, self.clock()
+        self.state = state
+        return state
+
+    def _fault(self, stage, error):
+        reason = '%s: %s' % (stage, error)
+        if self.fault != reason:
+            self.emit('tracking_fault_wait', {'reason': reason, 'task_terminal': False})
+        self.fault = reason
+        self._cancel_job('execution_fault')
+        self._cancel_plan('execution_fault')
+        if self.state.get('run'):
+            try:
+                self._command('STOP')
+            except Exception:
+                pass  # Existing MCU communication lease still applies.
+
+    def _save_job(self, reason=None):
+        if self.job is None:
+            return
+        job = self.job
+        try:
+            item = job['session'].take_evidence('tracking_%d_%s' % (
+                job['number'], job['purpose']))
+        except Exception as exc:
+            self.emit('vision_archive_error', {'error':str(exc)})
+            return
+        if item:
+            item['frame'] = dict(item['frame'], target_version=job['target_version'])
+            item['frame']['tracking_purpose'] = job['purpose']
+            if reason:
+                item['frame']['discard_reason'] = reason
+            self._release_evidence(job['target_version'], job['purpose'])
+            self.evidence.append(item)
+
+    def _release_evidence(self, version, replaced_purpose=None):
+        """Discard superseded RAM frames, not previously archived materials.
+
+        At most the current target's latest moving and static pictures remain.
+        Obsolete intermediate images need no SD write or extra chassis stop.
+        """
+        retained = [item for item in self.evidence
+            if item['frame'].get('target_version') == version and
+            (replaced_purpose is None or item['frame'].get('tracking_purpose') != replaced_purpose)]
+        self.metrics['obsolete_frames_released'] += len(self.evidence)-len(retained)
+        self.evidence[:] = retained
+
+    def _cancel_job(self, reason):
+        if self.job is not None:
+            if reason in ('execution_fault', 'task_closed'):
+                self._save_job(reason)
+            cancel = getattr(self.job['session'], 'cancel', None)
+            if cancel:
+                cancel()
+            self.metrics['fine_cancelled'] += 1
+        self.job = self.complete = None
+        self.drive.cancel_fine()
+
+    def _wheel_delta(self, previous, current):
+        if previous is None:
+            return ()
+        scale = self.config['mm_per_count']
+        return [(count_delta(previous['encoder_a'], current['encoder_a'])*scale,
+                 -count_delta(previous['encoder_b'], current['encoder_b'])*scale)]
+
+    def _cancel_plan(self, reason):
+        if self.planning is None:
+            return
+        plan, self.planning = self.planning, None
+        close = getattr(plan['iterator'], 'close', None)
+        if close:
+            close()
+        self.metrics['plans_cancelled'] += 1
+        self.emit('tracking_plan_cancelled', {'reason':reason,
+            'target_version':plan['target_version']})
+
+    def _advance_plan(self):
+        if self.planning is None or self.target.get('movement_state') == 'suspected':
+            return
+        plan = self.planning
+        started = self.clock()
+        try:
+            event = next(plan['iterator'])
+            self.metrics['planning_steps'] += 1
+            if event.get('target_version') != plan['target_version']:
+                raise ValueError('Planning changed its original target version')
+            if event.get('stage') == 'complete':
+                engine = event['execution']
+                if (event.get('frame_id') != plan['frame_id'] or
+                        engine.snapshot()['target_version'] != plan['target_version']):
+                    engine.close()
+                    raise ValueError('Planning changed its original observation')
+                self.arm = engine
+                close = getattr(plan['iterator'], 'close', None)
+                if close:
+                    close()
+                self.planning = None
+                self._fresh_before_arm = True
+        except ReobserveRequired as exc:
+            self._cancel_plan('scene_has_no_arm_plan')
+            self.last_parking = None
+            self.emit('tracking_reobserve', {'reason':str(exc), 'stage':'arm_plan'})
+            self.drive.restart_observation(change_view=True)
+            self._force_observe = True
+        except Exception as exc:
+            self._fault('arm_plan', exc)
+        finally:
+            self.metrics['max_planning_step_ms'] = max(self.metrics['max_planning_step_ms'],
+                age_ms(self.clock(), started))
+
+    def _observe(self):
+        image, frame = self.capture()
+        now = frame['capture_timestamp_ms']
+        if self._last_capture is not None:
+            self.metrics['max_observation_gap_ms'] = max(
+                self.metrics['max_observation_gap_ms'], age_ms(now, self._last_capture))
+        self._last_capture = now
+        self.metrics['observations'] += 1
+        if self.fault is None:
+            try:
+                self._command('STATUS')
+            except Exception as exc:
+                self._fault('motor_status', exc)
+        self.coarse = self.track(image, frame)
+        arm_state = self.arm.snapshot() if self.arm is not None else None
+        if arm_state is not None and self.arm_context is not None:
+            arm_state = self.arm_context(arm_state)
+        deltas = self._wheel_delta(self._frame_motor, self.state)
+        if (self.arm is not None or self.planning is not None) and self._arm_motor_reference is not None and any(
+                abs(count_delta(self._arm_motor_reference[key], self.state[key]))*
+                self.config['mm_per_count'] > .1 for key in ('encoder_a', 'encoder_b')):
+            self.memory.invalidate('chassis_moved_during_grasp')
+        self.target = self.memory.update(self.coarse, deltas, arm_state)
+        if self._parking_version != self.memory.version:
+            self.last_parking = None
+        if self.planning is not None and (
+                self.planning['target_version'] != self.memory.version or
+                not self.target.get('associated') or not self.target.get('visible') or
+                self.target.get('needs_precise')):
+            self._cancel_plan('observation_changed_during_planning')
+            self.last_parking = None
+            self.drive.restart_observation()
+        self._release_evidence(self.memory.version)
+        self._frame_motor = dict(self.state)
+        if self.target['confirmed_moved']:
+            self.metrics['target_changes'] += 1
+        if self.job is not None and self.job['target_version'] != self.memory.version:
+            self._cancel_job('target_version_changed')
+        if self.complete is not None and self.complete['target_version'] != self.memory.version:
+            self.complete = None
+            self.drive.cancel_fine()
+        evidence = self.coarse.get('visual_evidence') or {}
+        if (self.target['event'] in ('moved', 'acquired', 'reappeared') and
+                self.target['associated'] and evidence.get('associated') is False):
+            # Memory has confirmed a unique jump; the next native frame can
+            # establish a new color association instead of following old blue.
+            self.reset_tracker()
+        self._missing = self._missing+1 if not self.target['visible'] else 0
+        self._fresh_before_arm = False
+        return image, frame
+
+    def _start_job(self, purpose, image, frame):
+        fine_config = dict(self.config)
+        fine_config['near_parking'] = dict(self.config['near_parking'],
+            fine_budget_ms=self.config.get('tracking_task', {}).get('fine_budget_ms', 20))
+        session = self.factories[purpose](fine_config, self.clock)
+        self.metrics['fine_started'] += 1
+        self.job = {'session': session, 'purpose': purpose,
+            'target_version': self.memory.version, 'paired_coarse': dict(self.coarse),
+            'request_id': self.decision.get('fine_request_id'),
+            'number': self.metrics['fine_started']}
+        try:
+            session.start(image, frame, self.coarse.get('bbox_px') if purpose == 'moving' else None)
+        except Exception as exc:
+            session.latest = dict(frame, schema='aic.vision_observation.v1', mode='precise',
+                                  status='no_complete_face', reason=str(exc))
+            session.latest_ready_ms = self.clock()
+            session.phase = None
+
+    def _advance_job(self):
+        if self.job is None:
+            return
+        job = self.job
+        try:
+            job['session'].advance()
+        except Exception as exc:
+            job['session'].latest = dict(job['paired_coarse'], mode='precise',
+                status='no_complete_face', reason=str(exc))
+            job['session'].latest_ready_ms = self.clock()
+            job['session'].phase = None
+        if not job['session'].phase:
+            self.complete = dict(job, observation=job['session'].latest,
+                result_ready_ms=job['session'].latest_ready_ms)
+            self.complete.pop('session')
+            self._save_job()
+            self.job = None
+
+    def _step_arm(self):
+        if self.arm is None or self._fresh_before_arm:
+            return
+        before = self.arm.snapshot()
+        if before['target_version'] == self.memory.version and before.get('target_valid', True):
+            if before.get('pending_stage') == 'hover' and (
+                    not self.target.get('associated') or not self.target.get('visible') or
+                    self.target.get('needs_precise')):
+                # No servo goal has been sent by this engine. Drop the stale
+                # plan without a physical recovery action, then obtain a new
+                # static result; unknown vision alone must not open the jaw.
+                self.arm.close()
+                self.arm = None
+                self._arm_motor_reference = None
+                self.drive.restart_observation()
+                self._force_observe = True
+                return
+            if (self.target.get('movement_state') == 'suspected' and
+                    (before.get('pending_stage') is not None or before['phase'] == 'descend_lead')):
+                return
+        dispatching_first = (before.get('pending_stage') == 'hover' and
+            before['target_version'] == self.memory.version and before.get('target_valid', True))
+        allow_success = self.target.get('movement_state') != 'suspected'
+        if before['target_version'] != self.memory.version or not before.get('target_valid', True):
+            state = self.arm.step(target_version=self.memory.version, allow_success=allow_success)
+        elif before.get('next_poll_in_ms', 0) <= 0:
+            state = self.arm.step(target_version=self.memory.version, allow_success=allow_success)
+        else:
+            state = before
+        if dispatching_first and state.get('pending_stage') != 'hover':
+            self.metrics['arm_attempts'] += 1
+        if state['status'] in ('recovering', 'reobserve_ready') and not self._recovery_seen:
+            self._recovery_seen = True
+            self.metrics['recoveries'] += 1
+            self.memory.invalidate(state.get('recovery_reason') or 'arm_recovery')
+            self.last_parking = None
+            self._release_evidence(self.memory.version)
+            self._cancel_job('arm_recovery')
+            self.drive.restart_observation()
+        if state['status'] == 'fault':
+            self._fault('arm_execution', state.get('error'))
+        elif state['status'] == 'succeeded':
+            self.status = 'succeeded'
+        elif state.get('can_reobserve'):
+            self.arm.close()
+            self.arm = None
+            self._arm_motor_reference = None
+            self._recovery_seen = False
+            self.drive.restart_observation()
+            self._force_observe = True
+
+    def _advance_background(self):
+        """Spend a short time slice, not one sleep for every cheap yield.
+
+        Hundreds of algebraic progress events should not each cost5ms of idle
+        time. Stop at the next observation deadline or the soft work budget.
+        """
+        started = self.clock()
+        budget = self.config.get('tracking_task', {}).get('fine_budget_ms', 20)
+        while self.fault is None and self.arm is None:
+            if (age_ms(self.clock(), started) >= budget or
+                    (self._last_capture is not None and
+                     age_ms(self.clock(), self._last_capture) >= self.period)):
+                return
+            if self.planning is not None:
+                if self.target.get('movement_state') == 'suspected':
+                    return
+                self._advance_plan()
+            elif self.job is not None:
+                self._advance_job()
+                if self.complete is not None:
+                    return
+            else:
+                return
+
+    def _step(self):
+        """Advance one cooperative slice; recoverable scenes never end the task."""
+        if self.status == 'succeeded':
+            return self.snapshot()
+        started = self.clock()
+        observed = (self._last_capture is None or self._fresh_before_arm or self._force_observe or
+                    self.complete is not None or age_ms(started, self._last_capture) >= self.period)
+        image = frame = None
+        if observed:
+            image, frame = self._observe()
+            self._force_observe = False
+            if self.fault is None:
+                event = dict(self.target)
+                # An unknown center loss is first observed, not called an exit.
+                # Once stopped, ordinary confirmation frames may start looking.
+                if (self.arm is None and self.planning is None and not self.state['run'] and self.job is None and
+                        self.complete is None and (not event['anchor_valid'] or
+                        self.drive.phase in ('settling', 'observing', 'observe')) and self._missing >=
+                        self.config['tracking'].get('confirmation_frames', 3)):
+                    event['search'] = True
+                eligible = self.complete if self.target.get('target_valid') else None
+                self.decision = self.drive.update(self.coarse, self.state, self.clock(),
+                    precise=eligible, target_version=self.memory.version,
+                    fine_pending=self.job is not None, target_event=event,
+                    arm_active=self.arm is not None or self.planning is not None)
+                if self.complete is not None and self.decision.get('precise_consumed'):
+                    done = self.complete
+                    self.memory.bind_precise(done['observation'], done['paired_coarse'],
+                        done['target_version'], self.drive.odometry.since(
+                            done['observation'].get('capture_timestamp_ms', self.clock()), self.clock()))
+                self.complete = None
+                if self.decision.get('command'):
+                    try:
+                        self._command(self.decision['command'])
+                    except Exception as exc:
+                        self._fault('motor_command', exc)
+                if self.arm is None and self.planning is None and self.fault is None:
+                    if self.decision.get('allow_arm'):
+                        try:
+                            observation = handoff_observation(self.decision['parking'])
+                            self.last_parking = self.decision['parking']
+                            self._parking_version = self.memory.version
+                            candidate = self.begin_arm(observation, self.memory.version)
+                            self._arm_motor_reference = dict(self.state)
+                            self.metrics['arm_plans'] += 1
+                            if hasattr(candidate, 'snapshot'):
+                                # Compatibility with an inert synchronous
+                                # factory; also require a new frame after it.
+                                self.arm = candidate
+                                self._fresh_before_arm = True
+                            else:
+                                self.planning = {'iterator':iter(candidate),
+                                    'target_version':self.memory.version,
+                                    'frame_id':observation['frame_id']}
+                        except ReobserveRequired as exc:
+                            self.last_parking = None
+                            self.emit('tracking_reobserve', {'reason': str(exc), 'stage': 'arm_plan'})
+                            self.drive.restart_observation(change_view=True)
+                        except Exception as exc:
+                            self._fault('arm_plan', exc)
+                    elif (self.decision.get('request_fine') and self.job is None and
+                            self.target.get('target_valid')):
+                        self._start_job(self.decision['request_fine'], image, frame)
+        if self.fault is None:
+            self._step_arm()
+            self._advance_background()
+        self.metrics['max_step_ms'] = max(self.metrics['max_step_ms'], age_ms(self.clock(), started))
+        return self.snapshot()
+
+    def step(self):
+        started = self.clock()
+        try:
+            return self._step()
+        except Exception as exc:
+            self._fault('tracking_io', exc)
+            return self.snapshot()
+        finally:
+            self.metrics['max_step_ms'] = max(self.metrics['max_step_ms'], age_ms(self.clock(), started))
+
+    def snapshot(self):
+        state = self.arm.snapshot() if self.arm is not None else None
+        return {'schema': 'aic.robot.tracking.v1', 'status': self.status,
+            'target_version': self.memory.version, 'target': self.memory.snapshot(),
+            'phase': state['phase'] if state else ('planning' if self.planning is not None else
+                      (self.decision or {}).get('phase', 'observe')),
+            'planning_pending':self.planning is not None, 'fine_pending':self.job is not None,
+            'arm_started': self.metrics['arm_attempts'] > 0, 'arm_state': state,
+            'parking': self.last_parking or (self.decision or {}).get('parking'),
+            'grasp_confirmed': (state or {}).get('grasp_confirmed'),
+            'grip_confirmation': (state or {}).get('grip_confirmation'),
+            'physical_grasp_confirmed': False, 'fault_wait': self.fault,
+            'motion_wait_reason': (self.decision or {}).get('motion_wait_reason'),
+            'corrections': self.drive.corrections, 'metrics': dict(self.metrics)}
+
+    def close(self):
+        try:
+            self._cancel_job('task_closed')
+        finally:
+            try:
+                self._cancel_plan('task_closed')
+            finally:
+                try:
+                    self._command('STOP')
+                finally:
+                    if self.arm is not None:
+                        self.arm.close()
+
+
+def run_tracking(*args, sleep_ms=None, **kwargs):
+    task = TrackingTask(*args, **kwargs)
+    try:
+        while task.status != 'succeeded':
+            task.step()
+            if sleep_ms:
+                sleep_ms(5)
+        return task.snapshot()
+    finally:
+        task.close()

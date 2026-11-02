@@ -28,6 +28,15 @@ def for_approach(observation, mode, clock_domain='k230_ticks_ms'):
             raise ValueError('Coarse result cannot supply a precise cube center')
         if status not in ('tracking', 'confirming', 'lost', 'no_target'):
             raise ValueError('Unknown coarse status')
+        evidence = result.get('visual_evidence')
+        if evidence is not None:
+            if (not isinstance(evidence, dict) or evidence.get('timestamp_ms') != stamp or
+                    'cube_center_Base_mm' in evidence):
+                raise ValueError('Visual evidence must describe the same coarse frame')
+            evidence = dict(evidence)
+            if evidence.get('distance_valid') is not True:
+                evidence.pop('ground_contact_proxy_Base_mm', None)
+            result['visual_evidence'] = evidence
         if status in ('lost', 'no_target'):
             for key in ('bbox_px', 'center_pixel', 'image_midline_error_px',
                         'pixels', 'confirmations', 'ground_contact_proxy_Base_mm'):
