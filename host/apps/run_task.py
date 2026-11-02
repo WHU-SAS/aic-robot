@@ -20,23 +20,24 @@ from pathlib import Path
 ROOT = REPO_ROOT
 from task_controller import Configuration, FloorCheck, TaskController, TaskError
 from host.transport.servo_bus import ServoBus
+from host.arm.ready_profiles import load_ready_profile
 
 DEFAULT_PORT = '/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B79033467-if00'
 
 
-def _ready_goals(config):
+def _ready_goals(config, ready_pose_number=1):
     import math
-    profile=json.loads((ROOT/'configs/arm/ready_pose.json').read_text())
+    profile=load_ready_profile(ROOT,ready_pose_number)
     return {i:config.mapping.radians_to_count(i, math.radians(deg))
             for i,deg in enumerate(profile['angles_deg'],1)}
 
 
 def select_route_check(config, data, steps, hold_at_last_target,
-                       ready_pose_without_model_floor=False, finger_floor_m=.03):
+                       ready_pose_without_model_floor=False, finger_floor_m=.03, ready_pose_number=1):
     """The user-approved exception is limited to one held ready-pose stage."""
     if not ready_pose_without_model_floor:
         return FloorCheck(config, finger_floor_m=finger_floor_m)
-    expected = _ready_goals(config)
+    expected = _ready_goals(config,ready_pose_number)
     if (not hold_at_last_target or data.get('name') != 'ready_pose'
             or len(steps) != 1 or steps[0]['name'] != 'ready_pose'
             or steps[0]['goals'] != expected):
@@ -53,9 +54,9 @@ def select_route_check(config, data, steps, hold_at_last_target,
     return operator_reviewed_route
 
 
-def dispatch_ready_immediately(controller, steps):
+def dispatch_ready_immediately(controller, steps, ready_pose_number=1):
     """Command invocation authorizes this one ready goal; no stdin or arrival claim."""
-    expected = _ready_goals(controller.config)
+    expected = _ready_goals(controller.config,ready_pose_number)
     if len(steps) != 1 or steps[0]['name'] != 'ready_pose' or steps[0]['goals'] != expected:
         raise TaskError('immediate dispatch is authorized only for the single user-defined ready pose')
     fresh = controller.sample()
@@ -85,6 +86,8 @@ def main():
                         help='explicit per-run model floor for two finger meshes, 10..30 mm; default 30, other links unchanged')
     parser.add_argument('--ready-pose-without-model-floor', action='store_true',
                         help='user-approved model-floor exception, restricted to one held ready-pose stage')
+    parser.add_argument('--ready-pose-number',type=int,choices=(1,2),default=1,
+                        help='select one of the two user-defined ready targets; default1')
     parser.add_argument('--ready-pose-immediate', action='store_true',
                         help='user-authorized ready-only immediate dispatch without stdin prompts')
     parser.add_argument('--port', default=DEFAULT_PORT)
@@ -99,7 +102,7 @@ def main():
         if not steps: parser.error('--hold-at-last-target requires a nonempty task')
     floor = select_route_check(config, data, steps, args.hold_at_last_target,
                                args.ready_pose_without_model_floor,
-                               args.model_finger_floor_mm / 1000.)
+                               args.model_finger_floor_mm / 1000.,args.ready_pose_number)
     if args.ready_pose_immediate and not args.ready_pose_without_model_floor:
         parser.error('--ready-pose-immediate requires the ready-only task exception')
     if not args.execute:
@@ -114,6 +117,7 @@ def main():
                           'pid':config.baseline['parameters'], 'steps':plan,
                           'control_policy':config.policy,
                           'model_floor_check_enabled':not args.ready_pose_without_model_floor,
+                          'ready_pose_number':args.ready_pose_number if args.ready_pose_without_model_floor else None,
                           'stdin_confirmation_required':not args.ready_pose_immediate,
                           'dispatch_authorization':'command_invocation_ready_only' if args.ready_pose_immediate else 'per_stage_operator_confirmation',
                           'model_floor_override_scope':'ready_pose_only' if args.ready_pose_without_model_floor else None,
@@ -126,6 +130,7 @@ def main():
     record = {'status':'preflight', 'task':data, 'baseline':config.baseline,
               'finger_model_floor_mm':args.model_finger_floor_mm,
               'model_floor_check_enabled':not args.ready_pose_without_model_floor,
+              'ready_pose_number':args.ready_pose_number if args.ready_pose_without_model_floor else None,
               'stdin_confirmation_required':not args.ready_pose_immediate,
               'dispatch_authorization':'command_invocation_ready_only' if args.ready_pose_immediate else 'per_stage_operator_confirmation',
               'model_floor_override_scope':'ready_pose_only' if args.ready_pose_without_model_floor else None,
@@ -149,7 +154,7 @@ def main():
                     controller.prepare(steps,recover=args.recover)
                     if args.ready_pose_immediate:
                         record['status']='command_line_authorized_ready_dispatch';save()
-                        record['status']=dispatch_ready_immediately(controller,steps)
+                        record['status']=dispatch_ready_immediately(controller,steps,args.ready_pose_number)
                     else:
                         record['status']='holding_waiting_hands_free'; save()
                         if not args.hands_free:

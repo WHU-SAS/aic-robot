@@ -14,14 +14,15 @@ bootstrap()
 from host.transport.download_calibration import CameraLink,PORT
 from host.arm.task_controller import Configuration,REGISTERS
 from host.apps.move_ready import ready_task
+from host.arm.ready_profiles import load_ready_profile
 
-def config_payload():
+def config_payload(pose=1):
     config=Configuration(ROOT)
-    profile=json.loads((ROOT/'configs/arm/ready_pose.json').read_text())
+    profile=load_ready_profile(ROOT,pose)
     task=ready_task(config,profile)
     if profile.get('model_floor_check_enabled') is not False:
         raise RuntimeError('Ready-only floor exception configuration changed; review entry')
-    return {'goals':task['steps'][0]['positions'],'gripper_opens_deg':profile['angles_deg'][5],
+    return {'ready_pose_number':pose,'angles_deg':profile['angles_deg'],'goals':task['steps'][0]['positions'],'gripper_opens_deg':profile['angles_deg'][5],
             'profiles':[config.profiles[i] for i in range(1,7)],
             'registers':[{str(a):config.baseline['parameters'][str(i)][name] for a,name in REGISTERS.items()} for i in range(1,7)],
             'software_limits':[config.mapping.joint(i)['software_count_limits'] for i in range(1,7)]}
@@ -29,6 +30,7 @@ def config_payload():
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port',default=PORT)
+    parser.add_argument('--pose',type=int,choices=(1,2),default=1,help='ready pose number; default1')
     parser.add_argument('--execute',action='store_true')
     parser.add_argument('--hold-current',action='store_true')
     parser.add_argument('--hands-free',action='store_true')
@@ -37,7 +39,7 @@ def main():
     if args.execute and not args.hold_current and not args.hands_free:
         parser.error('Ready movement requires --hands-free (hands away from the motion area)')
     action='hold' if args.hold_current else 'ready' if args.execute else 'read'
-    config=config_payload()
+    config=config_payload(args.pose)
     read_source=(ROOT/'device/k230/diagnostics/uart1_servo_read.py').read_text().split('\nif __name__ == "__main__":')[0]
     board_source=(ROOT/'device/k230/arm/ready_pose.py').read_text()
     source=read_source+'\n'+board_source+'\nrun_arm_ready(ujson.loads('+repr(json.dumps(config))+'),'+repr(action)+')\n'

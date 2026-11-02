@@ -39,7 +39,7 @@ def build_bundle(pick_config=None):
     if not voice.get('enrollment_file'):raise ValueError('No accepted wake word registration')
     commands=registered_commands(voice)
     control=payload(config,[2048]*6)
-    cfg={'pick':pick,'vision':vision,'intrinsics':intr,'extrinsics':ext,'model':model,'control':control,'voice':voice,'ready_control':ready_payload()}
+    cfg={'pick':pick,'vision':vision,'intrinsics':intr,'extrinsics':ext,'model':model,'control':control,'voice':voice,'ready_control':ready_payload(1),'drive_ready_control':ready_payload(2)}
     files={p.name:p.read_bytes() for p in (ROOT/'device/k230/pick').glob('*.py')}
     files['camera.py']=(ROOT/'device/k230/vision/camera.py').read_bytes()
     files['vision_runtime.py']=(ROOT/'device/k230/vision/runtime.py').read_bytes()

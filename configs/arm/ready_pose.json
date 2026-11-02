@@ -2,9 +2,9 @@
   "name": "ready_pose",
   "angles_deg": [
     0,
-    -80,
-    80,
-    80,
+    -85,
+    85,
+    85,
     0,
     25
   ],
@@ -14,5 +14,7 @@
   "model_floor_check_enabled": false,
   "model_floor_override_authorization": "Direct user approval 2026-10-13: only ready pose omits inherited model floor gate; retain encoder/device limits, saved-parameter checks, communication checks and manual confirmation.",
   "dispatch_authorization": "command_invocation_ready_only",
-  "immediate_dispatch_authorization": "Direct user instruction 2026-10-13: execute immediately after command invocation, without repeated terminal confirmations; ready pose only."
+  "immediate_dispatch_authorization": "Direct user instruction 2026-10-13: execute immediately after command invocation, without repeated terminal confirmations; ready pose only.",
+  "pose_number": 1,
+  "purpose": "Return command ready pose1"
 }

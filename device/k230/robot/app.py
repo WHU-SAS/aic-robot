@@ -1,7 +1,7 @@
 """Standalone voice entry: continuous approach, park, then grasp the same target.
 
-Boot only listens. Ready pose remains a separate command. Successful execution
-ends at lift/holding; no automatic release, return, PID or torque change.
+Boot only listens. The ready command sends pose1; pick wake first sends pose2.
+Successful execution ends at lift/holding; no automatic release, return or PID writes.
 """
 import gc
 import json
@@ -72,14 +72,15 @@ def archive(config, frames, status, error=None):
             'archive_complete':saved['archive_complete']}
 
 
-def dispatch(action, config):
+def dispatch(action, config, ready_dispatched=False):
     import app as arm
     from robot_task import execute_task
     if action == 'ready':
-        arm.run_ready(config['arm'])
-        return {'status':'ready_dispatched', 'arrival_checked':False}
+        if not ready_dispatched:arm.run_ready(config['arm'])
+        return {'status':'ready_dispatched', 'ready_pose':1, 'arrival_checked':False}
     if action != 'pick':
         raise ValueError('Unknown robot voice action: ' + str(action))
+    if not ready_dispatched:arm.run_ready(config['arm'],pose=2,immediate=True)
     frames, parking = [], []
     result, error, arm_started = None, None, False
     def drive():
@@ -101,6 +102,9 @@ def dispatch(action, config):
         record = result or {'schema':'aic.robot.task.v1', 'status':'runtime_error',
                             'error':error, 'arm_started':arm_started,
                             'parking':parking[-1] if parking else None}
+        # arm_started names the post-parking grasp, not the wake acknowledgement.
+        record.update(ready_pose2_goal_sent=True,ready_pose2_arrival_checked=False,
+                      arm_started_scope='grasp_after_parking')
         try:
             record['evidence'] = archive(config, frames, record['status'], error)
         except Exception as exc:
@@ -119,13 +123,17 @@ def run_forever(root):
     import app as arm
     config = load(root)
     emit('configured', {'release_path':root, 'trigger':'思达思达',
-                        'ready_command':'回准备位', 'startup_motion':False})
+                        'ready_command':'回准备位', 'startup_motion':False,
+                        'ready_command_pose':1,'pick_wake_response_pose':2,
+                        'wait_for_ready_arrival':False})
     warmup = 32
     while True:
-        action = arm.wait_for_wake(config['voice'], warmup)
+        response,respond = arm.make_wake_response(config['arm'])
+        action = arm.wait_for_wake(config['voice'], warmup,on_command=respond)
         warmup = 0
         try:
-            result = dispatch(action, config)
+            if response['error'] is not None:raise response['error']
+            result = dispatch(action, config,ready_dispatched=response['sent'])
             emit('task_finished', {'status':result['status']})
         except Exception as exc:
             emit('task_error', {'error':str(exc)})

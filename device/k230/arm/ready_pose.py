@@ -164,10 +164,11 @@ def dispatch_ready(uart,config):
     started=time.ticks_ms()
     result=ensure_ready_torque(uart,config)
     if uart.write(goal_packet)!=len(goal_packet):raise RuntimeError('Short ready goal write')
+    goal_sent_at=time.ticks_ms()
     # 56 bytes at 1Mbps take0.56ms. Drain TX, then return without feedback.
     time.sleep_ms(2)
     result.update({'event':'ready_direct_sent','goals':config['goals'],
-                   'goal_packet_count':1,'readback_verified':False,
+                   'goal_packet_count':1,'readback_verified':False,'goal_sent_ticks_ms':goal_sent_at,
                    'dispatch_ms':time.ticks_diff(time.ticks_ms(),started)})
     print('ARM_EVENT '+ujson.dumps(result))
     return result

@@ -71,7 +71,13 @@ class RobotBundleTests(unittest.TestCase):
                       (20,3,60,16),(24,0,60,0),(8,0,60,0)]
         self.assertEqual([tuple(row[k] for k in ('21','23','22','25'))
                           for row in arm['control']['registers']],expected_pid)
-        self.assertEqual(arm['ready_control']['goals'],[2048,1138,2958,2958,2048,2332])
+        self.assertEqual(arm['ready_control']['goals'],[2048,1081,3015,3015,2048,2332])
+        self.assertEqual(arm['drive_ready_control']['goals'],[2048,1138,2958,2958,2048,2332])
+        self.assertEqual(arm['ready_control']['ready_pose_number'],1)
+        self.assertEqual(arm['drive_ready_control']['ready_pose_number'],2)
+        self.assertEqual(arm['ready_control']['angles_deg'],[0,-85,85,85,0,25])
+        self.assertEqual(arm['drive_ready_control']['angles_deg'],[0,-80,80,80,0,25])
+        self.assertEqual(arm['drive_ready_control']['profiles'],arm['ready_control']['profiles'])
         self.assertEqual(arm['extrinsics']['geometry_model_sha256'],
                          deploy.digest((ROOT/pick['model_urdf']).read_bytes()))
         self.assertEqual(car['intrinsics'],arm['intrinsics'])
@@ -89,7 +95,7 @@ class RobotBundleTests(unittest.TestCase):
         self.assertNotIn('wrist_alignment_enabled',fixed[0]['arm']['pick'])
         for key in ('car','voice'):
             self.assertEqual(default[0][key],fixed[0][key])
-        for key in ('model','control','ready_control','intrinsics','extrinsics'):
+        for key in ('model','control','ready_control','drive_ready_control','intrinsics','extrinsics'):
             self.assertEqual(default[0]['arm'][key],fixed[0]['arm'][key])
 
     def test_flat_sources_and_manifest_include_both_executors_and_static_solver(self):

@@ -19,6 +19,8 @@ from unittest.mock import patch, MagicMock
 ROOT = REPO_ROOT
 from task_controller import Configuration, TaskController, TaskError
 from move_ready import ready_task
+import move_ready
+from host.arm.ready_profiles import load_ready_profile
 import run_task
 from run_task import select_route_check, dispatch_ready_immediately
 from test_task_controller import Clock, FakeBus
@@ -181,6 +183,60 @@ class ReadyPoseTests(unittest.TestCase):
             self.assertEqual(record['status'],'ready_pose_goal_sent_torque_retained')
             self.assertFalse(record['stdin_confirmation_required'])
             self.assertEqual(self.bus.releases,[])
+
+    def test_numbered_ready_poses_dispatch_only_the_selected_target(self):
+        expected = {1:[2048,1081,3015,3015,2048,2332],
+                    2:[2048,1138,2958,2958,2048,2332]}
+        for pose in (1,2):
+            with self.subTest(pose=pose):
+                task = ready_task(self.config,load_ready_profile(ROOT,pose))
+                steps = self.config.task(task)[:-1]
+                goals = steps[0]['goals']
+                self.assertEqual([goals[i] for i in range(1,7)],expected[pose])
+                route = select_route_check(self.config,task,steps,True,True,
+                                           ready_pose_number=pose)
+                controller = TaskController(self.bus,self.config,route,
+                    clock=self.clock.now,sleep=self.clock.sleep)
+                controller.prepare(steps)
+                before=len(self.bus.commands)
+                result=dispatch_ready_immediately(controller,steps,pose)
+                self.assertEqual(result,'ready_pose_goal_sent_torque_retained')
+                self.assertEqual(len(self.bus.commands),before+1)
+                self.assertEqual(self.bus.commands[-1][0],goals)
+                other=2 if pose==1 else 1
+                with self.assertRaises(TaskError):
+                    select_route_check(self.config,task,steps,True,True,
+                                       ready_pose_number=other)
+                with self.assertRaises(TaskError):
+                    dispatch_ready_immediately(controller,steps,other)
+                changed=copy.deepcopy(steps);changed[0]['goals'][2]+=1
+                with self.assertRaises(TaskError):
+                    select_route_check(self.config,task,changed,True,True,
+                                       ready_pose_number=pose)
+                with self.assertRaises(TaskError):
+                    dispatch_ready_immediately(controller,changed,pose)
+        self.assertEqual(self.bus.releases,[])
+
+    def test_ready_cli_passes_explicit_pose_and_matching_goals(self):
+        seen=[]
+        def run(command,**kwargs):
+            task_path=Path(command[command.index('--task')+1])
+            seen.append((list(command),json.loads(task_path.read_text())))
+            return SimpleNamespace(returncode=0)
+        with patch.object(move_ready.subprocess,'run',side_effect=run):
+            self.assertEqual(move_ready.main([]),0)
+            self.assertEqual(move_ready.main(['--pose','2']),0)
+        for pose,(command,task) in enumerate(seen,1):
+            self.assertEqual(command[command.index('--ready-pose-number')+1],str(pose))
+            expected=ready_task(self.config,load_ready_profile(ROOT,pose))
+            self.assertEqual(task,expected)
+            self.assertIn('--ready-pose-immediate',command)
+            self.assertNotIn('--execute',command)
+
+    def test_unknown_ready_pose_cannot_select_an_arbitrary_profile(self):
+        for pose in (0,3,True,'2'):
+            with self.subTest(pose=pose),self.assertRaises(ValueError):
+                load_ready_profile(ROOT,pose)
 
     def test_route_annotation_never_claims_geometry_passed(self):
         result=self.route({},self.steps[0]['goals'])

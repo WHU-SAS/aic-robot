@@ -92,31 +92,35 @@ class VoiceDispatchTests(unittest.TestCase):
 
     def test_startup_waits_for_wake_before_one_pick(self):
         app=self.app();calls=[]
-        def wait(cfg,warmup_chunks):
+        def wait(cfg,warmup_chunks,on_command):
             self.assertEqual(cfg,{'wake_word':'思达思达'})
             self.assertEqual(warmup_chunks,32 if not calls else 0)
             calls.append('wait')
             if len(calls)>1:raise KeyboardInterrupt()
+            on_command('pick')
             return 'pick'
         with patch.object(app,'load',return_value={'pick':{'cube_offset_toward_moving_finger_mm':-45},'voice':{'wake_word':'思达思达'}}),\
              patch.object(app,'log'),patch.object(app,'wait_for_wake',side_effect=wait),\
+             patch.object(app,'run_ready',side_effect=lambda cfg,pose,immediate:calls.append(('ready',pose,immediate))),\
              patch.object(app,'run_once',side_effect=lambda cfg,execute:calls.append(('pick',execute))):
             with self.assertRaises(KeyboardInterrupt):app.run_forever('/fake')
-        self.assertEqual(calls,['wait',('pick',True),'wait'])
+        self.assertEqual(calls,['wait',('ready',2,True),('pick',True),'wait'])
     def test_failure_does_not_automatically_retry_pick(self):
         app=self.app();calls=[]
-        def wait(cfg,warmup_chunks):
+        def wait(cfg,warmup_chunks,on_command):
             self.assertEqual(cfg,{'wake_word':'思达思达'})
             self.assertEqual(warmup_chunks,32 if not calls else 0)
             calls.append('wait')
             if len(calls)>1:raise KeyboardInterrupt()
+            on_command('pick')
             return 'pick'
         def pick(cfg,execute):calls.append('failed_pick');raise ValueError('No face')
         with patch.object(app,'load',return_value={'pick':{'cube_offset_toward_moving_finger_mm':-45},'voice':{'wake_word':'思达思达'}}),\
              patch.object(app,'log'),patch.object(app,'wait_for_wake',side_effect=wait),\
+             patch.object(app,'run_ready',side_effect=lambda cfg,pose,immediate:calls.append(('ready',pose,immediate))),\
              patch.object(app,'run_once',side_effect=pick),patch.object(sys,'print_exception',lambda e:None,create=True):
             with self.assertRaises(KeyboardInterrupt):app.run_forever('/fake')
-        self.assertEqual(calls,['wait','failed_pick','wait'])
+        self.assertEqual(calls,['wait',('ready',2,True),'failed_pick','wait'])
     def test_real_startup_resolves_nested_voice_config_before_readiness(self):
         app=self.app();calls=[]
         class Engine:
@@ -179,12 +183,103 @@ class VoiceDispatchTests(unittest.TestCase):
                  patch.object(app.time,'ticks_ms',side_effect=[0,5000]):
                 event=app.wait_for_wake({'enrollment_file':str(file),'detection_sensitivity':'sensitive','wake_word':'思达思达'})
         self.assertEqual(event,'pick')
-        log.assert_any_call('voice_listening',{'chunks_read':1,'audio_ms':160},persist=False)
+        self.assertNotIn('voice_listening',[call.args[0] for call in log.call_args_list])
         self.assertEqual(calls,['stream_stopped','stream_closed','audio_closed','engine_closed'])
+
+
+    def voice_response_order(self,action='pick',fail_ready=False):
+        app=self.app();trace=[];config,_,_=deploy.build_bundle()
+        keyword_id='sida' if action=='pick' else 'ready'
+        class Engine:
+            def add_keyword(self,record):pass
+            def reset(self):pass
+            def push(self,pcm):trace.append('recognized');return [(keyword_id,-.7,-2.,0,10)]
+            def deinit(self):trace.append('engine_closed')
+        class Audio:
+            def open(self,**kw):return Stream()
+            def terminate(self):trace.append('audio_closed')
+        class Stream:
+            def volume(self,**kw):pass
+            def read(self):return bytes(5120)
+            def stop_stream(self):trace.append('stream_stopped')
+            def close(self):trace.append('stream_closed')
+        def ready(cfg,pose=1,immediate=False):
+            trace.append(('ready_packet',pose,immediate))
+            if fail_ready:raise RuntimeError('UART response failed')
+        def log(event,*args,**kwargs):trace.append(('log',event))
+        with tempfile.TemporaryDirectory() as folder:
+            a=Path(folder)/'sida.json';b=Path(folder)/'ready.json'
+            a.write_text('{"kw_id":"sida"}');b.write_text('{"kw_id":"ready"}')
+            config['voice']['enrollment_file']=str(a)
+            config['voice']['commands']['ready']['enrollment_file']=str(b)
+            with patch.dict(sys.modules,{'wake_word':SimpleNamespace(engine=lambda s:Engine(),CHUNK=2560),
+                     'media':SimpleNamespace(),'media.pyaudio':SimpleNamespace(PyAudio=Audio,paInt16=0)}),\
+                 patch.object(app.os,'exitpoint',lambda:None,create=True),patch.object(app,'log',side_effect=log),\
+                 patch.object(app,'run_ready',side_effect=ready):
+                response,on_command=app.make_wake_response(config)
+                result=app.wait_for_wake(config['voice'],warmup_chunks=0,on_command=on_command)
+                trace.append('returned')
+        self.assertEqual(result,action)
+        return response,trace
+
+    def test_recognized_pick_sends_pose2_before_wake_log_and_audio_cleanup(self):
+        response,trace=self.voice_response_order()
+        self.assertTrue(response['sent']);self.assertIsNone(response['error'])
+        sent=trace.index(('ready_packet',2,True))
+        self.assertLess(trace.index('recognized'),sent)
+        for later in (('log','wake'),'stream_stopped','stream_closed','audio_closed','engine_closed','returned'):
+            self.assertLess(sent,trace.index(later))
+
+    def test_ready_keyword_sends_pose1_before_audio_cleanup(self):
+        response,trace=self.voice_response_order('ready')
+        self.assertTrue(response['sent'])
+        self.assertLess(trace.index(('ready_packet',1,True)),trace.index(('log','wake')))
+        self.assertLess(trace.index(('ready_packet',1,True)),trace.index('stream_stopped'))
+
+    def test_response_failure_still_cleans_audio_before_caller_can_start_task(self):
+        response,trace=self.voice_response_order(fail_ready=True)
+        self.assertFalse(response['sent']);self.assertIsInstance(response['error'],RuntimeError)
+        self.assertEqual(trace[-5:],['stream_stopped','stream_closed','audio_closed','engine_closed','returned'])
+
+    def test_failed_immediate_response_never_captures_or_retries_and_listens_again(self):
+        app=self.app();config,_,_=deploy.build_bundle();waits=[]
+        def wait(voice,warmup_chunks,on_command):
+            waits.append(warmup_chunks)
+            if len(waits)>1:raise KeyboardInterrupt()
+            on_command('pick');return 'pick'
+        with patch.object(app,'load',return_value=config),patch.object(app,'log') as logs,\
+             patch.object(app,'wait_for_wake',side_effect=wait),\
+             patch.object(app,'run_ready',side_effect=RuntimeError('UART not ready')) as ready,\
+             patch.object(app,'run_once') as capture,patch.object(sys,'print_exception',lambda e:None,create=True):
+            with self.assertRaises(KeyboardInterrupt):app.run_forever('/fake')
+        ready.assert_called_once_with(config,pose=2,immediate=True)
+        capture.assert_not_called();self.assertEqual(waits,[32,0])
+        logs.assert_any_call('pick_failed_no_extra_motion','UART not ready')
 
 
 class ReadyCommandTests(unittest.TestCase):
     app=VoiceDispatchTests.app
+    def test_immediate_response_uses_selected_target_before_any_ready_log(self):
+        app=self.app();config,_,_=deploy.build_bundle()
+        for pose,key,event in ((1,'ready_control','ready_dispatched'),
+                               (2,'drive_ready_control','drive_ready_dispatched')):
+            with self.subTest(pose=pose):
+                trace=[]
+                def send(control):trace.append(('packet',control));return {'goal_sent_ticks_ms':123}
+                with patch.dict(sys.modules,{'control':SimpleNamespace()}),\
+                     patch.object(app,'log',side_effect=lambda name,*a,**kw:trace.append(('log',name))),\
+                     patch.object(app,'run_ready_direct',side_effect=send):
+                    app.run_ready(config,pose=pose,immediate=True)
+                self.assertEqual(trace,[('packet',config[key]),('log',event)])
+
+    def test_unknown_ready_pose_or_unknown_keyword_never_dispatches(self):
+        app=self.app();config,_,_=deploy.build_bundle()
+        with patch.object(app,'run_ready_direct') as send,patch.object(app,'run_ready',wraps=app.run_ready) as ready:
+            with self.assertRaises(ValueError):app.run_ready(config,pose=3)
+            ready.reset_mock()
+            response,callback=app.make_wake_response(config);callback('unknown')
+            ready.assert_not_called();send.assert_not_called();self.assertFalse(response['sent'])
+
     def test_unregistered_ready_keeps_original_keyword(self):
         from voice_commands import registered_commands
         cfg,_,_=deploy.build_bundle()
@@ -206,7 +301,10 @@ class ReadyCommandTests(unittest.TestCase):
     def test_ready_uses_existing_goals_and_profiles(self):
         from tools.diagnostics.k230_arm_ready import config_payload
         cfg,_,_=deploy.build_bundle()
-        self.assertEqual(cfg['ready_control'],config_payload())
+        self.assertEqual(cfg['ready_control'],config_payload(1))
+        self.assertEqual(cfg['drive_ready_control'],config_payload(2))
+        self.assertEqual(cfg['ready_control']['goals'],[2048,1081,3015,3015,2048,2332])
+        self.assertEqual(cfg['drive_ready_control']['goals'],[2048,1138,2958,2958,2048,2332])
         self.assertEqual(cfg['ready_control']['goals'][5],2332)
         self.assertEqual(cfg['ready_control']['gripper_opens_deg'],25)
         self.assertEqual(cfg['pick']['opening_count'],2332)
@@ -276,7 +374,7 @@ class ReadyCommandTests(unittest.TestCase):
 
 
 class DirectReadyTransportTests(unittest.TestCase):
-    def run_direct(self,torques=None,fail_at=None,fail_read_at=None,fail_enable=None,invalid_goal=False):
+    def run_direct(self,torques=None,fail_at=None,fail_read_at=None,fail_enable=None,invalid_goal=False,pose=1):
         writes=[];events=[];closed=[];reads=[];states=list([1]*6 if torques is None else torques)
         positions=[1900+i*11 for i in range(6)]
         class Pins:
@@ -310,7 +408,7 @@ class DirectReadyTransportTests(unittest.TestCase):
         def forbidden(*args,**kwargs):raise AssertionError('No preflight, feedback or recovery')
         ns.update(read_checked=read,enable_torque=enable,signed_position=lambda lo,hi:lo|(hi<<8),
                   preflight=forbidden,feedback=forbidden,snapshot=forbidden,send_sync=forbidden)
-        cfg,_,_=deploy.build_bundle();control=cfg['ready_control']
+        cfg,_,_=deploy.build_bundle();control=cfg['ready_control' if pose==1 else 'drive_ready_control']
         if invalid_goal:control['goals'][0]=-1
         error=None;result=None
         with contextlib.redirect_stdout(io.StringIO()) as output:
@@ -327,6 +425,7 @@ class DirectReadyTransportTests(unittest.TestCase):
         self.assertEqual(r.result['torque_enabled_ids'],[])
         self.assertEqual(r.result['servo_reads'],6);self.assertEqual(r.result['torque_writes'],0)
         self.assertEqual(r.result['goal_packet_count'],1);self.assertFalse(r.result['readback_verified'])
+        self.assertEqual(r.result['goal_sent_ticks_ms'],0)
 
     def test_disabled_axes_hold_current_before_enable_and_final_goal(self):
         for torques,disabled in [([1,0,1,0,1,1],[2,4]),([0]*6,list(range(1,7)))]:

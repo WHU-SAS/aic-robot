@@ -20,22 +20,26 @@ class K230ReadyTests(unittest.TestCase):
         with patch.dict(sys.modules,{'machine':SimpleNamespace(UART=None,FPIOA=None),'ujson':json}):
             spec.loader.exec_module(self.board)
         self.config=config_payload()
-    def test_sync_payload_matches_existing_sdk(self):
-        sdk=sms_sts(None);captured=[]
-        def tx(address,size,params,param_length):
-            captured.append((address,size,list(params),param_length));return COMM_SUCCESS
-        sdk.syncWriteTxOnly=tx
-        for i in range(1,7):
-            p=self.config['profiles'][i-1]
-            self.assertTrue(sdk.SyncWritePosEx(i,self.config['goals'][i-1],p['speed_raw'],p['acceleration_raw']))
-        sdk.groupSyncWrite.txPacket()
-        address,size,params,length=captured[0]
-        actual=self.board.sync_frame(self.config['goals'],self.config['profiles'])
-        self.assertEqual(actual[:5],bytes((255,255,254,length+4,0x83)))
-        self.assertEqual(actual[5:-1],bytes([address,size]+params))
-        self.assertEqual(sum(actual[2:])&255,255)
-        self.assertEqual(self.config['goals'],[2048,1138,2958,2958,2048,2332])
-        self.assertEqual(self.config['gripper_opens_deg'],25)
+    def test_sync_payload_matches_existing_sdk_for_both_poses(self):
+        for pose,expected in ((1,[2048,1081,3015,3015,2048,2332]),
+                              (2,[2048,1138,2958,2958,2048,2332])):
+            with self.subTest(pose=pose):
+                config=config_payload(pose);sdk=sms_sts(None);captured=[]
+                def tx(address,size,params,param_length):
+                    captured.append((address,size,list(params),param_length));return COMM_SUCCESS
+                sdk.syncWriteTxOnly=tx
+                for i in range(1,7):
+                    p=config['profiles'][i-1]
+                    self.assertTrue(sdk.SyncWritePosEx(i,config['goals'][i-1],p['speed_raw'],p['acceleration_raw']))
+                sdk.groupSyncWrite.txPacket()
+                address,size,params,length=captured[0]
+                actual=self.board.sync_frame(config['goals'],config['profiles'])
+                self.assertEqual(actual[:5],bytes((255,255,254,length+4,0x83)))
+                self.assertEqual(actual[5:-1],bytes([address,size]+params))
+                self.assertEqual(sum(actual[2:])&255,255)
+                self.assertEqual(config['goals'],expected)
+                self.assertEqual(config['ready_pose_number'],pose)
+                self.assertEqual(config['gripper_opens_deg'],25)
     def test_ready_returns_after_one_packet_without_post_dispatch_monitoring(self):
         events=[]
         class Pins:

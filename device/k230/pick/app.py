@@ -30,7 +30,7 @@ def log(event,details=None,persist=True):
     except OSError as exc:print('LOG_ERROR '+str(exc))
 
 
-def wait_for_wake(config,warmup_chunks=32):
+def wait_for_wake(config,warmup_chunks=32,on_command=None):
     # Release audio stream and KWS before camera/media initialization. A fresh
     # engine after each pick discards buffered audio and repeated wake events.
     from wake_word import engine,CHUNK
@@ -59,15 +59,18 @@ def wait_for_wake(config,warmup_chunks=32):
             if len(pcm)!=CHUNK*2:raise RuntimeError('Incomplete detection audio chunk')
             events=eng.push(pcm);chunks+=1
             now=time.ticks_ms()
-            if time.ticks_diff(now,last_status)>=5000:
-                log('voice_listening',{'chunks_read':chunks,'audio_ms':chunks*CHUNK*1000//16000},persist=False)
-                last_status=now
             if events:
                 command=resolve_events(events,commands)
                 if command is None:
                     log('voice_command_ignored',events);continue
-                log('wake',{'word':command['word'],'action':command['action'],'events':events})
+                # The visible servo response precedes SD logging and audio teardown.
+                if on_command is not None:on_command(command['action'])
+                log('wake',{'word':command['word'],'action':command['action'],'events':events,
+                            'recognition_ticks_ms':now})
                 return command['action']
+            if time.ticks_diff(now,last_status)>=5000:
+                log('voice_listening',{'chunks_read':chunks,'audio_ms':chunks*CHUNK*1000//16000},persist=False)
+                last_status=now
     finally:
         if stream is not None:stream.stop_stream();stream.close()
         if audio is not None:audio.terminate()
@@ -278,13 +281,34 @@ def run_once(config,execute=False):
     return _run_target(config,found,True)
 
 
-def run_ready(config):
+def run_ready(config,pose=1,immediate=False):
+    if pose not in (1,2):raise ValueError('Ready pose must be1 or2')
     import control as arm_control
     arm_control.print=record_arm_event
-    ready=config['ready_control']
-    log('ready_started',{'goals':ready['goals'],'gripper_opens_deg':ready.get('gripper_opens_deg')})
-    run_ready_direct(ready)
-    log('ready_dispatched',{'arrival':'not_checked','torque_state':'confirmed_on_before_dispatch'})
+    ready=config['ready_control' if pose==1 else 'drive_ready_control']
+    if not immediate:
+        log('ready_started',{'pose':pose,'goals':ready['goals'],'gripper_opens_deg':ready.get('gripper_opens_deg')})
+    result=run_ready_direct(ready)
+    log('ready_dispatched' if pose==1 else 'drive_ready_dispatched',
+        {'pose':pose,'goals':ready['goals'],'arrival':'not_checked',
+         'torque_state':'confirmed_on_before_dispatch','immediate_response':immediate,
+         'goal_sent_ticks_ms':result.get('goal_sent_ticks_ms') if isinstance(result,dict) else None})
+    return result
+
+
+def make_wake_response(config):
+    """Dispatch the selected ready target before voice cleanup; retain failures."""
+    response={'sent':False,'error':None}
+    def respond(action):
+        if action not in ('pick','ready'):return
+        try:
+            run_ready(config,pose=2 if action=='pick' else 1,immediate=True)
+            response['sent']=True
+        except Exception as exc:
+            # Let the listener release audio normally. Never start the task
+            # when its immediate ready-target response failed.
+            response['error']=exc
+    return response,respond
 
 
 def run_forever(root):
@@ -292,15 +316,20 @@ def run_forever(root):
     log('startup_waiting_for_wake',{'fixed_jaw_offset_mm':-config['pick']['cube_offset_toward_moving_finger_mm']})
     warmup_chunks=32
     while True:
-        try:action=wait_for_wake(config['voice'],warmup_chunks=warmup_chunks)
+        response,respond=make_wake_response(config)
+        try:action=wait_for_wake(config['voice'],warmup_chunks=warmup_chunks,on_command=respond)
         except Exception as exc:
             import sys
             sys.print_exception(exc);log('voice_failed',str(exc))
             raise
         warmup_chunks=0
         try:
-            if action=='pick':run_once(config,execute=True)
-            elif action=='ready':run_ready(config)
+            if response['error'] is not None:raise response['error']
+            if action=='pick':
+                if not response['sent']:run_ready(config,pose=2,immediate=True)
+                run_once(config,execute=True)
+            elif action=='ready':
+                if not response['sent']:run_ready(config)
             else:log('voice_command_ignored',action)
         except Exception as exc:
             # Do not dispatch any remaining stages, reverse goals or torque-off.

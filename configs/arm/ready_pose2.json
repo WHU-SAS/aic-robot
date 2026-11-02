@@ -1,0 +1,20 @@
+{
+  "name": "ready_pose",
+  "angles_deg": [
+    0,
+    -80,
+    80,
+    80,
+    0,
+    25
+  ],
+  "angle_definition": "Validated project joint mapping, ID order 1..6; joint6 angle is servo output relative to closed zero, not measured finger opening angle.",
+  "dispatch": "one synchronized final-goal packet; saved per-axis profiles",
+  "completion": "exit after target dispatch; no stdin or arrival confirmation; retain torque at ready pose",
+  "model_floor_check_enabled": false,
+  "model_floor_override_authorization": "Direct user approval 2026-10-13: only ready pose omits inherited model floor gate; retain encoder/device limits, saved-parameter checks, communication checks and manual confirmation.",
+  "dispatch_authorization": "command_invocation_ready_only",
+  "immediate_dispatch_authorization": "Direct user instruction 2026-10-13: execute immediately after command invocation, without repeated terminal confirmations; ready pose only.",
+  "pose_number": 2,
+  "purpose": "Immediate pick wake response and chassis driving pose2"
+}

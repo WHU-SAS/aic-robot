@@ -32,7 +32,8 @@ sudo setfacl -m u:xd:rw \
 ./scripts/pick-blue --detect-only           # 仅定位
 ./scripts/pick-blue --detect-only --debug-roi  # 定位并保存诊断图
 ./scripts/pick-blue --execute --hands-free  # 现场就位、手离开后抓取
-./scripts/arm-ready --execute               # 行驶前回准备位
+./scripts/arm-ready --execute               # 准备位1
+./scripts/arm-ready --pose 2 --execute      # 行驶准备位2
 ./scripts/open_preview                     # 打开 CanMV IDE 预览脚本，连接后运行
 ```
 

@@ -20,6 +20,7 @@ import tempfile
 
 ROOT = REPO_ROOT
 from task_controller import Configuration, TaskError
+from host.arm.ready_profiles import load_ready_profile
 
 
 def ready_task(config, profile):
@@ -37,6 +38,7 @@ def ready_task(config, profile):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--pose', type=int, choices=(1,2), default=1, help='ready pose number; default1 for the return command')
     parser.add_argument('--execute', action='store_true', help='immediately dispatch the ready goal after required read-only checks; no prompts')
     parser.add_argument('--hands-free', action='store_true',
                         help='operator confirms hands already away; existing option, no new control policy')
@@ -45,10 +47,10 @@ def main(argv=None):
                         help='offline preview start only; execution reads actual positions')
     args = parser.parse_args(argv)
     config = Configuration(ROOT)
-    profile = json.loads((ROOT / 'configs/arm/ready_pose.json').read_text())
+    profile = load_ready_profile(ROOT,args.pose)
     task = ready_task(config, profile)
     command = [sys.executable, str(ROOT / 'host/apps/run_task.py'),
-               '--hold-at-last-target']
+               '--hold-at-last-target','--ready-pose-number',str(args.pose)]
     if profile.get('model_floor_check_enabled') is False:
         command.append('--ready-pose-without-model-floor')
     if profile.get('dispatch_authorization') == 'command_invocation_ready_only':
