@@ -608,7 +608,7 @@ class TrackingDriveTests(unittest.TestCase):
         self.assertTrue(self.update(1300)['command'].startswith('FOLLOW,'))
 
     def test_arc_abnormal_cutoff_never_counts_as_completed_correction(self):
-        for reason in (0,1,2,3,4,6,7):
+        for reason in (0,1,2,4,6,7):
             with self.subTest(reason=reason):
                 self.setUp();x=self.target-10;self.request_static(x=x)
                 self.assertTrue(self.update(1150,x,precise=self.precise(1050,x))['command'].startswith('ARC,'))
@@ -618,6 +618,45 @@ class TrackingDriveTests(unittest.TestCase):
                 self.assertIsNone(result['request_fine'])
                 self.assertFalse(result['allow_arm'])
                 self.assertEqual(self.update(1350,x)['status'],'motion_wait')
+
+    def test_arc_deadline_requires_new_static_image_instead_of_latching_forever(self):
+        x=self.target-10;self.request_static(x=x)
+        old=self.precise(1050,x)
+        launched=self.update(1150,x,precise=old)
+        self.assertTrue(launched['command'].startswith('ARC,'))
+        self.update(1250,x,run=True,travel=-.5,right=-.6)
+        ended=self.update(6150,x,travel=-2,right=-3,reason=3)
+        self.assertNotEqual(ended['status'],'motion_wait')
+        self.assertIsNone(ended['command'])
+        self.assertIsNone(ended['request_fine'])
+        self.assertIsNone(self.drive.anchor)
+        self.assertIsNone(self.drive._coarse_reference)
+        self.assertEqual(ended['arc_timeouts'],1)
+        self.assertEqual(ended['last_arc_end']['command'],launched['command'])
+        self.assertEqual(ended['last_arc_end']['state']['reason'],3)
+        next_frame=self.update(6200,x,travel=-2,right=-3,reason=3,precise=old)
+        self.assertEqual(next_frame['request_fine'],'static')
+        self.assertNotEqual(next_frame['fine_request_id'],old['request_id'])
+        self.assertFalse(next_frame['precise_consumed'])
+        refused=self.update(6300,x,travel=-2,right=-3,reason=3,
+            precise=old,fine_pending=True)
+        self.assertFalse(refused['allow_arm'])
+        self.assertFalse(refused['precise_consumed'])
+        self.assertIsNone(refused['command'])
+        fresh=self.precise(6200,self.target)
+        accepted=self.update(6400,self.target,travel=-2,right=-3,reason=3,precise=fresh)
+        self.assertTrue(accepted['allow_arm'])
+        self.assertEqual(accepted['parking']['verification_observation']['frame_id'],6200)
+
+    def test_far_new_target_can_follow_after_an_arc_deadline(self):
+        x=self.target-10;self.request_static(x=x)
+        self.update(1150,x,precise=self.precise(1050,x))
+        self.update(6150,x,travel=-2,right=-3,reason=3)
+        result=self.update(6250,650,travel=-2,right=-3,reason=3,target_version=2)
+        self.assertEqual(result['command'],'FOLLOW,70,70')
+        self.assertEqual(result['arc_timeouts'],1)
+        self.assertFalse(result['allow_arm'])
+        self.assertIsNone(self.drive.anchor)
 
     def test_existing_deadline_is_segment_completion_not_task_failure(self):
         self.update(1000)

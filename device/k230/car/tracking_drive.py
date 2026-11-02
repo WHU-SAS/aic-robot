@@ -36,6 +36,9 @@ class DriveController:
         self._motor = self._previous_motor = None
         self._stable_counts = self._stable_at = self.stopped_at_ms = None
         self._active_action = None
+        self._arc_command = None
+        self.arc_timeouts = 0
+        self.last_arc_end = None
         self._static_ok = True
         self._parking_reference = self._parking_ready_ms = None
         self._moving_started = False
@@ -401,11 +404,13 @@ class DriveController:
                     self._moving_started = True
                 elif name == 'ARC':
                     self._active_action = 'arc'
+                    self._arc_command = command
                     self._moving_started = True
                 elif name == 'STOP':
                     self._active_action = None
             decision.update(phase=self.phase, corrections=self.corrections,
-                            fine_requests=self.fine_requests)
+                            fine_requests=self.fine_requests,
+                            arc_timeouts=self.arc_timeouts, last_arc_end=self.last_arc_end)
             if status:
                 decision['status'] = status
             return decision
@@ -419,10 +424,21 @@ class DriveController:
             self._motion_hold = 'motor_reply_rejected'
         if not running and self._active_action:
             reason = state.get('reason', 0)
+            if self._active_action == 'arc':
+                self.last_arc_end = {'at_ms': now_ms, 'command': self._arc_command,
+                    'target_version': self.version, 'phase': self.phase, 'state': dict(state)}
             if reason in (2, 4):
                 self._motion_hold = 'existing_motor_stop_%d' % reason
-            elif self._active_action == 'arc' and reason != 8:
-                self._motion_hold = 'arc_stopped_%d' % reason
+            elif self._active_action == 'arc':
+                if reason == 3:
+                    # The MCU has exhausted this segment, not the whole task.
+                    # A fresh stopped image must replace the old ARC geometry.
+                    self.arc_timeouts += 1
+                    self.restart_observation()
+                    self.paired_coarse = None
+                    self._searching = False
+                elif reason != 8:
+                    self._motion_hold = 'arc_stopped_%d' % reason
             self._active_action = None
             if self.phase in ('correcting', 'adjusting'):
                 self.anchor = self._paired_point = None

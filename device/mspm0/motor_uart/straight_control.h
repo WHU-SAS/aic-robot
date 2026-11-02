@@ -74,10 +74,10 @@ static inline int16_t straight_short_wheel(float reference, float speed, float t
     if (!*started) {
         if (travel < 0.1f) return remote_ramp(previous, REMOTE_PWM_TARGET);
         *started = true;
-        /* Transfer the observed breakaway output into the existing speed PI
-         * without dropping a slow, short-target wheel back below its dead zone. */
+        /* Preserve breakaway output without seeding negative integral from
+         * encoder micro-motion. The existing ramp keeps handoff gradual. */
         *integral = straight_clip(previous-(1000.0f+3.0f*reference)-
-            STRAIGHT_SPEED_KP*(reference-speed), -500.0f, 500.0f);
+            STRAIGHT_SPEED_KP*(reference-speed), 0.0f, 500.0f);
     }
     return reference > 0 ? straight_wheel(reference, speed, integral, previous) :
         remote_ramp(previous, 0);

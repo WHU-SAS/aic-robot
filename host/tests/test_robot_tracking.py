@@ -324,6 +324,30 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertEqual(len([c for t,c in self.motor.commands if c=='STOP']),1)
         self.assertEqual(len(self.arms),1)
 
+    def test_arc_timeout_context_survives_target_log_rollover_and_cleanup_stop(self):
+        self.fail_every_fine = True
+        original = self.motor.expect
+        def expect(command):
+            state = original(command)
+            if command.startswith('ARC,'):
+                self.motor.reason = state['reason'] = 3
+            return state
+        self.motor.expect = expect
+        for unused in range(600):
+            self.tick()
+            if self.task.drive.arc_timeouts:
+                break
+        self.assertEqual(self.task.drive.arc_timeouts, 1)
+        ended = copy.deepcopy(self.task.snapshot()['last_arc_end'])
+        self.assertEqual(ended['state']['reason'], 3)
+        for index in range(70):
+            self.task._record('tracking_target', {'version': index})
+        self.task.close()
+        self.assertEqual(self.task.state['reason'], 1)
+        result = self.task.snapshot()
+        self.assertEqual(result['arc_timeouts'], 1)
+        self.assertEqual(result['last_arc_end'], ended)
+
     def test_move_during_fine_cancels_old_image_and_never_hands_it_to_arm(self):
         self.fine_slices = 40
         self.move_when = lambda:self.task.job is not None and self.task.job['session'].ticks>=3

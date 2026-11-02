@@ -66,6 +66,49 @@ static unsigned short_cases, arc_cases, short_max_ms;
 static double long_arc_max_error, long_arc_max_passive;
 static unsigned long_arc_cases, long_arc_max_ms;
 
+static void recorded_arc_micro_motion_cannot_seed_negative_integral(void)
+{
+    /* 2026-11-03 ARC,-5,5 MCU samples, relative to its accepted command.
+     * Interpolate the ~60ms samples onto 10ms control ticks. This regression
+     * replays measured counts, not a reconstruction of unsampled wheel motion. */
+    static const struct { unsigned ms; int a,b; } samples[]={
+        {0,0,0},{60,-2,0},{120,-19,-2},{190,-26,-12},{250,-23,-30},
+        {310,-77,-30},{380,-78,-30},{440,-69,-30},{500,-64,-30},
+        {570,-64,-30},{630,-64,-30}};
+    RemoteControl motor={0};StraightControl control;
+    MotorParser request={.sequence=1,.command=CMD_ARC,.arc_left_mm=-5,.arc_right_mm=5};
+    assert(remote_request(&motor,&request)==RES_OK);
+    straight_short_begin(&control,0,0,-5,5);
+    unsigned index=0;
+    int16_t left_at_500=0,right_at_500=0;
+    for(unsigned tick=1;tick<=63;++tick) {
+        unsigned ms=tick*10;
+        while(index+1<sizeof(samples)/sizeof(*samples)-1 && samples[index+1].ms<ms)++index;
+        float fraction=(float)(ms-samples[index].ms)/(samples[index+1].ms-samples[index].ms);
+        int32_t a=(int32_t)lroundf(samples[index].a+fraction*(samples[index+1].a-samples[index].a));
+        int32_t b=(int32_t)lroundf(samples[index].b+fraction*(samples[index+1].b-samples[index].b));
+        if(tick%10==0)remote_command(&motor,tick+2,CMD_HEARTBEAT);
+        int16_t previous_left=motor.left_pwm,previous_right=motor.right_pwm;
+        bool left_started=control.short_left_started,right_started=control.short_right_started;
+        remote_step(&motor,false);
+        straight_short_step(&control,&motor,(uint32_t)a,(uint32_t)b,8);
+        if(!left_started&&control.short_left_started)assert(control.integral_left>=0);
+        if(!right_started&&control.short_right_started)assert(control.integral_right>=0);
+        assert(abs(motor.left_pwm-previous_left)<=32 && abs(motor.right_pwm-previous_right)<=32);
+        assert(motor.left_pwm<=0 && motor.left_pwm>=-1600);
+        assert(motor.right_pwm>=0 && motor.right_pwm<=1600);
+        if(tick==50) {left_at_500=motor.left_pwm;right_at_500=motor.right_pwm;}
+    }
+    fprintf(stderr,"recorded ARC micro-motion: started=%d/%d PWM=%d/%d\n",
+        control.short_left_started,control.short_right_started,motor.left_pwm,motor.right_pwm);
+    assert(motor.running && control.short_left_started && control.short_right_started);
+    assert(motor.left_pwm<=-1100 && motor.right_pwm>=1100);
+    assert(motor.left_pwm<left_at_500 && motor.right_pwm>right_at_500);
+    remote_command(&motor,1000,CMD_STOP);
+    straight_short_step(&control,&motor,0,0,8);
+    assert(!motor.running && !motor.left_pwm && !motor.right_pwm);
+}
+
 /* These varied gain/dead-zone/inertia plants are not identified vehicle
  * parameters. They exercise tiny targets that the former >=30mm tests missed. */
 static void simulate_short(ShortPlant plant, int left_goal, int right_goal,
@@ -138,12 +181,12 @@ static void simulate_short(ShortPlant plant, int left_goal, int right_goal,
         if(!right_goal&&fabs(right)>long_arc_max_passive)long_arc_max_passive=fabs(right);
         if(ticks*10>long_arc_max_ms)long_arc_max_ms=ticks*10;
         ++long_arc_cases;
-        /* Larger arcs retain the 5s deadline and the 1mm driven-wheel
+        /* Larger arcs retain the 5s deadline and the 1.5mm driven-wheel
          * model bound; passive travel is separately bounded by 3% coupling.
          * Neither bound is a physical accuracy claim. */
-        if(active_error>1.)fprintf(stderr,"long ARC goals=%d/%d actual=%.3f/%.3f tau=%.2f\n",
+        if(active_error>1.5)fprintf(stderr,"long ARC goals=%d/%d actual=%.3f/%.3f tau=%.2f\n",
             left_goal,right_goal,left,right,plant.tau);
-        assert(active_error<=1.);
+        assert(active_error<=1.5);
         assert(passive<=.031*fmax(abs(left_goal),abs(right_goal)));
         return;
     }
@@ -152,14 +195,18 @@ static void simulate_short(ShortPlant plant, int left_goal, int right_goal,
     if(!left_goal&&fabs(left)>short_max_passive)short_max_passive=fabs(left);
     if(!right_goal&&fabs(right)>short_max_passive)short_max_passive=fabs(right);
     if(ticks*10>short_max_ms)short_max_ms=ticks*10;
-    if(error>1.)fprintf(stderr,"tiny model goals=%d/%d actual=%.3f/%.3f dead=%.0f/%.0f tau=%.2f\n",
+    /* Accepted startup tradeoff: preventing negative preload raises these
+     * synthetic maxima from0.731/0.693mm (short/long) to1.420/1.292mm.
+     * Allow1.5mm here; the physical parking window still requires real tests. */
+    if(error>1.5)fprintf(stderr,"tiny model goals=%d/%d actual=%.3f/%.3f dead=%.0f/%.0f tau=%.2f\n",
         left_goal,right_goal,left,right,plant.dead_l,plant.dead_r,plant.tau);
-    assert(error<=1.); /* Model regression target, not physical acceptance. */
+    assert(error<=1.5); /* Model regression target, not physical acceptance. */
     if(arc)++arc_cases;else ++short_cases;
 }
 
 int main(void)
 {
+    recorded_arc_micro_motion_cannot_seed_negative_integral();
     simulate(0.20f,0.18f,0.08f,0,150,900,1000);
     simulate(0.17f,0.16f,0.12f,0,150,900,1000);
     simulate(0.23f,0.20f,0.06f,0xFFFFFF00U,150,900,1000);

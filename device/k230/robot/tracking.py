@@ -558,6 +558,7 @@ class TrackingTask:
             'physical_grasp_confirmed': False, 'fault_wait': self.fault,
             'timeline': list(self.timeline),
             'motion_wait_reason': (self.decision or {}).get('motion_wait_reason'),
+            'arc_timeouts': self.drive.arc_timeouts, 'last_arc_end': self.drive.last_arc_end,
             'corrections': self.drive.corrections, 'metrics': dict(self.metrics)}
 
     def close(self):
