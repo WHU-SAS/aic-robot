@@ -54,49 +54,66 @@ finally:print('EXPORT_DONE')
 
 
 def restore_listener(link):
-    # No saved file is replaced and there is no startup motion. Do not use reset
-    # or execute any old pick script; run the user's current startup as saved.
-    source = "exec(open('/sdcard/main.py').read(),globals())\n".encode()
-    link.command(0x06)
-    # Live preview owns video resources. Wait for its finally/close instead of
-    # uploading the audio listener while camera cleanup is still in progress.
-    deadline = time.monotonic() + 8
-    idle_since = None
-    while True:
-        time.sleep(.1)
-        link.output()
-        link.command(0x87, 4)
-        if struct.unpack('<I', link.read(4))[0] == 0:
-            if idle_since is None: idle_since = time.monotonic()
-            # Script-done can precede the USB VM's soft-reboot cleanup. Upload
-            # only after it has remained idle, or that cleanup may discard it.
-            if time.monotonic() - idle_since >= .6: break
-        else:
-            idle_since = None
-        if time.monotonic() >= deadline:
-            raise TimeoutError('Previous K230 script did not stop before listener restore')
-    link.command(0x0D, 4)
-    link.port.write(struct.pack('<I', 0)); link.port.flush()
-    link.command(0x05, len(source)); time.sleep(.06)
-    link.port.write(source); link.port.flush()
-    lines = []; pending = b''; started = time.monotonic()
+    """Hard-boot the saved main, then observe it without attaching USBDBG.
+
+    The old link is closed here. Keeping main inside an IDE-uploaded script
+    would stop it again when that link's DTR drops; USBDBG 0x0c is only a soft
+    reset on this board and does not restore boot auto-execution.
+    """
+    # Delayed import: the motor diagnostic also uses this recovery helper.
+    from tools.diagnostics.test_k230_motor_uart import stop_previous_script
+    from host.apps.k230_status import open_receiver
+    port = link.port.port
+    source = b"import machine\nprint('AIC_SOC_RESET_REQUESTED')\nmachine.reset()\n"
+    if len(source) % 64 == 0:
+        source += b'\n'  # Keep the existing CanMV USB script-transfer workaround.
+    try:
+        stop_previous_script(link)
+        link.command(0x05, len(source))
+        time.sleep(.06)
+        if link.port.write(source) != len(source):
+            raise RuntimeError('Incomplete K230 hard-reset script upload')
+        try:
+            link.port.flush()
+        except OSError:
+            pass  # Reset may disconnect USB immediately after receiving it.
+        # Let reset execute before a host DTR drop could stop the uploaded code.
+        time.sleep(1)
+    finally:
+        link.port.close()
+    lines = []; pending = b''; receiver = None; started = time.monotonic()
     failure = False; last_output = started
-    while time.monotonic() - started < 50:
-        chunk = link.output()
-        if chunk: last_output = time.monotonic()
-        pending += chunk
-        while b'\n' in pending:
-            raw, pending = pending.split(b'\n', 1)
-            line = raw.decode(errors='replace').strip(); lines.append(line)
-            if '"event": "voice_ready"' in line or '"event":"voice_ready"' in line:
-                return lines
-            if 'Traceback' in line or 'voice_failed' in line:
-                failure = True
-        if failure and time.monotonic() - last_output >= .5:
-            if pending: lines.append(pending.decode(errors='replace'))
-            raise RuntimeError('Listener failed:\n' + '\n'.join(lines))
-        time.sleep(.05)
-    raise TimeoutError('Listener did not report voice_ready')
+    try:
+        while time.monotonic() - started < 50:
+            try:
+                if receiver is None:
+                    receiver = open_receiver(port)
+                chunk = receiver.read(min(max(receiver.in_waiting, 1), 65536))
+            except (OSError, TimeoutError):
+                if receiver is not None:
+                    receiver.close()
+                    receiver = None
+                time.sleep(.1)
+                continue  # SoC reset removes and re-enumerates the USB device.
+            if chunk: last_output = time.monotonic()
+            pending += chunk
+            while b'\n' in pending:
+                raw, pending = pending.split(b'\n', 1)
+                line = raw.decode(errors='replace').strip().replace('\x00', '')
+                lines.append(line)
+                if 'Traceback' in line or 'voice_failed' in line:
+                    failure = True
+                if not failure and ('"event": "voice_ready"' in line or '"event":"voice_ready"' in line):
+                    return lines
+            if failure and time.monotonic() - last_output >= .5:
+                if pending: lines.append(pending.decode(errors='replace'))
+                raise RuntimeError('Listener failed:\n' + '\n'.join(lines))
+            time.sleep(.05)
+        if pending: lines.append(pending.decode(errors='replace'))
+        raise TimeoutError('Listener did not report voice_ready after hard reset:\n' + '\n'.join(lines))
+    finally:
+        if receiver is not None:
+            receiver.close()
 
 
 def main(argv=None):
