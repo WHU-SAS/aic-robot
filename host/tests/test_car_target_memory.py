@@ -94,7 +94,8 @@ class TargetMemoryTests(unittest.TestCase):
         self.assertTrue(self.memory.bind_precise(fine,capture,0,[(10,10)]))
         for unused in range(3):state=self.memory.update(self.coarse((490,40,0)))
         self.assertEqual(state['version'],0)
-        self.assertAlmostEqual(state['residual_px'],0.)
+        # Integer bbox edges can leave subpixel prediction/quantization residue.
+        self.assertLess(state['residual_px'],2.)
 
     def test_bind_requires_original_frame_time_current_version_and_precise_capability(self):
         coarse,fine=self.seed()
@@ -178,23 +179,81 @@ class TargetMemoryTests(unittest.TestCase):
         state=self.memory.update(self.coarse((500,-100,0)))
         self.assertEqual(state['version'],0)
 
-    def test_depth_change_is_observed_as_well_as_direction(self):
-        self.seed()
-        self.memory.update(self.coarse((400,24,0)))
-        state=self.memory.update(self.coarse((400,24,0)))
-        self.assertTrue(state['confirmed_moved'])
-        self.assertGreater(state['residual_distance_fraction'],.10)
+    def test_blue_mask_expansion_does_not_turn_proxy_351_to_267_into_target_motion(self):
+        def observation(height,proxy):
+            value=self.visual((proxy,0,0),bbox_px=[600,600,80,height],
+                              center_pixel=[640,600+height/2])
+            value['bbox_px']=[600,600,80,height]
+            value['center_pixel']=[640,600+height/2]
+            return value
+        initial=observation(66,351);self.memory.update(initial)
+        self.memory.bind_precise(self.precise(initial,(275,0,10)),initial,0)
+        changed=self.memory.update(observation(238,267))
+        self.assertTrue(changed['measurement_inconsistent'])
+        self.assertTrue(changed['appearance_changed'])
+        self.assertFalse(changed['confirmed_moved'])
+        for unused in range(15):state=self.memory.update(observation(238,267))
+        self.assertEqual(state['version'],0)
+        self.assertTrue(state['target_valid'])
 
-    def test_occlusion_keeps_history_but_requires_new_precise_before_reuse(self):
+    def test_approach_turn_and_small_encoder_error_do_not_accumulate_proxy_bias(self):
+        world=[600.,30.];x=y=yaw=0.
+        def observation(point,bias):
+            value=self.visual(point)
+            u,v=value['center_pixel'];size=12000/point[0]
+            box=[u-size/2,v-size/2,size,size]
+            value['bbox_px']=box;value['visual_evidence']['bbox_px']=box
+            proxy=[point[0]+bias,point[1],0]
+            value['ground_contact_proxy_Base_mm']=proxy
+            value['visual_evidence']['ground_contact_proxy_Base_mm']=proxy
+            return value
+        self.memory.update(observation([600,30,0],76))
+        commands=[(7,7)]*20+[(5,6)]*6+[(6,5)]*6+[(7,7)]*8
+        for index,(dl,dr) in enumerate(commands):
+            angle=(dr-dl)/100;distance=(dl+dr)/2
+            x+=distance*math.cos(yaw+angle/2)
+            y+=distance*math.sin(yaw+angle/2);yaw+=angle
+            dx,dy=world[0]-x,world[1]-y
+            point=[math.cos(yaw)*dx+math.sin(yaw)*dy,
+                   -math.sin(yaw)*dx+math.cos(yaw)*dy,0]
+            state=self.memory.update(observation(point,76*(1-(index+1)/len(commands))),
+                                     [(dl*1.01,dr*1.01)])
+            self.assertEqual(state['version'],0,state)
+            self.assertNotEqual(state['movement_state'],'suspected')
+
+    def test_observable_slow_whole_box_translation_accumulates_in_short_window(self):
+        self.seed()
+        moved=False
+        for index in range(1,9):
+            state=self.memory.update(self.coarse((500,30+3*index,0)))
+            moved=moved or state['confirmed_moved']
+        self.assertTrue(moved)
+        self.assertGreaterEqual(self.memory.version,1)
+
+    def test_depth_change_is_observed_as_well_as_direction(self):
+        # Perspective-consistent box growth plus vertical translation, not
+        # just a coarse proxy number changing under an unchanged small box.
+        def observation(x):
+            value=self.coarse((x,.06*x,0))
+            u,v=value['center_pixel'];size=10000/x
+            value['bbox_px']=[u-size/2,v-size/2,size,size]
+            return value
+        self.memory.update(observation(500))
+        self.memory.update(observation(300))
+        state=self.memory.update(observation(300))
+        self.assertTrue(state['confirmed_moved'])
+        self.assertGreater(state['residual_px'],12)
+
+    def test_occlusion_defers_authority_until_consistent_same_version_reappearance(self):
         coarse,fine=self.seed()
         state=self.memory.update(self.absent())
         self.assertFalse(state['confirmed_moved']);self.assertEqual(state['version'],0)
         self.assertTrue(state['anchor_valid']);self.assertTrue(state['needs_precise'])
         self.assertTrue(self.memory.bind_precise(fine,coarse,0))
         reappeared=self.coarse();state=self.memory.update(reappeared)
-        self.assertEqual(state['event'],'reappeared');self.assertTrue(state['needs_precise'])
+        self.assertEqual(state['event'],'reappeared');self.assertFalse(state['needs_precise'])
         self.memory.bind_precise(fine,coarse,0)
-        self.assertTrue(self.memory.snapshot()['needs_precise'])
+        self.assertFalse(self.memory.snapshot()['needs_precise'])
         self.memory.bind_precise(self.precise(reappeared),reappeared,0)
         self.assertFalse(self.memory.snapshot()['needs_precise'])
 
@@ -392,16 +451,16 @@ class TargetMemoryTests(unittest.TestCase):
         self.assertTrue(self.memory.bind_precise(fine,coarse,0))
         self.assertTrue(self.memory.snapshot()['needs_precise'])
 
-    def test_rescued_geometry_still_requires_new_fine_after_real_visibility_gap(self):
+    def test_rescued_geometry_can_revalidate_same_pose_after_unknown_gap(self):
         coarse=self.visual(distance_valid=False)
         self.memory.update(coarse)
         fine=self.precise(coarse);self.memory.bind_precise(fine,coarse,0)
         self.memory.update(self.absent())
         current=self.visual(distance_valid=False)
         state=self.memory.update(current)
-        self.assertTrue(state['needs_precise'])
+        self.assertFalse(state['needs_precise'])
         self.assertTrue(self.memory.bind_precise(fine,coarse,0,[]))
-        self.assertTrue(self.memory.snapshot()['needs_precise'])
+        self.assertFalse(self.memory.snapshot()['needs_precise'])
         self.assertTrue(self.memory.bind_precise(self.precise(current),current,0))
         self.assertFalse(self.memory.snapshot()['needs_precise'])
 
@@ -458,8 +517,9 @@ class TargetMemoryTests(unittest.TestCase):
     def test_history_size_is_constant(self):
         self.seed()
         for unused in range(3000):self.memory.update(self.coarse())
-        self.assertFalse(any(isinstance(value,list) and len(value)>3
-                             for value in self.memory.__dict__.values()))
+        self.assertLessEqual(len(self.memory._motion_rows),self.memory._motion_row_limit)
+        self.assertTrue(all(self.stamp-row[0] <= self.memory._motion_window_ms
+                            for row in self.memory._motion_rows))
 
 
 if __name__=='__main__':unittest.main()

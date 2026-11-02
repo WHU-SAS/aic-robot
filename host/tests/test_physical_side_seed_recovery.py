@@ -204,6 +204,166 @@ class PhysicalSideSeedRecoveryTests(unittest.TestCase):
                 predictions.append(out['cube_center_Base_mm'])
             np.testing.assert_allclose(predictions[0], predictions[1], atol=.05, rtol=0.)
 
+    def test_static_failed_outline_fit_recovers_same_profiles_on_recent_true_cube_frames(self):
+        base = ROOT/'data/car/full_process_tracking_20261102'
+        calibration = base/'static_timing_04/candidate/config.json'
+        if not calibration.exists():
+            self.skipTest('Candidate calibration and source JPEGs are local-only evidence')
+        cfg = json.loads(calibration.read_text())['car']
+        original_cfg = json.dumps(cfg, sort_keys=True)
+        coherent = vision._coherent_internal_edge
+        for group in ('static_timing_03', 'static_timing_04/live'):
+            folder = base/group
+            if not (folder/'static.jpg').exists() or not (folder/'static.json').exists():
+                self.skipTest('Original recent static frame is local-only evidence')
+            image = cv2.imread(str(folder/'static.jpg'))
+            frame = json.loads((folder/'static.json').read_text())['frame']
+            predictions = []
+            for native in (True, False):
+                recovered = []
+                with self.subTest(group=group, native=native), patch.object(
+                        vision, '_BATCH_EDGES', native), patch.object(
+                        vision, '_native_contrasts', wraps=vision._native_contrasts) as contrasts, patch.object(
+                        vision, 'pose_candidates', wraps=vision.pose_candidates) as poses:
+                    def no_rgb_rescan(*args, **kwargs):
+                        before = contrasts.call_count
+                        result = coherent(*args, **kwargs)
+                        self.assertEqual(contrasts.call_count, before)
+                        if kwargs.get('outline'):
+                            recovered.append(result)
+                        return result
+                    with patch.object(vision, '_coherent_internal_edge', side_effect=no_rgb_rescan):
+                        steps = list(vision.localize_steps(image, frame, None,
+                            cfg['intrinsics'], cfg['extrinsics'], cfg['table_plane']))
+                out = steps[-1]['observation']
+                self.assertEqual(out['status'], 'localized', out)
+                self.assertTrue(recovered)
+                self.assertLessEqual(out['quality']['reprojection_rms_px'], 2.)
+                self.assertLessEqual(out['search']['measured_seed_count'], 3)
+                self.assertLessEqual(poses.call_count, 3)
+                self.assertFalse(out['search']['top_fallback'])
+                self.assertEqual(out['frame_id'], frame['frame_id'])
+                self.assertEqual(out['capture_timestamp_ms'], frame['capture_timestamp_ms'])
+                for face in out['payload']['side_faces']:
+                    geometry = face['poses'][0]['table_geometry']
+                    self.assertTrue(geometry['accepted'])
+                    self.assertLessEqual(geometry['normal_deviation_deg'], 20.)
+                    self.assertLessEqual(abs(geometry['height_error_mm']), 8.)
+                    for edge in face['physical_edges']:
+                        self.assertEqual(edge['sampled_stations'], 64)
+                        self.assertGreaterEqual(edge['support'], 45)
+                        self.assertLessEqual(edge['rms_px'], 3.)
+                predictions.append(out['cube_center_Base_mm'])
+            np.testing.assert_allclose(predictions[0], predictions[1], atol=.05, rtol=0.)
+        self.assertEqual(json.dumps(cfg, sort_keys=True), original_cfg)
+
+    def test_after_restart_current_capture_is_a_separate_new_frame_not_failed_run_evidence(self):
+        base = ROOT/'data/car/full_process_tracking_20261102'
+        folder = base/'first_field_failure'
+        calibration = base/'static_timing_04/candidate/config.json'
+        if any(not path.exists() for path in
+                (folder/'current_static.jpg', folder/'current_static.jpg.json', calibration)):
+            self.skipTest('After-restart current capture is local-only evidence')
+        metadata = json.loads((folder/'current_static.jpg.json').read_text())
+        self.assertEqual(metadata['scope'], 'new_static_capture_after_user_restart_not_failed_run_frame')
+        cfg = json.loads(calibration.read_text())['car']
+        image = cv2.imread(str(folder/'current_static.jpg'))
+        predictions = []
+        for native in (True, False):
+            with self.subTest(native=native), patch.object(vision, '_BATCH_EDGES', native):
+                steps = list(vision.localize_steps(image, metadata['frame'], None,
+                    cfg['intrinsics'], cfg['extrinsics'], cfg['table_plane']))
+            out = steps[-1]['observation']
+            self.assertEqual(out['status'], 'localized', out)
+            self.assertEqual(out['frame_id'], metadata['frame']['frame_id'])
+            self.assertEqual(out['capture_timestamp_ms'], metadata['frame']['capture_timestamp_ms'])
+            self.assertLessEqual(out['quality']['reprojection_rms_px'], 2.)
+            self.assertLessEqual(out['search']['measured_seed_count'], 3)
+            self.assertFalse(out['search']['top_fallback'])
+            for face in out['payload']['side_faces']:
+                self.assertTrue(face['poses'][0]['table_geometry']['accepted'])
+                for edge in face['physical_edges']:
+                    self.assertEqual(edge['sampled_stations'], 64)
+                    self.assertGreaterEqual(edge['support'], 45)
+                    self.assertLessEqual(edge['rms_px'], 3.)
+            predictions.append(out['cube_center_Base_mm'])
+        np.testing.assert_allclose(predictions[0], predictions[1], atol=.05, rtol=0.)
+
+    def test_failed_double_peak_outline_cannot_combine_two_under_supported_lines(self):
+        image = np.full((260, 240, 3), (200, 60, 0), dtype=np.uint8)
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        radius = 12  # 200px edge keeps the original 6 percent bounded search.
+        rows = []
+        for station in range(64):
+            row = [0.]*(2*radius+1)
+            row[radius+(-8 if station % 2 else 8)] = 1.
+            row[radius+(8 if station % 2 else -8)] = .001
+            rows.append(row)
+        allowed = [[True]*(2*radius+1) for _ in range(64)]
+        with patch.object(vision, '_BATCH_EDGES', True), patch.object(
+                vision, '_contrast_grid', return_value=rows) as grids, patch.object(
+                vision, '_blue_grid', return_value=allowed), patch.object(
+                vision, '_coherent_internal_edge', wraps=vision._coherent_internal_edge) as recovered:
+            with self.assertRaises(ValueError):
+                list(vision._edge_steps(image, [120., 20.], [120., 220.], hsv=hsv,
+                    coherent_outline=True))
+        self.assertEqual(grids.call_count, 1)
+        self.assertEqual(recovered.call_count, 1)
+        self.assertTrue(recovered.call_args.kwargs['outline'])
+
+    def test_failed_outline_fit_still_requires_45_blue_interior_stations(self):
+        image = np.full((260, 240, 3), (200, 60, 0), dtype=np.uint8)
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        radius = 12
+        rows = []
+        for station in range(64):
+            row = [0.]*(2*radius+1)
+            row[radius-8] = 1. if station % 2 else .8
+            row[radius+8] = .8 if station % 2 else 1.
+            rows.append(row)
+        allowed = [[station < 44]*(2*radius+1) for station in range(64)]
+        with patch.object(vision, '_BATCH_EDGES', True), patch.object(
+                vision, '_contrast_grid', return_value=rows) as grids, patch.object(
+                vision, '_blue_grid', return_value=allowed), patch.object(
+                vision, '_coherent_internal_edge', wraps=vision._coherent_internal_edge) as recovered:
+            with self.assertRaises(ValueError):
+                list(vision._edge_steps(image, [120., 20.], [120., 220.], hsv=hsv,
+                    coherent_outline=True))
+        self.assertEqual(grids.call_count, 1)
+        self.assertEqual(recovered.call_count, 1)
+
+    def test_blue_grid_native_and_portable_match_half_pixel_precision_and_frame_rounding(self):
+        hsv = np.zeros((50, 50, 3), dtype=np.uint8)
+        hsv[:, ::2] = (110, 200, 180)
+        for x in (-.25, 8.50000001):
+            for inside_only in (False, True):
+                with self.subTest(x=x, inside_only=inside_only):
+                    a, b, normal = [x, 4.], [x, 46.], [1., 0.]
+                    with patch.object(vision, '_BATCH_EDGES', True):
+                        native = vision._blue_grid(hsv, a, b, normal, 5, inside_only=inside_only)
+                    with patch.object(vision, '_BATCH_EDGES', False):
+                        portable = vision._blue_grid(hsv, a, b, normal, 5, inside_only=inside_only)
+                    self.assertEqual(np.array(native).shape, (64, 11))
+                    self.assertTrue(np.array_equal(np.array(native), np.array(portable)))
+
+    def test_successful_original_outline_fit_does_not_attempt_coherent_recovery(self):
+        image = np.full((260, 240, 3), (200, 60, 0), dtype=np.uint8)
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        radius = 12
+        rows = [[1. if offset == radius else 0. for offset in range(2*radius+1)]
+                for _ in range(64)]
+        with patch.object(vision, '_BATCH_EDGES', True), patch.object(
+                vision, '_contrast_grid', return_value=rows) as grids, patch.object(
+                vision, '_coherent_internal_edge', side_effect=AssertionError('Original fit already passed')) as recovered:
+            steps = list(vision._edge_steps(image, [120., 20.], [120., 220.], hsv=hsv,
+                coherent_outline=True))
+        edge = steps[-1]['edge']
+        self.assertEqual(edge[1]['support'], 64)
+        self.assertEqual(edge[1]['sampled_stations'], 64)
+        self.assertLessEqual(edge[1]['rms_px'], 1e-4)
+        self.assertEqual(grids.call_count, 1)
+        recovered.assert_not_called()
+
     def test_uniform_blue_rectangle_has_no_internal_top_side_separator(self):
         fixture = fixtures.NearVisionTests()
         image, intr, ext, plane = fixture.scene()
@@ -249,6 +409,7 @@ class PhysicalSideSeedRecoveryTests(unittest.TestCase):
         self.assertTrue(all(call.args[1] != 2 for call in retries.call_args_list))
         recovered.assert_not_called()
         self.assertTrue(all(not call.kwargs.get('coherent', False) for call in edges.call_args_list))
+        self.assertTrue(all(not call.kwargs.get('coherent_outline', False) for call in edges.call_args_list))
         self.assertTrue(all(call.kwargs.get('profile') is None for call in edges.call_args_list))
         self.assertFalse(any(step['stage']=='outline_profile_recovered' for step in steps))
 

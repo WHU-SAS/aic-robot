@@ -238,6 +238,70 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertLessEqual(result['metrics']['max_observation_gap_ms'],275)
         self.assertLessEqual(len(self.task.evidence),2)
 
+    def test_brief_unknown_during_static_compute_reuses_original_image(self):
+        original=self.task.track
+        hidden=[]
+        def track(point,frame):
+            if (self.task.job is not None and self.task.job['purpose']=='static' and
+                    self.task.job['session'].ticks>3 and not hidden):
+                self.hide_frames=1
+                hidden.append(frame['frame_id'])
+            return original(point,frame)
+        self.task.track=track
+        result=self.finish()
+        self.assertTrue(hidden)
+        self.assertEqual(result['metrics']['fine_started'],1)
+        self.assertEqual(len(self.arms),1)
+        self.assertFalse(any(c.startswith(('FOLLOW','ARC')) for t,c in self.motor.commands))
+
+    def test_completed_static_unknown_defers_without_busy_capture_or_rephotograph(self):
+        original=self.task.track
+        hidden=[]
+        def track(point,frame):
+            if self.task.complete is not None and not hidden:
+                self.hide_frames=1
+                hidden.append(frame['capture_timestamp_ms'])
+            return original(point,frame)
+        self.task.track=track
+        result=self.finish()
+        self.assertTrue(hidden)
+        following=next(row['at'] for row in self.observation_rows if row['at']>hidden[0])
+        self.assertGreaterEqual(following-hidden[0],self.task.stationary_period)
+        self.assertEqual(result['metrics']['fine_started'],1)
+        self.assertEqual(len(self.arms),1)
+
+    def test_run_diagnostics_retain_parking_and_first_hover_transitions(self):
+        self.x=650
+        result=self.finish()
+        events=[row['event'] for row in result['timeline']]
+        self.assertIn('tracking_fine_started',events)
+        self.assertIn('tracking_fine_completed',events)
+        self.assertIn('tracking_first_hover',events)
+        stops=[row for row in result['timeline'] if row['event']=='tracking_drive' and
+               row['details']['command']=='STOP']
+        self.assertEqual(len(stops),1)
+        self.assertTrue(stops[0]['details']['status'])
+        hover=next(row for row in result['timeline'] if row['event']=='tracking_first_hover')
+        self.assertGreater(hover['details']['photo_to_hover_ms'],0)
+
+    def test_failed_moving_fine_and_one_missing_coarse_frame_do_not_split_approach(self):
+        self.x=650
+        self.fail_first_fine=True
+        original=self.task.track
+        hidden=[]
+        def track(point,frame):
+            if self.task.job is not None and self.task.job['purpose']=='moving' and not hidden:
+                self.hide_frames=1
+                hidden.append(frame['frame_id'])
+            return original(point,frame)
+        self.task.track=track
+        result=self.finish()
+        self.assertTrue(hidden)
+        self.assertEqual(result['metrics']['target_changes'],0)
+        self.assertEqual(result['metrics']['fine_started'],3)
+        self.assertEqual(len([c for t,c in self.motor.commands if c=='STOP']),1)
+        self.assertEqual(len(self.arms),1)
+
     def test_move_during_fine_cancels_old_image_and_never_hands_it_to_arm(self):
         self.fine_slices = 40
         self.move_when = lambda:self.task.job is not None and self.task.job['session'].ticks>=3
@@ -306,7 +370,7 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertFalse(any(e[0]=='goals' for e in self.arms[0].io.events))
         self.assertGreaterEqual(len(self.arms),2)
 
-    def test_unknown_after_planning_drops_unsent_engine_without_opening_jaw(self):
+    def test_unknown_after_planning_pauses_unsent_hover_without_replanning(self):
         original = self.task.begin_arm
         def plan(obs, version):
             arm = original(obs,version)
@@ -314,8 +378,73 @@ class RobotTrackingTests(unittest.TestCase):
             return arm
         self.task.begin_arm = plan
         self.finish()
+        self.assertEqual(len(self.arms),1)
+        self.assertEqual(self.task.metrics['fine_started'],1)
+        self.assertFalse(any(e[0]=='ready2' for e in self.arms[0].io.events))
+        self.assertEqual(self.arms[0].io.events[0][0],'goals')
+
+    def test_unknown_during_planning_keeps_original_unsent_plan(self):
+        original=self.task.begin_arm
+        hidden=[]
+        def plan(obs,version):
+            for unused in range(35):
+                self.clock.advance(20)
+                yield {'stage':'candidate','target_version':version}
+            yield {'stage':'complete','target_version':version,'frame_id':obs['frame_id'],
+                   'execution':original(obs,version)}
+        self.task.begin_arm=plan
+        track=self.task.track
+        def hide_once(point,frame):
+            if self.task.planning is not None and not hidden:
+                self.hide_frames=1
+                hidden.append(frame['frame_id'])
+            return track(point,frame)
+        self.task.track=hide_once
+        result=self.finish()
+        self.assertTrue(hidden)
+        self.assertEqual(result['metrics']['plans_cancelled'],0)
+        self.assertEqual(result['metrics']['arm_plans'],1)
+        self.assertEqual(result['metrics']['fine_started'],1)
+
+    def test_continued_unknown_before_first_hover_can_search_instead_of_waiting_forever(self):
+        original=self.task.begin_arm
+        def plan(obs,version):
+            arm=original(obs,version)
+            if len(self.arms)==1:self.hide_frames=8
+            return arm
+        self.task.begin_arm=plan
+        self.finish()
         self.assertEqual([e[0] for e in self.arms[0].io.events],['close'])
+        self.assertTrue(any(c.startswith('ARC,') for t,c in self.motor.commands))
         self.assertGreaterEqual(len(self.arms),2)
+
+    def test_ambiguous_before_hover_preserves_one_frame_but_can_reobserve_if_persistent(self):
+        for count in (1,8):
+            with self.subTest(ambiguous_frames=count):
+                self.setUp()
+                original=self.task.begin_arm
+                remaining=[0]
+                def plan(obs,version):
+                    arm=original(obs,version)
+                    if len(self.arms)==1:remaining[0]=count
+                    return arm
+                track=self.task.track
+                def ambiguous(point,frame):
+                    result=track(point,frame)
+                    if remaining[0]:
+                        remaining[0]-=1
+                        result['visual_evidence'].update(ambiguous=True,associated=False,candidate_count=2)
+                    return result
+                self.task.begin_arm=plan
+                self.task.track=ambiguous
+                result=self.finish()
+                self.assertEqual(result['status'],'succeeded')
+                if count==1:
+                    self.assertEqual(len(self.arms),1)
+                    self.assertEqual(result['metrics']['fine_started'],1)
+                else:
+                    self.assertEqual([e[0] for e in self.arms[0].io.events],['close'])
+                    self.assertTrue(any(c.startswith('ARC,') for t,c in self.motor.commands))
 
     def test_visible_coarse_geometry_rejection_can_be_rescued_by_full_static_pose(self):
         self.geometry_invalid=True

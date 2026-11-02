@@ -185,6 +185,22 @@ def _fit_edge(points, stations):
 
 
 def _blue_grid(hsv, a, b, normal, radius, inside_only=False):
+    if not _BATCH_EDGES:
+        height, width = hsv.shape[:2]
+        kind = getattr(np, 'float32', FLOAT)
+        rows = [[True]*(2*radius+1) for unused in range(64)]
+        for sign in ((1,) if inside_only else (1, -1)):
+            # Match remap's coordinate precision and nearest-pixel ownership,
+            # including half pixels and coordinates rounding back into frame.
+            maps = [np.array([[a[k]+(b[k]-a[k])*(.15+.7*j/63)+
+                normal[k]*offset+sign*2*normal[k] for offset in range(-radius, radius+1)]
+                for j in range(64)], dtype=kind).tolist() for k in (0, 1)]
+            for j in range(64):
+                for i in range(2*radius+1):
+                    x, y = int(round(maps[0][j][i])), int(round(maps[1][j][i]))
+                    rows[j][i] = rows[j][i] and 0 <= x < width and 0 <= y < height and blue(
+                        hsv[y, x].tolist())
+        return rows
     stations = np.arange(64).reshape((64, 1))
     offsets = np.arange(-radius, radius+1).reshape((1, 2*radius+1))
     along = .15+.7*stations/63
@@ -293,7 +309,8 @@ def _coherent_internal_edge(a, b, n, radius, rows, both, hsv, im, outline=False)
     return best[1]
 
 
-def _edge_steps(im, a, b, stations_per_step=8, hsv=None, coherent=False, profile=None):
+def _edge_steps(im, a, b, stations_per_step=8, hsv=None, coherent=False, profile=None,
+                coherent_outline=False):
     """Same64 stations/edge checks; retain a resolved internal-face crease."""
     length = distance(a, b)
     if length < 25:
@@ -340,10 +357,18 @@ def _edge_steps(im, a, b, stations_per_step=8, hsv=None, coherent=False, profile
     try:
         edge = _fit_edge(points, stations)
     except ValueError:
-        if not coherent or hsv is None:
+        if hsv is None or not (coherent or coherent_outline):
             raise
-        both = _blue_grid(hsv, a, b, n, radius) if grid is not None else blue_rows
-        edge = _coherent_internal_edge(a, b, n, radius, rows, both, hsv, im)
+        # A narrow adjacent blue side can make per-station strongest peaks
+        # alternate between its outer silhouette and the shared physical edge.
+        # Reuse the SAME64 profiles to select one distributed local-peak line;
+        # the original fit, half-sample, four-edge, pose and table gates remain.
+        both = (_blue_grid(hsv, a, b, n, radius, inside_only=coherent_outline)
+                if grid is not None or coherent_outline else blue_rows)
+        edge = _coherent_internal_edge(a, b, n, radius, rows, both, hsv, im,
+                                       outline=coherent_outline)
+        if coherent_outline:
+            yield {'stage': 'edge_profile_recovered'}
     # An internal line separated by5pixels cannot be closer to the seed if
     # the external peak stays within2pixels. Most existing edges exit here.
     if hsv is not None and sum(abs(p-radius)>=3 for p in peaks) >= 45:
@@ -908,7 +933,9 @@ def localize_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
                         continue
                     failed_edge = edge_index
                     profile = outline_profile if edge_index == 1 else None
-                    for step in _edge_steps(smooth, a, b, stations_per_step, hsv=hsv, profile=profile):
+                    for step in _edge_steps(smooth, a, b, stations_per_step, hsv=hsv, profile=profile,
+                            coherent_outline=not include_range and edge_index in (1, 3) and
+                                abs(b[1]-a[1]) > 2*abs(b[0]-a[0])):
                         if step['stage'] == 'edge_complete':
                             edges.append(step['edge'])
                         yield {'stage': step['stage'], 'candidate': index,

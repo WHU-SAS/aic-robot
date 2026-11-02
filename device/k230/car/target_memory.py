@@ -31,12 +31,9 @@ class TargetMemory:
         self.last_seen = self.last_precise = self.paired_coarse = None
         self.last_disappearance_direction = None
         self._anchor_version = None
-        self._expected = self._suspect = None
-        self._visual_reference = self._visual_previous = None
-        self._visual_offset = None
-        self._visual_suspect_count = 0
+        self._expected = self._visual_previous = None
         self._geometry_unknown = False
-        self._suspect_count = self._acquire_count = 0
+        self._acquire_count = 0
         self._held_suspect_count = 0
         self._held_candidate = None
         self._invalidated = False
@@ -51,6 +48,17 @@ class TargetMemory:
         self._movement_state = 'unknown'
         self._last_reason = None
         self._residual_px = self._residual_fraction = None
+        # Bound translation evidence to the existing coarse freshness horizon.
+        # A biased first tabletop proxy must not accumulate forever.
+        self._motion_visual = self._motion_reference = None
+        self._motion_height = 10.
+        self._motion_rows = []
+        self._motion_window_ms = config.get('tracking', {}).get('max_age_ms', 500)
+        self._motion_row_limit = max(3, int(self._motion_window_ms/
+            max(1, task.get('period_ms', 100)))+2)
+        self._motion_count = 0
+        self._motion_direction = None
+        self._measurement_inconsistent = self._appearance_changed = False
 
     def _propagate(self, point, deltas):
         return predict_center(point, deltas, self.track_width, self.projection.normal,
@@ -95,6 +103,34 @@ class TargetMemory:
         return (math.sqrt(((a[0]-b[0])/width)**2+((a[1]-b[1])/height)**2) <= jump
                 and 1/ratio_limit <= ratio <= ratio_limit)
 
+    def _common_translation(self, current, previous, expected_center):
+        """Translation supported by BOTH box edges; expansion alone is not it."""
+        shift = [a-b for a,b in zip(expected_center,previous['center_pixel'])]
+        current_box, old = current['bbox_px'], previous['bbox_px']
+        result = []
+        for axis in (0,1):
+            a = current_box[axis]-old[axis]-shift[axis]
+            b = current_box[axis]+current_box[axis+2]-old[axis]-old[axis+2]-shift[axis]
+            result.append(min(a,b) if min(a,b)>0 else (max(a,b) if max(a,b)<0 else 0.))
+        return result
+
+    def _roll_visual(self, visual):
+        self._motion_visual = visual
+        try:
+            self._motion_reference = self.projection.pixel_to_plane(
+                visual['center_pixel'],self._motion_height)
+            projected = self.projection.base_to_pixel(self._motion_reference)
+            if math.sqrt(sum((a-b)**2 for a,b in zip(projected,visual['center_pixel']))) > self._pixel_limit(visual):
+                # An ill-conditioned/out-of-view ray is model uncertainty,
+                # never evidence that a stationary blue region moves each frame.
+                self._motion_reference = None
+        except ValueError:
+            self._motion_reference = None
+
+    def _full_anchor(self):
+        return (self.last_precise is not None and self._anchor_version == self.version and
+                self.last_precise.get('status') == 'localized')
+
     def invalidate(self, reason='target_changed'):
         """One version change until fresh consistent observations reacquire it.
 
@@ -105,9 +141,10 @@ class TargetMemory:
             self.version += 1
             self._invalidated = True
             self._acquire_count = 0
-        self._visual_reference = self._visual_offset = None
-        self._visual_suspect_count = 0
         self._geometry_unknown = True
+        self._motion_rows = []
+        self._motion_count = 0
+        self._motion_direction = None
         self._last_reason = reason
         self._event = 'invalidated'
         self._moved = False
@@ -124,10 +161,8 @@ class TargetMemory:
         deltas = tuple(wheel_deltas)
         if self._expected is not None and deltas:
             self._expected = self._propagate(self._expected, deltas)
-        if self._suspect is not None and deltas:
-            self._suspect = self._propagate(self._suspect, deltas)
-        if self._visual_reference is not None and deltas:
-            self._visual_reference = self._propagate(self._visual_reference, deltas)
+        if self._motion_reference is not None and deltas:
+            self._motion_reference = self._propagate(self._motion_reference,deltas)
         self._event, self._moved = 'none', False
         stamp = observation.get('capture_timestamp_ms', observation.get('timestamp_ms'))
         frame = observation.get('frame_id', stamp)
@@ -180,7 +215,6 @@ class TargetMemory:
                 self._held_suspect_count = 0
                 self._held_candidate = None
             self._exit_direction = None
-            self._suspect_count = 0
             return self.snapshot()
         self._held_suspect_count = 0
         self._held_candidate = None
@@ -201,9 +235,7 @@ class TargetMemory:
             was_gap = self._gap
             self._gap = True
             self._movement_state = 'unknown'
-            self._suspect_count = 0
-            self._visual_previous = self._visual_offset = None
-            self._visual_suspect_count = 0
+            self._visual_previous = None
             if not self._visible and self._exit_direction is not None:
                 direction = self._exit_direction
                 was_invalidated = self._invalidated
@@ -219,95 +251,56 @@ class TargetMemory:
                   if _point(center,2) and len(bbox) == 4 and min(bbox[2:]) > 0 else None)
         same_visual = visual is not None and self._held_match(visual,self._visual_previous)
         self._visual_previous = visual
-        # A full fine result can rescue coarse geometry rejection. Its paired
-        # coarse centroid ray supplies ONLY an image-change reference, not a
-        # newly measured table point or permission to use coarse range.
-        if self._visual_reference is not None and visual is not None:
-            expected = self.projection.base_to_pixel(self._visual_reference)
-            offset = [a-b for a,b in zip(center,expected)]
-            self._residual_px = math.sqrt(sum(value*value for value in offset))
+        # Compare a short, rolling same-kind image reference. The coarse table
+        # proxy may change markedly when another part of the cube turns blue;
+        # its range mismatch is diagnostic, not proof that the cube moved.
+        self._measurement_inconsistent = False
+        if self._distance_valid and self._expected is not None:
+            self._measurement_inconsistent, unused, self._residual_fraction = self._different(
+                point,self._expected,evidence)
+        self._expected = list(point) if self._distance_valid else None
+        if visual is not None and self._motion_visual is not None and (
+                self._motion_reference is not None or not any(abs(a)+abs(b) for a,b in deltas)):
+            expected = (self.projection.base_to_pixel(self._motion_reference)
+                        if self._motion_reference is not None else self._motion_visual['center_pixel'])
+            shift = self._common_translation(visual,self._motion_visual,expected)
+            previous_box = self._motion_visual['bbox_px']
+            self._appearance_changed = any(abs(bbox[k]/previous_box[k]-1) >
+                self.distance_fraction for k in (2,3))
+            self._motion_rows.append((stamp,shift[0],shift[1]))
+            self._motion_rows = [row for row in self._motion_rows
+                if 0 <= age_ms(stamp,row[0]) <= self._motion_window_ms][-self._motion_row_limit:]
+            total = [sum(row[k] for row in self._motion_rows) for k in (1,2)]
+            self._residual_px = math.sqrt(sum(value*value for value in total))
             if self._residual_px > self._pixel_limit(evidence):
-                coherent = (same_visual and self._visual_offset is not None and
-                            sum(a*b for a,b in zip(offset,self._visual_offset)) > 0)
-                self._visual_suspect_count = self._visual_suspect_count+1 if coherent else 1
-                self._visual_offset = offset
-                self._movement_state,self._event = 'suspected','suspected'
-                self._geometry_unknown = True
-                if self._visual_suspect_count >= self.confirmation_frames:
-                    was_invalidated = self._invalidated
-                    self.invalidate('target_moved')
-                    self._moved = not was_invalidated
-                    self._event,self._movement_state = 'moved','confirmed'
-                    self._expected = list(point) if self._distance_valid else None
-                    self._associated = True
-                    self.last_seen = dict(observation)
-                return self.snapshot()
-            self._visual_suspect_count = 0
-            self._visual_offset = None
-        # Keep visible geometry failures for direction/search, never invent range.
-        if not self._distance_valid:
-            self.last_seen = dict(observation)
-            self._geometry_unknown = self._visual_reference is None
-            self._movement_state = 'unknown_geometry' if self._geometry_unknown else 'consistent'
-            self._suspect_count = 0
-            self._acquire_count = self._acquire_count+1 if same_visual else 1
-            recovering = (arm_state or {}).get('status') == 'recovering'
-            if self._invalidated and self._acquire_count >= self.confirmation_frames and not recovering:
-                self._invalidated = False
-                self._associated = True
-                self._event = 'acquired'
-            if self._gap:
-                self._gap_ended_at = stamp
-                self._gap = False
-                self._event = 'reappeared'
-            return self.snapshot()
-        self._geometry_unknown = False
-        if self._expected is None:
-            self._expected = list(point)
-            self._acquire_count = 1
-            self._movement_state = 'consistent'
-            self.last_seen = dict(observation)
-            if not self._invalidated:
-                self._event = 'acquired'
-            if self._gap:
-                self._gap_ended_at = stamp
-                self._gap = False
-                self._event = 'reappeared'
-            return self.snapshot()
-        different, self._residual_px, self._residual_fraction = self._different(
-            point, self._expected, evidence)
-        if different:
-            same_candidate = self._suspect is not None and not self._different(
-                point, self._suspect, evidence)[0]
-            # A target still in motion need not stop at the same pixel for two
-            # frames. Persistent residuals in the same direction also confirm
-            # movement; opposite isolated frame jumps do not accumulate.
-            if self._suspect is not None and not same_candidate:
-                current = self.projection.base_to_pixel(point)
-                previous = self.projection.base_to_pixel(self._suspect)
-                expected = self.projection.base_to_pixel(self._expected)
-                same_candidate = sum((a-c)*(b-c) for a,b,c in
-                                     zip(current,previous,expected)) > 0
-            self._suspect_count = self._suspect_count+1 if same_candidate else 1
-            self._suspect = list(point)
-            self._acquire_count = 0
-            self._movement_state, self._event = 'suspected', 'suspected'
-            if self._suspect_count >= self.confirmation_frames:
+                coherent = (self._motion_direction is not None and
+                            sum(a*b for a,b in zip(total,self._motion_direction)) > 0)
+                self._motion_count = self._motion_count+1 if coherent else 1
+                self._motion_direction = total
+            else:
+                self._motion_count = 0
+                self._motion_direction = None
+        else:
+            self._motion_rows = []
+            self._motion_count = 0
+            self._motion_direction = None
+        if visual is not None:
+            self._roll_visual(visual)
+        if self._motion_count:
+            self._movement_state,self._event = 'suspected','suspected'
+            self._geometry_unknown = True
+            if self._motion_count >= self.confirmation_frames:
                 was_invalidated = self._invalidated
                 self.invalidate('target_moved')
                 self._moved = not was_invalidated
-                self._event, self._movement_state = 'moved', 'confirmed'
-                self._expected = list(point)
-                self._suspect = None
-                self._suspect_count = 0
+                self._event,self._movement_state = 'moved','confirmed'
                 self._associated = True
-                self.last_seen = dict(observation)
+            self.last_seen = dict(observation)
             return self.snapshot()
-        self._suspect = None
-        self._suspect_count = 0
-        self._movement_state = 'consistent'
+        self._geometry_unknown = not self._distance_valid and not self._full_anchor()
+        self._movement_state = 'unknown_geometry' if self._geometry_unknown else 'consistent'
         self.last_seen = dict(observation)
-        self._acquire_count += 1
+        self._acquire_count = self._acquire_count+1 if same_visual else 1
         recovering = (arm_state or {}).get('status') == 'recovering'
         if self._invalidated and self._acquire_count >= self.confirmation_frames and not recovering:
             self._invalidated = False
@@ -318,6 +311,10 @@ class TargetMemory:
             self._gap_ended_at = stamp
         self._gap = False
         self._associated = True
+        # Unknown is not evidence of movement. An unchanged, uniquely
+        # re-associated full-pose target can resume its existing static plan.
+        if self._full_anchor() and self._movement_state == 'consistent':
+            self._gap_ended_at = None
         return self.snapshot()
 
     def bind_precise(self, observation, coarse, version, wheel_deltas=None):
@@ -359,14 +356,28 @@ class TargetMemory:
                     reference = self._propagate(reference,wheel_deltas)
                 elif coarse['capture_timestamp_ms'] != self._last_stamp:
                     reference = None
-                if reference is not None:
-                    self._visual_reference = reference
-                if reference is not None and self._associated and _point(self._last_center,2):
+                current = self._motion_visual
+                paired_box = evidence.get('bbox_px', [])
+                if (reference is not None and self._associated and self._visible and
+                        current is not None and len(paired_box) == 4):
+                    paired = {'center_pixel':pixel,'bbox_px':paired_box}
                     expected = self.projection.base_to_pixel(reference)
-                    self._geometry_unknown = math.sqrt(sum((a-b)**2 for a,b in
-                        zip(self._last_center,expected))) > self._pixel_limit(evidence)
+                    shift = self._common_translation(current,paired,expected)
+                    self._geometry_unknown = (self._movement_state == 'suspected' or
+                        math.sqrt(sum(value*value for value in shift)) > self._pixel_limit(evidence))
+                    if not self._geometry_unknown:
+                        self._motion_height = height
+                        self._roll_visual(current)
+                        if not self._gap:
+                            self._gap_ended_at = None
+                        # A new full pose supersedes pre-photo colour changes;
+                        # retain only observed motion AFTER that source frame.
+                        self._motion_rows = [row for row in self._motion_rows
+                            if age_ms(row[0],observation['capture_timestamp_ms']) > 0]
+                        self._motion_count = 0
+                        self._motion_direction = None
             except ValueError:
-                self._visual_reference = None
+                self._geometry_unknown = True
         if (not self._gap and (self._gap_ended_at is None or
                 age_ms(observation['capture_timestamp_ms'], self._gap_ended_at) >= 0)):
             self._gap_ended_at = None
@@ -386,4 +397,6 @@ class TargetMemory:
             'last_disappearance_direction':self.last_disappearance_direction,
             'reason':self._last_reason, 'residual_px':self._residual_px,
             'residual_distance_fraction':self._residual_fraction,
+            'measurement_inconsistent':self._measurement_inconsistent,
+            'appearance_changed':self._appearance_changed,
             'motion_thresholds_provisional':True}

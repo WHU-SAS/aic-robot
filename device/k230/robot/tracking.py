@@ -55,10 +55,19 @@ class TrackingTask:
         self._missing = 0
         self.fault = None
         self.status = 'running'
+        self.timeline = []
+        self._last_drive_event = self._last_target_event = None
         self.metrics = dict(observations=0, max_observation_gap_ms=0, max_step_ms=0,
             fine_started=0, fine_cancelled=0, arm_plans=0, arm_attempts=0, recoveries=0,
             planning_steps=0, plans_cancelled=0, max_planning_step_ms=0,
             target_changes=0, obsolete_frames_released=0, status_queries=0)
+
+    def _record(self, event, details):
+        # Keep transitions in RAM during motion. They join the existing final
+        # run record; no per-frame SD writes or JPEG copies are introduced.
+        self.timeline.append(dict(at_ms=self.clock(), event=event, details=details))
+        self.timeline[:] = self.timeline[-64:]
+        self.emit(event, details)
 
     def _command(self, command):
         sent = self.clock()
@@ -208,6 +217,8 @@ class TrackingTask:
                     close()
                 self.planning = None
                 self._fresh_before_arm = True
+                self._record('tracking_plan_ready', dict(target_version=plan['target_version'],
+                    frame_id=plan['frame_id'], elapsed_ms=age_ms(self.clock(), plan['started_at_ms'])))
         except ReobserveRequired as exc:
             self._cancel_plan('scene_has_no_arm_plan')
             self.last_parking = None
@@ -244,8 +255,10 @@ class TrackingTask:
             self.last_parking = None
         if self.planning is not None and (
                 self.planning['target_version'] != self.memory.version or
-                not self.target.get('associated') or not self.target.get('visible') or
-                self.target.get('needs_precise')):
+                not self.target.get('target_valid') or
+                (self.target.get('visible') and self.target.get('associated') and
+                 self.target.get('movement_state') != 'suspected' and
+                 self.target.get('needs_precise'))):
             self._cancel_plan('observation_changed_during_planning')
             self.last_parking = None
             self.drive.restart_observation()
@@ -253,6 +266,13 @@ class TrackingTask:
         self._frame_motor = dict(self.state)
         if self.target['confirmed_moved']:
             self.metrics['target_changes'] += 1
+        change = (self.memory.version, self.target['event'], self.target['movement_state'])
+        if change != self._last_target_event:
+            self._last_target_event = change
+            self._record('tracking_target', dict(target_version=self.memory.version,
+                event=self.target['event'], movement_state=self.target['movement_state'],
+                reason=self.target.get('reason'), residual_px=self.target.get('residual_px'),
+                bbox_px=self.coarse.get('bbox_px')))
         if self.job is not None and self.job['target_version'] != self.memory.version:
             self._cancel_job('target_version_changed')
         if self.complete is not None and self.complete['target_version'] != self.memory.version:
@@ -264,7 +284,19 @@ class TrackingTask:
             # Memory has confirmed a unique jump; the next native frame can
             # establish a new color association instead of following old blue.
             self.reset_tracker()
-        self._missing = self._missing+1 if not self.target['visible'] else 0
+        self._missing = (self._missing+1 if not (
+            self.target['visible'] and self.target['associated']) else 0)
+        unsent_hover = self.arm is not None and self.arm.snapshot().get('pending_stage') == 'hover'
+        if (self._missing >= self.config['tracking'].get('confirmation_frames', 3) and
+                (self.planning is not None or unsent_hover)):
+            # A brief gap preserves work. When the existing search policy is
+            # due, drop only unsent work so its ownership cannot block searching.
+            self._cancel_plan('target_unseen_before_hover')
+            if unsent_hover:
+                self.arm.close()
+                self.arm = None
+            self._arm_motor_reference = self.last_parking = None
+            self.drive.restart_observation()
         self._fresh_before_arm = False
         return image, frame
 
@@ -278,6 +310,9 @@ class TrackingTask:
             'target_version': self.memory.version, 'paired_coarse': dict(self.coarse),
             'request_id': self.decision.get('fine_request_id'),
             'number': self.metrics['fine_started']}
+        self._record('tracking_fine_started', dict(purpose=purpose,
+            frame_id=frame['frame_id'], target_version=self.memory.version,
+            capture_timestamp_ms=frame['capture_timestamp_ms']))
         try:
             session.start(image, frame, self.coarse.get('bbox_px') if purpose == 'moving' else None)
         except Exception as exc:
@@ -301,6 +336,11 @@ class TrackingTask:
             self.complete = dict(job, observation=job['session'].latest,
                 result_ready_ms=job['session'].latest_ready_ms)
             self.complete.pop('session')
+            self._record('tracking_fine_completed', dict(purpose=job['purpose'],
+                frame_id=job['session'].latest.get('frame_id'),
+                status=job['session'].latest.get('status'),
+                elapsed_ms=age_ms(job['session'].latest_ready_ms,
+                    job['session'].latest.get('capture_timestamp_ms', job['session'].latest_ready_ms))))
             self._save_job()
             self.job = None
 
@@ -309,9 +349,13 @@ class TrackingTask:
             return
         before = self.arm.snapshot()
         if before['target_version'] == self.memory.version and before.get('target_valid', True):
-            if before.get('pending_stage') == 'hover' and (
-                    not self.target.get('associated') or not self.target.get('visible') or
-                    self.target.get('needs_precise')):
+            if before.get('pending_stage') == 'hover':
+                if (not self.target.get('associated') or not self.target.get('visible') or
+                        self.target.get('movement_state') == 'suspected'):
+                    # Unknown is a pause, not evidence that the plan moved.
+                    # A later confirmed version change still cancels it below.
+                    return
+            if before.get('pending_stage') == 'hover' and self.target.get('needs_precise'):
                 # No servo goal has been sent by this engine. Drop the stale
                 # plan without a physical recovery action, then obtain a new
                 # static result; unknown vision alone must not open the jaw.
@@ -335,6 +379,10 @@ class TrackingTask:
             state = before
         if dispatching_first and state.get('pending_stage') != 'hover':
             self.metrics['arm_attempts'] += 1
+            self._record('tracking_first_hover', dict(target_version=self.memory.version,
+                static_frame_id=(self.last_parking or {}).get('verification_observation', {}).get('frame_id'),
+                photo_to_hover_ms=age_ms(self.clock(), (self.last_parking or {}).get(
+                    'verification_observation', {}).get('capture_timestamp_ms', self.clock()))))
         if state['status'] in ('recovering', 'reobserve_ready') and not self._recovery_seen:
             self._recovery_seen = True
             self.metrics['recoveries'] += 1
@@ -385,7 +433,9 @@ class TrackingTask:
             return self.snapshot()
         started = self.clock()
         observed = (self._last_capture is None or self._fresh_before_arm or self._force_observe or
-                    self.complete is not None or age_ms(started, self._last_capture) >= self._observation_period())
+                    (self.complete is not None and
+                     not (self.decision or {}).get('precise_deferred')) or
+                    age_ms(started, self._last_capture) >= self._observation_period())
         image = frame = None
         if observed:
             # These two handoffs retain a current chassis sample as well as a
@@ -407,12 +457,21 @@ class TrackingTask:
                     precise=eligible, target_version=self.memory.version,
                     fine_pending=self.job is not None, target_event=event,
                     arm_active=self.arm is not None or self.planning is not None)
+                drive_event = (self.decision.get('phase'), self.decision.get('status'),
+                    (self.decision.get('command') or '').split(',')[0])
+                if drive_event != self._last_drive_event:
+                    self._last_drive_event = drive_event
+                    self._record('tracking_drive', dict(phase=drive_event[0],
+                        status=drive_event[1], command=self.decision.get('command'),
+                        target_version=self.memory.version,
+                        encoder_a=self.state.get('encoder_a'), encoder_b=self.state.get('encoder_b')))
                 if self.complete is not None and self.decision.get('precise_consumed'):
                     done = self.complete
                     self.memory.bind_precise(done['observation'], done['paired_coarse'],
                         done['target_version'], self.drive.odometry.since(
                             done['observation'].get('capture_timestamp_ms', self.clock()), self.clock()))
-                self.complete = None
+                if not self.decision.get('precise_deferred'):
+                    self.complete = None
                 if self.decision.get('command'):
                     try:
                         self._command(self.decision['command'])
@@ -424,6 +483,9 @@ class TrackingTask:
                             observation = handoff_observation(self.decision['parking'])
                             self.last_parking = self.decision['parking']
                             self._parking_version = self.memory.version
+                            self._record('tracking_plan_started', dict(target_version=self.memory.version,
+                                frame_id=observation['frame_id']))
+                            planning_started = self.clock()
                             candidate = self.begin_arm(observation, self.memory.version)
                             self._arm_motor_reference = dict(self.drive._parking_reference)
                             self.metrics['arm_plans'] += 1
@@ -435,7 +497,7 @@ class TrackingTask:
                             else:
                                 self.planning = {'iterator':iter(candidate),
                                     'target_version':self.memory.version,
-                                    'frame_id':observation['frame_id']}
+                                    'frame_id':observation['frame_id'], 'started_at_ms':planning_started}
                         except ReobserveRequired as exc:
                             self.last_parking = None
                             self.emit('tracking_reobserve', {'reason': str(exc), 'stage': 'arm_plan'})
@@ -479,6 +541,7 @@ class TrackingTask:
             'grasp_confirmed': (state or {}).get('grasp_confirmed'),
             'grip_confirmation': (state or {}).get('grip_confirmation'),
             'physical_grasp_confirmed': False, 'fault_wait': self.fault,
+            'timeline': list(self.timeline),
             'motion_wait_reason': (self.decision or {}).get('motion_wait_reason'),
             'corrections': self.drive.corrections, 'metrics': dict(self.metrics)}
 

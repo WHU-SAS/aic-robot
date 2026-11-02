@@ -268,13 +268,123 @@ class TrackingDriveTests(unittest.TestCase):
         self.assertIsNone(result['request_fine'])
         self.assertFalse(result['allow_arm'])
 
-    def test_static_occlusion_demands_a_new_frame_not_old_grasp_authority(self):
+    def test_brief_static_occlusion_does_not_discard_a_recovered_same_target(self):
         self.request_static()
         self.update(1100,self.target,coarse=self.missing(1100),fine_pending=True)
         result = self.update(1150,self.target,precise=self.precise(1050,self.target))
+        self.assertTrue(result['allow_arm'])
+        self.assertTrue(result['precise_consumed'])
+        self.assertIsNone(result['request_fine'])
+
+    def test_unknown_when_static_finishes_defers_without_restarting_or_grasping(self):
+        self.request_static()
+        complete=self.precise(1050,self.target)
+        result=self.update(1150,self.target,coarse=self.missing(1150),precise=complete)
+        self.assertTrue(result['precise_deferred'])
+        self.assertFalse(result['precise_consumed'])
+        self.assertFalse(result['allow_arm'])
+        self.assertIsNone(result['request_fine'])
+        self.assertIsNone(result['command'])
+        result=self.update(1250,self.target,precise=complete)
+        self.assertTrue(result['precise_consumed'])
+        self.assertTrue(result['allow_arm'])
+
+    def test_deferred_static_still_latches_real_chassis_motion(self):
+        self.request_static()
+        complete=self.precise(1050,self.target)
+        self.update(1150,self.target,coarse=self.missing(1150),precise=complete)
+        self.update(1200,self.target,travel=.2,coarse=self.missing(1200),fine_pending=True)
+        result=self.update(1250,self.target,precise=complete)
         self.assertFalse(result['allow_arm'])
         self.assertIsNone(self.drive.parking)
-        self.assertEqual(result['request_fine'],'static')
+
+    def test_deferred_static_does_not_survive_version_change_or_existing_freshness_limit(self):
+        for changed in (False,True):
+            with self.subTest(changed=changed):
+                self.setUp();self.request_static()
+                complete=self.precise(1050,self.target)
+                self.update(1150,self.target,coarse=self.missing(1150),precise=complete)
+                result=self.update(1701 if not changed else 1250,self.target,
+                    target_version=2 if changed else 1,precise=complete)
+                self.assertFalse(result['allow_arm'])
+                self.assertFalse(result['precise_consumed'])
+                self.assertFalse(result['precise_deferred'])
+                self.assertIsNone(self.drive.parking)
+
+    def test_unknown_coarse_before_fine_keeps_its_encoder_propagated_course(self):
+        self.update(1000)
+        result=self.update(1100,run=True,travel=7,coarse=self.missing(1100))
+        self.assertEqual(result['command'],'SPEED,70,70')
+        self.assertEqual(result['plan']['mode'],'coarse_prediction')
+        self.assertLess(result['plan']['coarse_Base_X_mm'],650)
+        self.assertFalse(result['allow_arm'])
+        result=self.update(1200,636,run=True,travel=14)
+        self.assertEqual(result['command'],'SPEED,70,70')
+        self.assertEqual(result['plan']['mode'],'coarse')
+
+    def test_visible_invalid_geometry_keeps_current_pixel_steering_and_prior_range(self):
+        self.update(1000)
+        cue=self.coarse(1100,643,offset=35)
+        cue['visual_evidence'].update(distance_valid=False,
+            reason='inconsistent_with_20mm_height',center_pixel=cue['center_pixel'])
+        cue.pop('ground_contact_proxy_Base_mm')
+        cue['status']='no_target'
+        result=self.update(1100,run=True,travel=7,coarse=cue)
+        self.assertTrue(result['command'].startswith('SPEED,'),result)
+        self.assertEqual(result['plan']['heading_source'],'current_coarse_pixel')
+        left,right=map(int,result['command'].split(',')[1:])
+        self.assertNotEqual(left,right)
+        self.assertAlmostEqual((left+right)/2,70,delta=4)
+        self.assertFalse(result['allow_arm'])
+
+    def test_coarse_only_occlusion_finishes_known_travel_then_waits_without_grasp(self):
+        self.update(1000)
+        result=self.update(1100,run=True,travel=650-self.target+5,coarse=self.missing(1100))
+        self.assertEqual(result['command'],'STOP')
+        for now in (1200,1250,1300):
+            result=self.update(now,travel=650-self.target+5,coarse=self.missing(now))
+            self.assertIsNone(result['command'])
+            self.assertIsNone(result['request_fine'])
+            self.assertFalse(result['allow_arm'])
+
+    def test_confirmed_target_change_discards_the_old_coarse_course(self):
+        self.update(1000)
+        result=self.update(1100,run=True,travel=7,coarse=self.missing(1100),
+                           target_version=2,target_event={'target_valid':False})
+        self.assertEqual(result['command'],'STOP')
+        self.assertIsNone(self.drive._coarse_reference)
+        self.assertFalse(result['allow_arm'])
+
+    def test_invalid_geometry_can_steer_a_fine_anchor_from_current_pixels(self):
+        self.update(1000)
+        self.update(1100,450,run=True)
+        self.update(1200,443,run=True,travel=7,precise=self.precise(1100,400,'moving'))
+        cue=self.coarse(1300,436,offset=25)
+        cue['visual_evidence'].update(distance_valid=False,
+            reason='inconsistent_with_20mm_height',center_pixel=cue['center_pixel'])
+        cue.pop('ground_contact_proxy_Base_mm');cue['status']='no_target'
+        result=self.update(1300,run=True,travel=14,coarse=cue)
+        self.assertTrue(result['command'].startswith('SPEED,'))
+        self.assertGreater(abs(result['plan']['steering_bearing_deg']),1)
+        self.assertAlmostEqual(result['plan']['predicted_center_Base_mm'][0],386,delta=.1)
+        self.assertFalse(result['allow_arm'])
+
+    def test_failed_moving_fine_keeps_cruise_and_retries_on_a_later_live_frame(self):
+        self.update(1000)
+        self.update(1100,450,run=True)
+        failed=self.precise(1100,400,'moving',status='no_complete_face')
+        result=self.update(1200,443,run=True,travel=7,precise=failed)
+        self.assertTrue(result['precise_consumed'])
+        self.assertEqual(result['command'],'SPEED,70,70')
+        self.assertIsNone(result['request_fine'])
+        result=self.update(1300,436,run=True,travel=14)
+        self.assertEqual(result['command'],'SPEED,70,70')
+        self.assertEqual(result['request_fine'],'moving')
+        request=self.drive._fine_request['request_id']
+        result=self.update(1400,run=True,travel=21,coarse=self.missing(1400),fine_pending=True)
+        self.assertEqual(result['command'],'SPEED,70,70')
+        self.assertIsNone(result['request_fine'])
+        self.assertEqual(self.drive._fine_request['request_id'],request)
 
     def test_static_chassis_drift_does_not_accept_precise_inside_window(self):
         self.request_static()
