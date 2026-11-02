@@ -38,6 +38,17 @@ class CameraLink:
                 raise TimeoutError('Incomplete K230 response')
             data.extend(chunk)
         return bytes(data)
+    def capabilities(self):
+        # Official USBDBG v2: the field is payload length, not response length.
+        # NUL also lets old experimental LIST_DIR implementations reject safely.
+        self.command(0xA2, 1)
+        self.port.write(b'\x00')
+        self.port.flush()
+        return struct.unpack('<II', self.read(8))
+    def terminal_input(self, payload):
+        self.command(0x11, len(payload))
+        self.port.write(payload)
+        self.port.flush()
     def output(self):
         self.command(0x8E, 4)
         size = struct.unpack('<I', self.read(4))[0]

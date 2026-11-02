@@ -307,7 +307,7 @@ class TargetMemoryTests(unittest.TestCase):
     def test_confirmed_close_pending_lift_is_already_holding_without_fresh_fk(self):
         self.seed()
         arm={'phase':'close','pending_stage':'lift','grasp_confirmed':True}
-        for point in ((500,100,0),(500,150,0)):
+        for point in ((500,60,0),(500,70,0)):
             state=self.memory.update(self.visual(point),arm_state=arm)
             self.assertEqual(state['event'],'holding')
             self.assertFalse(state['table_distance_valid'])
@@ -315,12 +315,57 @@ class TargetMemoryTests(unittest.TestCase):
         state=self.memory.update(self.absent(),arm_state=arm)
         self.assertEqual(state['version'],0)
 
-    def test_unconfirmed_close_does_not_claim_a_held_object(self):
+    def test_unconfirmed_close_can_detect_target_outside_contact_region(self):
         self.seed()
         arm={'phase':'close','pending_stage':None,'grasp_confirmed':None}
         for unused in range(2):state=self.memory.update(self.visual((500,150,0)),arm_state=arm)
         self.assertEqual(state['event'],'moved')
         self.assertEqual(state['version'],1)
+        self.assertIsNone(arm['grasp_confirmed'])
+
+    def test_real_close_frame_sequence_is_contact_not_tabletop_target_motion(self):
+        # 7466: fixed target, close at182023, these two frames at182791/182895
+        # used to invalidate version34 before the five grip samples completed.
+        def observation(box,center):
+            value=self.visual(distance_valid=False,bbox_px=box,center_pixel=center)
+            value.update(bbox_px=box,center_pixel=center)
+            return value
+        initial=observation([523,546,177,274],[607,682])
+        self.memory.update(initial)
+        self.memory.bind_precise(self.precise(initial),initial,0)
+        arm={'phase':'close','pending_stage':None,'grasp_confirmed':None}
+        for box,center in (([568,552,179,261],[657,682]),
+                           ([583,551,178,262],[672,682])):
+            state=self.memory.update(observation(box,center),arm_state=arm)
+            self.assertEqual(state['event'],'holding')
+            self.assertEqual(state['version'],0)
+            self.assertTrue(state['anchor_valid'])
+        self.assertIsNone(arm['grasp_confirmed'])
+        state=self.memory.update(self.absent(),arm_state=arm)
+        self.assertEqual(state['version'],0)
+
+    def test_close_unknown_and_ambiguous_frames_break_external_confirmation(self):
+        self.seed();arm={'phase':'close','grasp_confirmed':None}
+        first=self.memory.update(self.visual((500,150,0)),arm_state=arm)
+        self.assertEqual(first['event'],'suspected')
+        self.memory.update(self.absent(),arm_state=arm)
+        self.memory.update(self.visual((500,150,0)),arm_state=arm)
+        state=self.memory.update(self.visual((500,150,0),associated=False,
+            ambiguous=True,candidate_count=2),arm_state=arm)
+        self.assertEqual(state['version'],0)
+        state=self.memory.update(self.visual((500,150,0)),arm_state=arm)
+        self.assertEqual(state['event'],'suspected')
+        state=self.memory.update(self.visual((500,150,0)),arm_state=arm)
+        self.assertEqual(state['version'],1)
+
+    def test_close_can_use_explicit_contact_reference_without_claiming_grip(self):
+        self.seed()
+        arm={'phase':'close','grasp_confirmed':None,'contact_center_pixel':[770,520]}
+        for unused in range(3):
+            state=self.memory.update(self.visual((500,130,0)),arm_state=arm)
+        self.assertEqual(state['version'],0)
+        self.assertEqual(state['event'],'holding')
+        self.assertIsNone(arm['grasp_confirmed'])
 
     def test_fresh_held_region_follows_normal_lift_and_short_occlusion(self):
         self.seed()
@@ -395,11 +440,59 @@ class TargetMemoryTests(unittest.TestCase):
         self.assertEqual(state['version'],0)
 
     def test_held_region_tolerance_scales_with_large_near_blob(self):
-        self.seed();arm={'phase':'lift','grasp_confirmed':True,'held_center_pixel':[670,520]}
+        initial=self.visual(bbox_px=[620,470,100,100])
+        self.memory.update(initial)
+        self.memory.bind_precise(self.precise(initial),initial,0)
+        arm={'phase':'lift','grasp_confirmed':True,'held_center_pixel':[670,520]}
         for unused in range(3):
             state=self.memory.update(self.visual((500,130,0),distance_valid=False,
                 bbox_px=[650,400,100,100]),arm_state=arm)
         self.assertEqual(state['version'],0)
+
+    def test_partial_visible_corner_does_not_shrink_original_contact_region(self):
+        initial=self.visual(bbox_px=[551,401,238,238])
+        self.memory.update(initial)
+        self.memory.bind_precise(self.precise(initial),initial,0)
+        # A20px patch100px from the FK centre still lies within the original
+        # complete cube. Its own width cannot replace the238px reference.
+        for phase in ('close','lift'):
+            arm={'phase':phase,'grasp_confirmed':phase=='lift',
+                 'held_center_pixel':[670,520]}
+            for unused in range(3):
+                state=self.memory.update(self.visual((500,130,0),distance_valid=False,
+                    center_pixel=[770,520],bbox_px=[760,510,20,20]),arm_state=arm)
+                self.assertEqual(state['version'],0)
+                self.assertEqual(state['event'],'holding')
+        # Taking the cube beyond that frozen region is still observable.
+        for unused in range(2):
+            state=self.memory.update(self.visual(distance_valid=False,
+                associated=False,reason='unassociated_blue',center_pixel=[1170,520],
+                bbox_px=[1160,510,20,20]),arm_state=arm)
+        self.assertEqual(state['version'],1)
+        self.assertEqual(state['reason'],'held_target_moved')
+        for unused in range(5):
+            state=self.memory.update(self.absent(),arm_state=arm)
+        self.assertEqual(state['version'],1)
+
+    def test_external_candidate_cannot_expand_the_frozen_contact_region(self):
+        self.seed();arm={'phase':'close','grasp_confirmed':None}
+        for unused in range(2):
+            state=self.memory.update(self.visual((500,180,0),bbox_px=[700,450,100,100]),
+                                     arm_state=arm)
+        self.assertEqual(state['version'],1)
+
+    def test_contact_region_is_rebuilt_for_the_next_attempt(self):
+        initial=self.visual(bbox_px=[551,401,238,238])
+        self.memory.update(initial)
+        self.memory.bind_precise(self.precise(initial),initial,0)
+        arm={'phase':'close','grasp_confirmed':None}
+        self.memory.update(self.visual(),arm_state=arm)
+        self.memory.update(self.visual(),arm_state={'phase':'recovery'})
+        next_target=self.visual()
+        self.memory.update(next_target)
+        self.memory.bind_precise(self.precise(next_target),next_target,0)
+        for unused in range(2):state=self.memory.update(self.visual((500,150,0)),arm_state=arm)
+        self.assertEqual(state['version'],1)
 
     def test_visible_but_unusable_range_does_not_become_absent(self):
         state=self.memory.update(self.visual(distance_valid=False,

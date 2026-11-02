@@ -60,7 +60,8 @@ class TrackingTask:
         self.metrics = dict(observations=0, max_observation_gap_ms=0, max_step_ms=0,
             fine_started=0, fine_cancelled=0, arm_plans=0, arm_attempts=0, recoveries=0,
             planning_steps=0, plans_cancelled=0, max_planning_step_ms=0,
-            target_changes=0, obsolete_frames_released=0, status_queries=0)
+            target_changes=0, obsolete_frames_released=0, status_queries=0,
+            first_motion_request=None)
 
     def _record(self, event, details):
         # Keep transitions in RAM during motion. They join the existing final
@@ -72,6 +73,11 @@ class TrackingTask:
     def _command(self, command):
         sent = self.clock()
         state = self.link.expect(command)
+        if (self.metrics['first_motion_request'] is None and
+                command.split(',')[0] in ('FOLLOW', 'SPEED', 'ARC') and
+                any(value != '0' for value in command.split(',')[1:])):
+            self.metrics['first_motion_request'] = dict(command=command, sent_at_ms=sent,
+                reply_at_ms=self.clock())
         state['_k230_sent_ms'], state['_k230_received_ms'] = sent, self.clock()
         self.state = state
         self._last_motor_reply = state['_k230_received_ms']

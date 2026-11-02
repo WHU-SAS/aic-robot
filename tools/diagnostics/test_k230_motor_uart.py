@@ -19,18 +19,32 @@ from tools.diagnostics.replay_k230_car_tracker import restore_listener
 
 
 def stop_previous_script(link):
+    try:
+        version, flags = link.capabilities()
+    except TimeoutError:
+        # Legacy firmware may ignore the capability opcode entirely.
+        link.port.reset_input_buffer()
+        version, flags = 0, 0
+    status_command = 0xA4 if version == 2 else 0x87
     link.command(0x06)
     deadline = time.monotonic() + 12
     idle_since = None
+    interrupted = False
     while True:
         time.sleep(.1)
         link.output()
-        link.command(0x87, 4)
-        if struct.unpack('<I', link.read(4))[0] == 0:
+        link.command(status_command, 4)
+        running = struct.unpack('<I', link.read(4))[0] != 0
+        if not running:
             if idle_since is None: idle_since = time.monotonic()
             if time.monotonic() - idle_since >= .6: return
         else:
             idle_since = None
+            # New firmware can report legacy SCRIPT_RUNNING=0 while a REPL
+            # listener is active; use its real status and interrupt that script.
+            if version == 2 and flags & (1 << 9) and not interrupted:
+                link.terminal_input(b'\x03')
+                interrupted = True
         if time.monotonic() > deadline:
             raise TimeoutError('Previous K230 script did not stop')
 

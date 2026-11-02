@@ -36,6 +36,7 @@ class TargetMemory:
         self._acquire_count = 0
         self._held_suspect_count = 0
         self._held_candidate = None
+        self._held_region = None
         self._invalidated = False
         self._last_frame = self._last_stamp = None
         self._last_center = None
@@ -153,10 +154,13 @@ class TargetMemory:
     def update(self, observation, wheel_deltas=(), arm_state=None):
         """Use ordered wheel increments SINCE THE PREVIOUS update call.
 
-        arm_state is an arm-engine snapshot. Lift/complete use holding mode.
+        arm_state is an arm-engine snapshot. Close uses contact interpretation
+        from its first frame; this does not claim a confirmed physical grasp.
+        Lift/complete use holding mode.
         held_center_pixel, when supplied by the owner from fresh arm feedback,
         permits conservative external-motion association; without it ordinary
-        lift/self-occlusion cannot invalidate the tabletop target.
+        lift/self-occlusion cannot invalidate the tabletop target. Close can
+        use contact_center_pixel, otherwise the original coarse region centre.
         """
         deltas = tuple(wheel_deltas)
         if self._expected is not None and deltas:
@@ -179,19 +183,34 @@ class TargetMemory:
         unique = (self._visible and not ambiguous and
                   (self._associated or evidence.get('candidate_count') == 1))
         arm = arm_state or {}
-        holding = (arm.get('phase') in ('lift', 'complete') or
+        holding = (arm.get('phase') in ('close', 'lift', 'complete') or
             (arm.get('grasp_confirmed') is True and
-             (arm.get('phase') == 'close' or arm.get('pending_stage') == 'lift')))
+             arm.get('pending_stage') == 'lift'))
         if holding:
             self._visibility, self._movement_state = 'holding', 'holding'
             self._distance_valid = False
             self._event = 'holding'
+            if self._held_region is None:
+                source = (self.paired_coarse if self._anchor_version == self.version
+                          else None) or self.last_seen or {}
+                reference = self._evidence(source)
+                box, pixel = reference.get('bbox_px'), reference.get('center_pixel')
+                if _point(box, 4) and min(box[2:]) > 0 and _point(pixel, 2):
+                    # Freeze the whole object before contact. A self-occluded
+                    # corner must not shrink the external-motion region, and
+                    # an unrelated large candidate must not expand it.
+                    self._held_region = {'bbox_px':list(box), 'center_pixel':list(pixel)}
             if unique:
                 self.last_seen = dict(observation)
-            expected = (arm_state or {}).get('held_center_pixel')
+            expected = arm.get('held_center_pixel')
+            if not _point(expected, 2) and arm.get('phase') == 'close':
+                expected = arm.get('contact_center_pixel')
+                if not _point(expected, 2) and self._held_region is not None:
+                    expected = self._held_region['center_pixel']
             center = evidence.get('center_pixel')
             bbox = evidence.get('bbox_px', [])
-            limit = max(48., 2*max(bbox[2:])) if len(bbox) == 4 else 48.
+            reference_box = (self._held_region or {}).get('bbox_px', bbox)
+            limit = max(48., 2*max(reference_box[2:])) if len(reference_box) == 4 else 48.
             shape_ok = (len(bbox) == 4 and min(bbox[2:]) >= 3 and
                 max(bbox[2]/bbox[3], bbox[3]/bbox[2]) <=
                 self.config.get('tracking', {}).get('max_aspect_ratio', 4) and
@@ -218,6 +237,7 @@ class TargetMemory:
             return self.snapshot()
         self._held_suspect_count = 0
         self._held_candidate = None
+        self._held_region = None
         self._visibility = 'ambiguous' if ambiguous else ('visible' if unique else 'unknown')
         center = evidence.get('center_pixel')
         if unique and _point(center, 2):

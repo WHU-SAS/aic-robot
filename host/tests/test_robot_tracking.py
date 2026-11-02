@@ -334,6 +334,50 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertFalse(any(e[0]=='ready2' for e in self.arms[0].io.events))
         self.assertEqual(self.task.metrics['target_changes'],0)
 
+    def test_closing_contact_moves_blue_region_before_five_stable_samples_without_reopening(self):
+        original=self.task.track
+        contact_frames=[]
+        def track(point,frame):
+            result=original(point,frame)
+            if self.task.arm is not None and self.task.arm.phase=='close':
+                contact_frames.append(frame['frame_id'])
+                shift=min(60,15*len(contact_frames))
+                result['center_pixel'][0]+=shift
+                result['bbox_px'][0]+=shift
+            return result
+        self.task.track=track
+        result=self.finish()
+        self.assertGreaterEqual(len(contact_frames),2)
+        self.assertEqual(result['metrics']['target_changes'],0)
+        self.assertEqual(result['metrics']['arm_attempts'],1)
+        self.assertTrue(result['grasp_confirmed'])
+        self.assertFalse(any(e[0]=='ready2' for e in self.arms[0].io.events))
+
+    def test_empty_grip_still_recovers_with_contact_visual_motion(self):
+        self.empty_first=True
+        original=self.task.track
+        def track(point,frame):
+            result=original(point,frame)
+            if self.task.arm is not None and self.task.arm.phase=='close':
+                result['center_pixel'][0]+=40
+                result['bbox_px'][0]+=40
+            return result
+        self.task.track=track
+        result=self.finish()
+        self.assertEqual(len([e for e in self.arms[0].io.events if e[0]=='ready2']),1)
+        self.assertEqual(result['metrics']['recoveries'],1)
+        self.assertGreaterEqual(result['metrics']['arm_attempts'],2)
+
+    def test_successful_task_cleanup_preserves_grip_without_ready_or_open_goal(self):
+        self.finish()
+        arm=self.arms[0]
+        before=list(arm.io.positions)
+        goals=[e for e in arm.io.events if e[0]=='goals']
+        self.task.close()
+        self.assertEqual(arm.io.positions,before)
+        self.assertEqual([e for e in arm.io.events if e[0]=='goals'],goals)
+        self.assertFalse(any(e[0]=='ready2' for e in arm.io.events))
+
     def test_failed_static_measurement_changes_view_before_trying_again(self):
         self.fail_first_fine = True
         self.finish()

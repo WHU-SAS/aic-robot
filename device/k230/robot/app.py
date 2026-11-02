@@ -74,6 +74,7 @@ def archive(config, frames, status, error=None):
 
 def tracking_task(config, ready_dispatched=False):
     """Candidate continuous task; keep one camera through parking and grasp."""
+    entered_at = time.ticks_ms()
     import app as arm
     from ground_projection import GroundProjection
     from motor_link import MotorLink
@@ -120,7 +121,9 @@ def tracking_task(config, ready_dispatched=False):
         return dict(state, held_center_pixel=projection.base_to_pixel([p*1000 for p in midpoint]))
     try:
         link = MotorLink()
+        camera_started_at = time.ticks_ms()
         camera.open()
+        camera_ready_at = time.ticks_ms()
         task = TrackingTask(capture,
             lambda image, frame:track_coarse(image, frame, tracker.detect_frame),
             link, projection, car, time.ticks_ms,
@@ -128,6 +131,10 @@ def tracking_task(config, ready_dispatched=False):
             lambda c, clock:FineSession(c, clock, purpose='car_moving_range'),
             CooperativeStaticPickSession, frames, emit=emit,
             reset_tracker=tracker.reset)
+        task.metrics.update(task_entered_at_ms=entered_at,
+            camera_started_at_ms=camera_started_at, camera_ready_at_ms=camera_ready_at,
+            camera_open_ms=age_ms(camera_ready_at, camera_started_at),
+            task_setup_ms=age_ms(time.ticks_ms(), entered_at))
         task.arm_context = held_context
         while task.status != 'succeeded':
             task.step()
