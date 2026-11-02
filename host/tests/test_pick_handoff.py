@@ -64,6 +64,7 @@ class PickHandoffTests(unittest.TestCase):
         self.app = load_app()
         self.observation = observation()
         self.start = [2043, 2100, 2250, 1950, 2048, 2389]
+        self.ready = list(self.config['drive_ready_control']['goals'])
         self.plan = {name: [2100+10*i+j for j in range(6)]
                      for i, name in enumerate(STAGES)}
         self.events = []
@@ -100,7 +101,8 @@ class PickHandoffTests(unittest.TestCase):
                 self.app, 'Geometry', real_geometry or Mock(side_effect=construct)))
             run_stage = stack.enter_context(patch.object(self.app, 'run_pick_stage_direct', side_effect=stage))
             log = stack.enter_context(patch.object(self.app, 'log'))
-            for name in ('CameraSession', 'localize', 'localize_precise', 'perceive'):
+            for name in ('CameraSession', 'localize', 'localize_precise', 'perceive',
+                         'run_ready', 'run_ready_direct'):
                 stack.enter_context(patch.object(self.app, name,
                     side_effect=AssertionError('Handoff must not recapture or relocalize')))
             yield SimpleNamespace(read=read, constructor=constructor,
@@ -110,13 +112,18 @@ class PickHandoffTests(unittest.TestCase):
         return self.app.run_from_observation(self.config, self.observation,
                                              source_config=self.source, **kwargs)
 
-    def test_live_handoff_reads_current_pose_then_dispatches_exact_four_stages(self):
+    def test_live_handoff_uses_ready_pose2_seed_without_read_or_extra_ready(self):
         before = copy.deepcopy(self.observation)
+        config_before = copy.deepcopy(self.config)
+        self.assertNotEqual(self.start, self.ready)
         with self.harness() as h:
             result = self.call(execute=True)
-        self.assertEqual(self.events, ['arm_snapshot', 'Geometry', 'plan']+list(STAGES))
-        h.read.assert_called_once_with(self.config['control'])
-        h.geometry.plan.assert_called_once_with([.245, -.028], self.start)
+        self.assertEqual(self.events, ['Geometry', 'plan']+list(STAGES))
+        h.read.assert_not_called()
+        h.geometry.plan.assert_called_once_with([.245, -.028], self.ready)
+        self.assertEqual(result['planning_reference'], {
+            'source':'ready_pose2_command','counts':self.ready,'measured':False})
+        self.assertEqual(self.config, config_before)
         plane = self.config['vision']['localization']['table_plane_Base_mm']
         n = plane['normal']
         expected_z = (plane['offset_mm']-n[0]*245-n[1]*-28)/n[2]
@@ -144,7 +151,8 @@ class PickHandoffTests(unittest.TestCase):
                 self.events=[]
                 with self.harness(grip_delta=delta) as h:
                     result=self.call(execute=True)
-                self.assertEqual(self.events,['arm_snapshot','Geometry','plan']+list(STAGES))
+                self.assertEqual(self.events,['Geometry','plan']+list(STAGES))
+                h.read.assert_not_called()
                 self.assertEqual(h.stage.call_count,4)
                 self.assertEqual([call.args[1]['name'] for call in h.stage.call_args_list],list(STAGES))
                 self.assertIs(result['grasp_confirmed'],confirmed)
@@ -177,7 +185,7 @@ class PickHandoffTests(unittest.TestCase):
 
     def test_live_execution_rejects_offline_start_counts_before_arm_read(self):
         with self.harness() as h:
-            with self.assertRaisesRegex(ValueError, 'current arm feedback'):
+            with self.assertRaisesRegex(ValueError, 'Live pick'):
                 self.call(execute=True, start_counts=self.start)
             h.read.assert_not_called()
             h.constructor.assert_not_called()
@@ -261,7 +269,7 @@ class PickHandoffTests(unittest.TestCase):
         with self.harness() as h, patch.object(self.app.time, 'ticks_ms',
                                               return_value=100000, create=True):
             self.call(execute=True)
-        h.read.assert_called_once()
+        h.read.assert_not_called()
         self.assertEqual(h.stage.call_count, 4)
         self.assertEqual(self.observation['capture_timestamp_ms'], 5)
         self.assertEqual(self.observation['timestamp_ms'], 5)

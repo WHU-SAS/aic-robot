@@ -28,13 +28,17 @@ def _decode(jpeg):
     return image
 
 
-def localize_steps(image, K, D, T, table_plane=None):
+def localize_steps(image, K, D, T, table_plane=None, allow_legacy=True):
     """Resolve the existing raw detector lazily; no detector runs on import."""
+    if type(allow_legacy) is not bool:
+        raise ValueError('allow_legacy must be a boolean')
     try:
         from ..pick.vision import localize_steps as solve
     except ImportError:
         from vision import localize_steps as solve
-    return solve(image, K, D, T, table_plane)
+    if allow_legacy:
+        return solve(image, K, D, T, table_plane)
+    return solve(image, K, D, T, table_plane, allow_legacy=False)
 
 
 class CooperativeStaticPickSession:
@@ -51,6 +55,10 @@ class CooperativeStaticPickSession:
             config.get('near_parking', {}).get('fine_budget_ms', 20))
         if type(budget) not in (int, float) or not budget > 0:
             raise ValueError('A positive fine soft budget is required')
+        policy = config.get('tracking_task', {}).get('static_localization_policy', 'full_recovery')
+        if policy not in ('full_recovery', 'shared_side_only'):
+            raise ValueError('Unknown static localization policy: '+str(policy))
+        self.localization_policy = policy
         self.config, self.clock, self.soft_budget_ms = config, clock_ms, budget
         self.phase = self.latest = self.latest_ready_ms = None
         self.jpeg = self.bgr = self.steps = None
@@ -117,6 +125,12 @@ class CooperativeStaticPickSession:
 
     def _publish(self, started, raw=None, rejection=None):
         result = self._wrap(raw, rejection)
+        if raw is not None and result['status'] == 'no_complete_face':
+            # Keep measured-edge rejection evidence, not an inner synthetic
+            # frame envelope or any partial/range coordinates.
+            for key in ('search', 'shared_side_processing_ms'):
+                if key in raw:
+                    result[key] = raw[key]
         self._release_large()
         self.latest = result
         self.latest_ready_ms = self.clock()
@@ -144,9 +158,12 @@ class CooperativeStaticPickSession:
                     for j in range(3):
                         K[0][j] *= 1280/intr['image_width']
                         K[1][j] *= 960/intr['image_height']
-                    self.steps = localize_steps(self.bgr, K,
-                        intr['distortion_coefficients'],
-                        c['extrinsics']['T_Base_from_Camera_mm'], c['table_plane'])
+                    args = (self.bgr, K, intr['distortion_coefficients'],
+                            c['extrinsics']['T_Base_from_Camera_mm'], c['table_plane'])
+                    if self.localization_policy == 'shared_side_only':
+                        self.steps = localize_steps(*args, allow_legacy=False)
+                    else:
+                        self.steps = localize_steps(*args)
                 event = next(self.steps)
             except ValueError as exc:
                 self._publish(started, rejection=exc)

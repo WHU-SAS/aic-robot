@@ -406,14 +406,20 @@ def _shared_side_steps(im,K,D,T,table_plane):
     finally:_close_localize_steps(steps)
 
 
-def localize_steps(im,K,D,T,table_plane=None):
+def localize_steps(im,K,D,T,table_plane=None,allow_legacy=True):
     """Yield the existing full localizer, ending with one raw ``result``.
 
-    Same shared-side default search, then the same legacy recovery order and
-    thresholds. No partial step supplies a target. A cv2/pose or legacy candidate
-    primitive is still synchronous: yields are cooperative, not a time limit.
-    Closing the generator cancels remaining work without camera/UART actions.
+    Default keeps the shared-side search then legacy recovery. Tracking may
+    explicitly disable legacy: an unverified shared side then completes with a
+    failed raw result and its search diagnostics, never substitute coordinates.
+    All shared candidate budgets and acceptance thresholds stay unchanged.
+    A primitive remains synchronous; yields do not impose a hard time limit.
+    Closing cancels remaining work without camera/UART actions.
     """
+    if type(allow_legacy) is not bool:
+        raise ValueError('allow_legacy must be a boolean')
+    if not allow_legacy and table_plane is None:
+        raise ValueError('Shared-side-only localization requires the calibrated table plane')
     if table_plane is None:
         steps=_localize_legacy_steps(im,K,D,T,table_plane)
         try:
@@ -437,7 +443,15 @@ def localize_steps(im,K,D,T,table_plane=None):
         if observation['status']!='localized':raise ValueError(observation['reason'])
         result=observation['payload']
     except ValueError as exc:
-        fast_ms=difference(clock(),start);recovery=clock()
+        fast_ms=difference(clock(),start)
+        if not allow_legacy:
+            result={'status':'no_complete_face','reason':str(exc),
+                    'shared_side_processing_ms':fast_ms}
+            if observation is not None and 'search' in observation:
+                result['search']=observation['search']
+            yield {'stage':'complete','result':result}
+            return
+        recovery=clock()
         steps=_localize_legacy_steps(im,K,D,T,table_plane)
         try:
             for event in steps:

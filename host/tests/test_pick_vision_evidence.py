@@ -96,24 +96,29 @@ class PickEvidenceTests(unittest.TestCase):
         log.assert_any_call('vision_archive_error','full')
 
     def test_archive_finalizes_before_any_motion(self):
-        app=load_app();events=[]
+        app=load_app();events=[];seeds=[]
         class Run:
             directory='/evidence';manifest_path='/evidence/manifest.json'
             def finish(self,*a):events.append('archive_finished');return {'status':'localized','archive_complete':True}
         config={'vision':{'localization':{'table_plane_Base_mm':{'normal':[0,0,1],'offset_mm':0}}},
                 'intrinsics':{},'extrinsics':{},'control':{},'model':{},
+                'drive_ready_control':{'goals':[2048,1138,2958,2958,2048,2332]},
                 'pick':{'stage_durations_s':{'close_minimum_stationary_s':.5},
                         'gripper_stationary_tolerance_counts':1,'standalone_stage_policy':{}}}
         class Geometry:
             def __init__(self,*a):pass
-            def plan(self,*a):return {s:[] for s in ('hover','descend','close','lift')}
+            def plan(self,xy,start):
+                seeds.append(list(start))
+                return {s:[] for s in ('hover','descend','close','lift')}
         with patch.dict(sys.modules,{'evidence':SimpleNamespace(EvidenceRun=lambda *a,**k:Run()),'control':SimpleNamespace()}),\
              patch.object(app,'_perceive',return_value={'cube_center_Base_mm':[250,0,-40]}),\
-             patch.object(app,'arm_snapshot',side_effect=lambda c:events.append('read_arm') or [{'position':2048}]*6),\
+             patch.object(app,'arm_snapshot',side_effect=lambda c:events.append('read_arm') or [{'position':2048}]*6) as read,\
              patch.object(app,'Geometry',Geometry),patch.object(app,'run_pick_stage_direct',side_effect=lambda c,s:events.append(s['name'])),\
              patch.object(app,'log'):
             app.run_once(config,execute=True)
-        self.assertEqual(events,['archive_finished','read_arm','hover','descend','close','lift'])
+        read.assert_not_called()
+        self.assertEqual(seeds,[config['drive_ready_control']['goals']])
+        self.assertEqual(events,['archive_finished','hover','descend','close','lift'])
 
 
 class PcVisionContextTests(unittest.TestCase):

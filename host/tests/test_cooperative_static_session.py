@@ -31,6 +31,7 @@ class CooperativeStaticPickSessionTests(unittest.TestCase):
         self.compress_calls = []
         self.trace = []
         self.received = []
+        self.received_kwargs = []
         self.closed_generators = []
         self.progress = [(5, 'segment'), (30, 'side_geometry')]
         self.complete_ms = 7
@@ -43,6 +44,7 @@ class CooperativeStaticPickSessionTests(unittest.TestCase):
                     'vision_path': 'shared_physical_side'}
         self.session = self.make_session()
         self.actual_decode = session_module._decode
+        self.actual_localize_steps = session_module.localize_steps
         self.decode = patch.object(session_module, '_decode', side_effect=self.decode_image).start()
         self.generator = patch.object(session_module, 'localize_steps', side_effect=self.raw_steps).start()
         self.precise = patch.object(session_module, 'localize_precise', wraps=localize_precise).start()
@@ -62,9 +64,10 @@ class CooperativeStaticPickSessionTests(unittest.TestCase):
         self.now += 3
         return self.bgr
 
-    def raw_steps(self, *args):
+    def raw_steps(self, *args, **kwargs):
         token = len(self.received)
         self.received.append(args)
+        self.received_kwargs.append(kwargs)
         try:
             for step in self.progress:
                 if isinstance(step, BaseException):
@@ -216,6 +219,131 @@ class CooperativeStaticPickSessionTests(unittest.TestCase):
         self.assertEqual(self.session.latest_ready_ms, self.now)
         self.assertIsNone(self.session.bgr)
         self.assertIsNone(self.session.steps)
+
+    def test_helper_rejects_nonboolean_legacy_flags_before_importing_any_detector(self):
+        for flag in (1, 'false', None, []):
+            with self.subTest(flag=flag), patch('builtins.__import__',
+                    side_effect=AssertionError('Invalid policy must fail before detector imports')) as imports:
+                with self.assertRaisesRegex(ValueError, 'allow_legacy.*boolean'):
+                    self.actual_localize_steps(self.bgr, [], [], [], None, allow_legacy=flag)
+                imports.assert_not_called()
+
+    def test_default_and_explicit_full_recovery_leave_the_five_argument_call_unchanged(self):
+        for policy in (None, 'full_recovery'):
+            with self.subTest(policy=policy):
+                config = copy.deepcopy(self.config)
+                if policy is not None:
+                    config['tracking_task'] = {'static_localization_policy':policy}
+                self.session = self.make_session(config)
+                self.session.start(self.image, self.frame)
+                self.finish()
+                self.assertEqual(len(self.received[-1]), 5)
+                self.assertEqual(self.received_kwargs[-1], {})
+                self.assertEqual(self.generator.call_args.kwargs, {})
+                self.assertEqual(self.session.latest['status'], 'localized')
+                self.session.take_evidence('full_recovery')
+
+    def test_shared_side_only_disables_legacy_without_changing_inputs_or_search_bbox(self):
+        config = dict(self.config, tracking_task={'static_localization_policy':'shared_side_only'})
+        self.session = self.make_session(config)
+        self.session.start(self.image, self.frame, [1, 2, 3, 4])
+        self.finish()
+        self.assertEqual(len(self.received[0]), 5)
+        self.assertIs(self.received[0][0], self.bgr)
+        self.assertEqual(self.received[0][1], self.config['intrinsics']['camera_matrix'])
+        self.assertIs(self.received[0][4], self.config['table_plane'])
+        self.assertEqual(self.received_kwargs, [{'allow_legacy':False}])
+        self.assertEqual(self.generator.call_args.kwargs, {'allow_legacy':False})
+        self.assertEqual(self.compress_calls, [95])
+        self.assertEqual(self.session.latest['status'], 'localized')
+
+    def test_unknown_static_localization_policy_is_rejected_before_start(self):
+        for policy in ('', 'legacy_only', 'FULL_RECOVERY', None, False, 0, [], {}):
+            with self.subTest(policy=policy):
+                config = dict(self.config, tracking_task={'static_localization_policy':policy})
+                with self.assertRaises(ValueError):self.make_session(config)
+        self.assertEqual(self.compress_calls, [])
+        self.generator.assert_not_called()
+        self.decode.assert_not_called()
+
+    def test_shared_side_failure_preserves_diagnostics_evidence_and_original_frame_without_target(self):
+        config = dict(self.config, tracking_task={'static_localization_policy':'shared_side_only'})
+        self.session = self.make_session(config)
+        search = {'attempts':[{'reason':'physical edge support insufficient'}],
+                  'candidate_count':2}
+        self.raw = {'status':'no_complete_face', 'reason':'No reliable shared physical side',
+                    'search':search, 'shared_side_processing_ms':17.25,
+                    # Failed lower-layer data must never promote stale authority.
+                    'cube_center_Base_mm':[999., 999., 999.],
+                    'cube_center_Camera_mm':[999., 999., 999.],
+                    'range_candidate':{'distance_mm':999}, 'payload':{'old':'target'},
+                    'coordinate_frame':'Base', 'frame_id':999, 'capture_timestamp_ms':9999}
+        self.session.start(self.image, self.frame)
+        self.finish()
+        result = self.session.latest
+        self.assertEqual(result['status'], 'no_complete_face')
+        self.assertEqual(result['reason'], self.raw['reason'])
+        self.assertEqual(result['search'], search)
+        self.assertEqual(result['shared_side_processing_ms'], 17.25)
+        self.assertEqual(result['frame_id'], 7)
+        self.assertEqual(result['capture_timestamp_ms'], 80)
+        self.assertEqual(result['timestamp_ms'], 80)
+        self.assertEqual(result['clock_domain'], 'k230_ticks_ms')
+        self.assertEqual(result['image_size_px'], [1280, 960])
+        self.assertEqual(self.session.latest_ready_ms, self.now)
+        for key in ('cube_center_Base_mm', 'cube_center_Camera_mm', 'range_candidate',
+                    'payload', 'coordinate_frame', 'reference_point'):
+            self.assertNotIn(key, result)
+        self.assertIsNone(self.session.bgr)
+        self.assertIsNone(self.session.steps)
+        trace, events = list(self.trace), list(self.session.events)
+        for _ in range(3):self.session.advance()
+        self.assertEqual(self.trace, trace)
+        self.assertEqual(self.session.events, events)
+        self.generator.assert_called_once()
+        original = bytes(self.data)
+        item = self.session.take_evidence('shared_side_rejected')
+        self.data[:] = b'media released'
+        self.assertEqual(item['jpeg'], original)
+        self.assertEqual(item['frame']['frame_id'], 7)
+        self.assertEqual(item['observation']['search'], search)
+        self.assertEqual(item['observation']['shared_side_processing_ms'], 17.25)
+        self.assertIs(item['observation'], result)
+
+    def test_shared_side_math_rejection_remains_failed_precise_observation(self):
+        config = dict(self.config, tracking_task={'static_localization_policy':'shared_side_only'})
+        self.session = self.make_session(config)
+        self.progress = [ValueError('No table-consistent physical side')]
+        self.session.start(self.image, self.frame)
+        self.finish()
+        self.assertEqual(self.session.latest['status'], 'no_complete_face')
+        self.assertIn('table-consistent', self.session.latest['reason'])
+        self.assertEqual(self.received_kwargs, [{'allow_legacy':False}])
+        self.assertNotIn('cube_center_Base_mm', self.session.latest)
+        self.assertNotIn('payload', self.session.latest)
+        item = self.session.take_evidence('math_rejected')
+        self.assertEqual(item['jpeg'], bytes(self.data))
+        self.assertEqual(item['frame']['capture_timestamp_ms'], 80)
+
+    def test_shared_side_memory_and_runtime_faults_are_not_detection_failures(self):
+        for error in (MemoryError('BGR allocation lost'), RuntimeError('Solver state invalid')):
+            with self.subTest(error=type(error).__name__):
+                config = dict(self.config, tracking_task={'static_localization_policy':'shared_side_only'})
+                self.session = self.make_session(config)
+                self.progress = [(5, 'segment'), error]
+                self.session.start(self.image, self.frame)
+                self.session.advance()
+                self.session.advance()
+                with self.assertRaises(type(error)):self.session.advance()
+                self.assertIsNone(self.session.latest)
+                self.assertIsNone(self.session.latest_ready_ms)
+                self.assertIsNone(self.session.bgr)
+                self.assertIsNone(self.session.steps)
+                item = self.session.take_evidence('solver_fault')
+                self.assertEqual(item['jpeg'], bytes(self.data))
+                self.assertEqual(item['frame']['frame_id'], 7)
+                self.assertEqual(item['observation']['status'], 'processing_interrupted')
+                self.assertIn(str(error), item['observation']['error'])
 
     def test_cancel_before_decode_is_idempotent_and_keeps_original_evidence(self):
         self.session.start(self.image, self.frame)

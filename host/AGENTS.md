@@ -15,6 +15,7 @@
 
 ## 当前运行规则
 
+- 用户2026-11-02明确：所有K230在线规划（新追踪及旧单次/独立入口）默认以准备位2命令计数`drive_ready_control.goals`选解，不管实际是否在位，不在规划前读取机械臂位置、不额外归位。结果用`planning_reference`标明`measured=False`，不得冒充实测；PC显式离线`start_counts`与纯Geometry API保持不变，执行阶段反馈、到位及夹住判据照旧。
 - PID与运动参数以`configs/arm/user_selected_pid_demo_baseline.json`、`motion_defaults.json`为准。正常动作及另行回中立默认一次同步最终目标；独立下探采用下述4号提前时序。
 - 抓取保持`9b7e306`阶段动作基础。完整`deploy-robot`默认采用用户认可的`pick_wrist_rotation.json`，按已确认侧面方向联动5号与1～4号；先选所需5号转角较小的那对夹持面，在同对面内优先接近竖直，全部不可达才试另一对；不可达或无侧面时保持原5号抓取。PC `pick-pc`与独立`deploy-pick`默认仍采用`pick_validation_pc.json`固定5号对照。旧45mm补偿/碰撞穷举不恢复；失败版本保留在Git及`archive/wrist-rotation-trial-20261023`标签，固定支点采集方案不恢复。
 - 独立抓取：规划后直接同步悬停；六轴同一轮均在±30后下探；先发4号、200ms后发其他五轴；下探六轴均在±10后闭合；6号连续5次在同一±1带内（跨度≤2）后抬升。轮询50ms，读取失败不推进，不按超时跳段。

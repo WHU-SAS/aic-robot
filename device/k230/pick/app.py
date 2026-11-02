@@ -226,14 +226,24 @@ def _handoff_target(observation):
     return found
 
 
-def _run_target(config,found,execute,start_counts=None):
+def _ready_planning_reference(config):
+    """User-selected command reference; never a measurement or a ready action."""
+    counts=config['drive_ready_control']['goals']
+    if (not isinstance(counts,(list,tuple)) or len(counts)!=6 or
+            any(type(v) is not int or not 0<=v<=4095 for v in counts)):
+        raise ValueError('Ready pose2 planning reference requires six encoder counts')
+    return {'source':'ready_pose2_command','counts':list(counts),'measured':False}
+
+
+def _run_target(config,found,execute,start_counts=None,planning_reference=None):
     vision=config['vision']
     control=config['control']
     if execute:
-        if start_counts is not None:raise ValueError('Live pick requires current arm feedback')
+        if start_counts is not None:raise ValueError('Live pick uses the ready pose2 planning reference')
         import control as arm_control
         arm_control.print=record_arm_event
-        rows=arm_snapshot(control);start=[r['position'] for r in rows]
+        planning_reference=_ready_planning_reference(config)
+        start=list(planning_reference['counts'])
     else:
         if (not isinstance(start_counts,(list,tuple)) or len(start_counts)!=6 or
                 any(type(v) is not int for v in start_counts)):
@@ -249,6 +259,8 @@ def _run_target(config,found,execute,start_counts=None):
         plan=geometry.plan([v/1000 for v in xy],start,orientation)
     else:
         plan=geometry.plan([v/1000 for v in xy],start)
+    if planning_reference is not None:
+        plan['planning_reference']=planning_reference
     log('planned',plan)
     if not execute:return plan
     for name in ('hover','descend','close','lift'):
@@ -273,7 +285,8 @@ def run_from_observation(config,observation,execute=False,start_counts=None,sour
 
     Caller must already accept this frame as parked, retain its original capture
     identity and prevent further chassis movement until the pick is dispatched.
-    Live mode reads current joints; dry planning requires explicit start counts.
+    Live mode uses ready pose2 as its planning reference; dry planning requires
+    explicit start counts.
     No PID, torque, stage policy, correction or return behavior is added here.
     """
     _same_calibration(config,source_config)
@@ -289,7 +302,8 @@ def begin_from_observation(config,observation,target_version,source_config=None,
     """Plan a cooperative pick without taking ownership of camera or motion.
 
     The task keeps the shared camera and owns target versions. Construction
-    reads current joints once and plans, but sends no servo targets. The caller
+    uses ready pose2 as a command reference without position reads or servo
+    targets. The caller
     must pass its current version to every execution.step(target_version=...).
     invalidate_target() cancels pending stages; the next step sends ready pose2.
     Re-observation may start only when the execution reports can_reobserve.
@@ -302,10 +316,10 @@ def begin_from_observation(config,observation,target_version,source_config=None,
     ready=config['drive_ready_control']
     policy=dict(config['pick']['standalone_stage_policy'])
     policy.update(config['pick'].get('tracking_stage_policy',{}))
-    rows=arm_snapshot(config['control'])
-    start=[row['position'] for row in rows]
+    reference=_ready_planning_reference(config)
+    start=list(reference['counts'])
     try:
-        plan=_run_target(config,found,False,start_counts=start)
+        plan=_run_target(config,found,False,start_counts=start,planning_reference=reference)
     except getattr(_kinematics,'NoPickSolution',()) as exc:
         raise PickPlanUnavailable(str(exc))
     log('tracking_handoff_localized',{'frame_id':observation['frame_id'],
@@ -318,7 +332,7 @@ def begin_from_observation(config,observation,target_version,source_config=None,
 
 
 def begin_from_observation_steps(config,observation,target_version,source_config=None,emit=None):
-    """Yield between read-only handoff, geometry setup and IK search steps.
+    """Yield between command-reference handoff, geometry setup and IK search steps.
 
     The caller owns target versions and closes an obsolete planning generator.
     All progress is bound to this original version/frame. No camera or servo
@@ -337,10 +351,10 @@ def begin_from_observation_steps(config,observation,target_version,source_config
         ready=config['drive_ready_control']
         policy=dict(config['pick']['standalone_stage_policy'])
         policy.update(config['pick'].get('tracking_stage_policy',{}))
-        rows=arm_snapshot(config['control'])
-        start=[row['position'] for row in rows]
-        yield {'stage':'arm_snapshot','target_version':target_version,
-               'frame_id':frame_id,'positions':list(start)}
+        reference=_ready_planning_reference(config)
+        start=list(reference['counts'])
+        yield {'stage':'planning_reference','target_version':target_version,
+               'frame_id':frame_id,'planning_reference':reference}
 
         xy=found['cube_center_Base_mm'][:2]
         plane=config['vision']['localization']['table_plane_Base_mm']
@@ -381,6 +395,7 @@ def begin_from_observation_steps(config,observation,target_version,source_config
         steps=None
         close=getattr(finished,'close',None)
         if close is not None:close()
+        plan['planning_reference']=reference
         log('planned',plan)
         if emit is None:emit=lambda event,details:log(event,details)
         execution=factory(config['control'],ready,plan,policy,target_version,emit=emit)

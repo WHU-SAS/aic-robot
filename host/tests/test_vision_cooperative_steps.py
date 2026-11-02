@@ -32,9 +32,9 @@ class FullLocalizationStepsTests(unittest.TestCase):
                 'cube_center_Base_mm': [2., 15., 19.],
                 'side_selection': 'larger_verified_side'}
 
-    def steps(self, plane=True):
+    def steps(self, plane=True, **policy):
         return vision.localize_steps(self.image, self.K, self.D, self.T,
-                                     self.plane if plane else None)
+                                     self.plane if plane else None, **policy)
 
     def assert_one_raw_result(self, events, expected):
         completed = [event for event in events if event['stage'] == 'complete']
@@ -69,6 +69,109 @@ class FullLocalizationStepsTests(unittest.TestCase):
         self.assertEqual(calls, ['shared_started', 'shared_complete', 'shared_closed'])
         self.assertIn('shared_side_processing_ms', raw)
         fast.assert_called_once_with(self.image, self.K, self.D, self.T, self.plane)
+        legacy.assert_not_called()
+
+    def test_fast_only_failure_returns_raw_diagnostics_without_target_authority(self):
+        search = {'stage': 'edge_validation', 'candidates': [{'reason': 'weak boundary'}]}
+        failed = {'status': 'no_complete_face', 'reason': 'No reliable measured side',
+                  'search': search, 'cube_center_Base_mm': [1., 2., 3.],
+                  'range_candidate': {'distance_mm': 250.},
+                  'payload': {'must_not_be_published': True}}
+        closed = []
+        def shared(*args):
+            try:
+                yield {'stage': 'edge_samples', 'stations': 16}
+                yield {'stage': 'complete', 'observation': failed}
+            finally:
+                closed.append(True)
+        with patch.object(vision, '_shared_side_steps', side_effect=shared) as fast, \
+                patch.object(vision, '_localize_legacy_steps',
+                    side_effect=AssertionError('Fast-only must not start recovery')) as legacy:
+            events = list(self.steps(allow_legacy=False))
+        raw = events[-1]['result']
+        self.assert_one_raw_result(events, raw)
+        self.assertEqual(set(raw), {'status', 'reason', 'search', 'shared_side_processing_ms'})
+        self.assertEqual(raw['status'], 'no_complete_face')
+        self.assertEqual(raw['reason'], failed['reason'])
+        self.assertIs(raw['search'], search)
+        self.assertGreaterEqual(raw['shared_side_processing_ms'], 0)
+        self.assertEqual(closed, [True])
+        fast.assert_called_once_with(self.image, self.K, self.D, self.T, self.plane)
+        legacy.assert_not_called()
+
+    def test_fast_only_success_keeps_original_raw_pose_and_shared_arguments(self):
+        raw = self.face()
+        expected = copy.deepcopy(raw)
+        def shared(*args):
+            yield {'stage': 'candidates', 'count': 1}
+            yield {'stage': 'complete', 'observation': {'status': 'localized', 'payload': raw}}
+        with patch.object(vision, '_shared_side_steps', side_effect=shared) as fast, \
+                patch.object(vision, '_localize_legacy_steps') as legacy:
+            events = list(self.steps(allow_legacy=False))
+        self.assert_one_raw_result(events, raw)
+        self.assertEqual({key: raw[key] for key in expected}, expected)
+        self.assertIn('shared_side_processing_ms', raw)
+        self.assertNotIn('shared_side_recovery', raw)
+        fast.assert_called_once_with(self.image, self.K, self.D, self.T, self.plane)
+        legacy.assert_not_called()
+
+    def test_fast_only_scene_rejection_is_distinct_from_resource_and_runtime_errors(self):
+        for error in (ValueError('Physical edge rejected'), MemoryError('No image buffer'),
+                      RuntimeError('CV resource unavailable')):
+            with self.subTest(error=type(error).__name__):
+                closed = []
+                def shared(*args):
+                    try:
+                        yield {'stage': 'edge_samples', 'stations': 8}
+                        raise error
+                    finally:
+                        closed.append(True)
+                with patch.object(vision, '_shared_side_steps', side_effect=shared), \
+                        patch.object(vision, '_localize_legacy_steps') as legacy:
+                    pending = self.steps(allow_legacy=False)
+                    self.assertEqual(next(pending)['stage'], 'shared_edge_samples')
+                    if isinstance(error, ValueError):
+                        remaining = list(pending)
+                        self.assertEqual(len(remaining), 1)
+                        raw = remaining[0]['result']
+                        self.assertEqual(remaining[0]['stage'], 'complete')
+                        self.assertEqual(raw['status'], 'no_complete_face')
+                        self.assertEqual(raw['reason'], str(error))
+                        self.assertIsNone(raw.get('search'))
+                        self.assertNotIn('cube_center_Base_mm', raw)
+                        self.assertNotIn('range_candidate', raw)
+                        self.assertNotIn('payload', raw)
+                    else:
+                        with self.assertRaises(type(error)) as raised:
+                            list(pending)
+                        self.assertIs(raised.exception, error)
+                self.assertEqual(closed, [True])
+                legacy.assert_not_called()
+
+    def test_fast_only_requires_table_before_starting_either_search(self):
+        with patch.object(vision, '_shared_side_steps') as shared, \
+                patch.object(vision, '_localize_legacy_steps') as legacy:
+            with self.assertRaisesRegex(ValueError, '[Tt]able'):
+                list(self.steps(plane=False, allow_legacy=False))
+        shared.assert_not_called()
+        legacy.assert_not_called()
+
+    def test_fast_only_cancellation_closes_shared_search_without_result_or_fallback(self):
+        closed = []
+        def shared(*args):
+            try:
+                yield {'stage': 'edge_samples', 'stations': 8}
+                self.fail('Cancelled fast-only search resumed')
+            finally:
+                closed.append(True)
+        with patch.object(vision, '_shared_side_steps', side_effect=shared), \
+                patch.object(vision, '_localize_legacy_steps') as legacy:
+            pending = self.steps(allow_legacy=False)
+            self.assertEqual(next(pending)['stage'], 'shared_edge_samples')
+            pending.close()
+            pending.close()
+            self.assertEqual(list(pending), [])
+        self.assertEqual(closed, [True])
         legacy.assert_not_called()
 
     def test_failed_shared_observation_runs_legacy_after_shared_cleanup(self):

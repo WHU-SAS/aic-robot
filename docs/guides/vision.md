@@ -45,7 +45,9 @@ PC单图入口、独立抓取及小车`observations.py`已接入该协议。部�
 
 `CooperativeStaticPickSession(config, clock_ms)`使用同一张JPEG95，`start(image, frame, bbox=None)`后每次`advance()`只解码或推进一个检测步骤。`phase=None`表示结束，只有`latest`是完整观测；`latest_ready_ms`是处理完成时间，不替换原采集时刻。相机仍由整车唯一持有，`bbox`仅留来源记录，不改变原搜索范围。
 
-`pick/vision.py:localize_steps`沿用原侧面快路径、恢复顺序与全部数值门槛。旧同步入口保留；分步结果不在完成前提供抓取坐标。预算取`tracking_task.fine_budget_ms`，其次`near_parking.fine_budget_ms`，默认20ms；每步记录实际耗时与`over_budget`，单个OpenCV或候选处理仍可超时，属于软预算。观察和串口应按截止时间交织，不必每个检测步骤都重新拍图。
+追踪静态入口通过`tracking_task.static_localization_policy=shared_side_only`只做共享完整侧面精定位，保留其静态局部恢复、候选预算和全部数值门槛；失败返回`no_complete_face`及原`search/rejected`，交整车换视角，不在同图继续旧全量恢复，也不返回部分坐标。旧独立、离线及未设此字段的分步入口默认`full_recovery`，保持原恢复链。底层`pick/vision.py:localize_steps(..., allow_legacy=False)`提供相同策略。
+
+分步结果不在完成前提供抓取坐标。预算取`tracking_task.fine_budget_ms`，其次`near_parking.fine_budget_ms`，默认20ms；每步记录实际耗时与`over_budget`，单个OpenCV或候选处理仍可超时，属于软预算。禁用旧恢复不是硬时限，也不保证原来依赖顶面或旧恢复的图仍会成功。观察和串口应按截止时间交织，不必每个检测步骤都重新拍图。
 
 目标版本由整车绑定到采集帧。`cancel()`关闭所有未完生成器、释放BGR并清除旧结果，JPEG保留；`take_evidence(label)`在运行中会先取消，再复制原图。旧图证据未取走时不能开始下一张，取消帧不能被贴上新版本再用于抓取。
 

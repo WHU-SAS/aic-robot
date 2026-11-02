@@ -623,7 +623,8 @@ class DirectPickTests(unittest.TestCase):
         self.check_flow(True)
 
     def check_flow(self,fail_read):
-        app=VoiceDispatchTests().app();cfg,_,_=deploy.build_bundle();events=[];stages=[]
+        app=VoiceDispatchTests().app();cfg,_,_=deploy.build_bundle();events=[];stages=[];seeds=[]
+        config_before=json.dumps(cfg,sort_keys=True)
         class Camera:
             def __init__(self,*args):pass
             def open(self):pass
@@ -632,7 +633,7 @@ class DirectPickTests(unittest.TestCase):
         plan={name:[2048]*6 for name in ('hover','descend','close','lift')}
         class Model:
             def __init__(self,*args):pass
-            def plan(self,*args):events.append('plan');return plan
+            def plan(self,xy,start):events.append('plan');seeds.append(list(start));return plan
         sample={'goals':plan['descend'],'positions':[2048+i for i in range(6)],
                 'errors_actual_minus_goal':list(range(6)),'read_ms':180,'source':'arrival_gate'}
         def stage(c,s):
@@ -647,11 +648,18 @@ class DirectPickTests(unittest.TestCase):
              patch.object(app,'CameraSession',Camera),patch.object(app,'Geometry',Model), \
              patch.object(app,'localize',return_value={'status':'complete_face_candidate','poses':[{'face_reprojection_rms_px':.5}],'cube_center_Base_mm':[240,0,-60]}), \
              patch.object(app,'arm_snapshot',return_value=[{'position':2048} for i in range(6)]) as snapshot, \
-             patch.object(app,'log') as logs,patch.object(app,'run_pick_stage_direct',side_effect=stage):
+             patch.object(app,'log') as logs,patch.object(app,'run_pick_stage_direct',side_effect=stage), \
+             patch.object(app,'run_ready',side_effect=AssertionError('No extra ready dispatch')), \
+             patch.object(app,'run_ready_direct',side_effect=AssertionError('No extra torque/ready dispatch')):
             if fail_read:
                 with self.assertRaisesRegex(RuntimeError,'read timeout'):app.run_once(cfg,execute=True)
             else:app.run_once(cfg,execute=True)
-        snapshot.assert_called_once();self.assertTrue(all(s['policy']==cfg['pick']['standalone_stage_policy'] for s in stages))
+        snapshot.assert_not_called()
+        self.assertEqual(seeds,[cfg['drive_ready_control']['goals']])
+        self.assertEqual(plan['planning_reference'],{'source':'ready_pose2_command',
+            'counts':cfg['drive_ready_control']['goals'],'measured':False})
+        self.assertEqual(json.dumps(cfg,sort_keys=True),config_before)
+        self.assertTrue(all(s['policy']==cfg['pick']['standalone_stage_policy'] for s in stages))
         self.assertEqual(events,['plan','hover','descend'] if fail_read else ['plan','hover','descend','close','lift'])
         if not fail_read:logs.assert_any_call('descend_position_sample',sample)
 

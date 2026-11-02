@@ -23,6 +23,9 @@ class CooperativePickHandoffTests(unittest.TestCase):
         self.observation = observation()
         self.app = load_app()
         self.start = [2043, 2100, 2250, 1950, 2048, 2389]
+        self.ready_counts = list(self.config['drive_ready_control']['goals'])
+        self.reference = {'source': 'ready_pose2_command',
+                          'counts': list(self.ready_counts), 'measured': False}
         self.plan = {name: [2100 + 10*i + j for j in range(6)]
                      for i, name in enumerate(('hover', 'descend', 'close', 'lift'))}
         self.events = []
@@ -30,8 +33,7 @@ class CooperativePickHandoffTests(unittest.TestCase):
     @contextmanager
     def harness(self):
         def snapshot(config):
-            self.events.append('snapshot')
-            return [{'id': i+1, 'position': p} for i, p in enumerate(self.start)]
+            raise AssertionError('Planning uses commanded ready2, never arm_snapshot')
 
         geometry = Mock()
         def plan(xy, start):
@@ -66,16 +68,17 @@ class CooperativePickHandoffTests(unittest.TestCase):
         with self.harness() as h:
             result = self.begin()
         self.assertIs(result, h.session)
-        self.assertEqual(self.events, ['snapshot', 'plan', 'factory'])
-        h.read.assert_called_once_with(self.config['control'])
-        h.geometry.plan.assert_called_once_with([.245, -.028], self.start)
+        self.assertEqual(self.events, ['plan', 'factory'])
+        h.read.assert_not_called()
+        h.geometry.plan.assert_called_once_with([.245, -.028], self.ready_counts)
         h.session.step.assert_not_called()
         h.session.close.assert_not_called()
         for callback in h.forbidden.values():callback.assert_not_called()
         args = h.factory.call_args.args
         self.assertIs(args[0], self.config['control'])
         self.assertIs(args[1], self.config['drive_ready_control'])
-        self.assertEqual(args[2], self.plan)
+        self.assertEqual(args[2], dict(self.plan, planning_reference=self.reference))
+        self.assertIsNot(args[2]['planning_reference']['counts'], self.config['drive_ready_control']['goals'])
         self.assertEqual(args[3], dict(self.config['pick']['standalone_stage_policy'],
             **self.config['pick'].get('tracking_stage_policy',{})))
         self.assertEqual(args[4], 17)
@@ -84,6 +87,46 @@ class CooperativePickHandoffTests(unittest.TestCase):
             'frame_id': 71, 'capture_timestamp_ms': 5,
             'cube_center_Base_mm': [245., -28., -65.], 'target_version': 17,
             'source': 'accepted_static_observation'})
+
+    def test_ready2_reference_is_explicitly_commanded_not_measured(self):
+        self.assertNotEqual(self.start, self.ready_counts)
+        with self.harness() as h:
+            self.begin()
+        actual = h.factory.call_args.args[2]['planning_reference']
+        self.assertEqual(actual, self.reference)
+        self.assertIs(actual['measured'], False)
+        self.assertNotIn('positions', actual)
+        h.read.assert_not_called()
+
+    def test_initial_and_recovery_rounds_unconditionally_reuse_ready2_seed_without_dispatch(self):
+        for version, frame_id, actual_pose in (
+                (17, 71, [2048, 1200, 2900, 2800, 2048, 2332]),
+                (18, 72, [1900, 2600, 2500, 2300, 1800, 2200])):
+            with self.subTest(version=version):
+                self.start = actual_pose
+                self.observation['frame_id'] = frame_id
+                with self.harness() as h:
+                    result = self.app.begin_from_observation(self.config, self.observation,
+                        version, source_config=self.source)
+                h.geometry.plan.assert_called_once_with([.245, -.028], self.ready_counts)
+                h.read.assert_not_called()
+                self.assertEqual(h.factory.call_args.args[2]['planning_reference'], self.reference)
+                self.assertEqual(h.factory.call_args.args[4], version)
+                self.assertIs(result, h.session)
+                h.session.step.assert_not_called()
+                for callback in h.forbidden.values():callback.assert_not_called()
+
+    def test_legacy_live_uses_ready2_and_explicit_offline_seed_remains_unchanged(self):
+        for live in (False, True):
+            with self.subTest(live=live), self.harness() as h:
+                h.forbidden['run_pick_stage_direct'].side_effect = lambda *args: None
+                options = {'execute': True} if live else {'start_counts': self.start}
+                self.app.run_from_observation(self.config, self.observation,
+                    source_config=self.source, **options)
+                expected = self.ready_counts if live else self.start
+                h.geometry.plan.assert_called_once_with([.245, -.028], expected)
+                h.read.assert_not_called()
+                h.factory.assert_not_called()
 
     def test_tracking_policy_overrides_are_copied_and_do_not_mutate_legacy_policy(self):
         original = copy.deepcopy(self.config['pick']['standalone_stage_policy'])
@@ -129,7 +172,7 @@ class CooperativePickHandoffTests(unittest.TestCase):
         with self.harness() as h:
             h.geometry.plan.side_effect = ValueError('No complete plan')
             with self.assertRaisesRegex(ValueError, 'No complete plan'):self.begin()
-            h.read.assert_called_once()
+            h.read.assert_not_called()
             h.factory.assert_not_called()
             for callback in h.forbidden.values():callback.assert_not_called()
 
@@ -141,7 +184,7 @@ class CooperativePickHandoffTests(unittest.TestCase):
                 self.begin()
             self.assertIs(type(caught.exception), self.app.PickPlanUnavailable)
             self.assertEqual(str(caught.exception), 'No complete four-stage IK: scene')
-            h.read.assert_called_once()
+            h.read.assert_not_called()
             h.factory.assert_not_called()
             for callback in h.forbidden.values():callback.assert_not_called()
 

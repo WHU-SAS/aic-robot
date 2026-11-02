@@ -22,6 +22,9 @@ class PickPlanningHandoffTests(unittest.TestCase):
         self.source = car_source(self.config)
         self.observation = observation()
         self.start = [2043, 2100, 2250, 1950, 2048, 2389]
+        self.ready_counts = list(self.config['drive_ready_control']['goals'])
+        self.reference = {'source': 'ready_pose2_command',
+                          'counts': list(self.ready_counts), 'measured': False}
         self.plan = {name: [2100 + i*10 + j for j in range(6)]
                      for i, name in enumerate(('hover','descend','close','lift'))}
         self.events = []
@@ -29,8 +32,7 @@ class PickPlanningHandoffTests(unittest.TestCase):
     @contextmanager
     def harness(self):
         def snapshot(config):
-            self.events.append('snapshot')
-            return [{'id':i+1,'position':p} for i,p in enumerate(self.start)]
+            raise AssertionError('Planning uses commanded ready2, never arm_snapshot')
         def planning(*args):
             self.events.append('planning_started')
             try:
@@ -67,29 +69,30 @@ class PickPlanningHandoffTests(unittest.TestCase):
         return self.app.begin_from_observation_steps(self.config,self.observation,17,
             source_config=self.source,**kwargs)
 
-    def test_construction_is_lazy_then_snapshot_setup_and_search_yield_separately(self):
+    def test_construction_is_lazy_then_reference_setup_and_search_yield_separately(self):
         with self.harness() as h:
             job = self.begin()
             self.assertEqual(self.events,[])
             first = next(job)
-            self.assertEqual(first,{'stage':'arm_snapshot','target_version':17,
-                'frame_id':71,'positions':self.start})
-            self.assertEqual(self.events,['snapshot'])
+            self.assertEqual(first,{'stage':'planning_reference','target_version':17,
+                'frame_id':71,'planning_reference':self.reference})
+            self.assertNotIn('positions',first)
+            self.assertEqual(self.events,[])
             second = next(job)
             self.assertEqual(second,{'stage':'planning_initialized','target_version':17,
                 'frame_id':71})
-            self.assertEqual(self.events,['snapshot','geometry'])
+            self.assertEqual(self.events,['geometry'])
             progress = next(job)
             self.assertEqual(progress,{'stage':'tilt_candidate','candidate':25,'target_version':17,'frame_id':71})
-            self.assertEqual(self.events,['snapshot','geometry','planning_started'])
+            self.assertEqual(self.events,['geometry','planning_started'])
             h.factory.assert_not_called()
             complete = next(job)
             self.assertEqual(complete,{'stage':'complete','execution':h.execution,
                 'target_version':17,'frame_id':71})
-            self.assertEqual(self.events,['snapshot','geometry','planning_started','planning_closed','factory'])
+            self.assertEqual(self.events,['geometry','planning_started','planning_closed','factory'])
             with self.assertRaises(StopIteration):next(job)
-            h.read.assert_called_once_with(self.config['control'])
-            h.geometry.plan_steps.assert_called_once_with([.245,-.028],self.start)
+            h.read.assert_not_called()
+            h.geometry.plan_steps.assert_called_once_with([.245,-.028],self.ready_counts)
             h.geometry.plan.assert_not_called()
             h.execution.step.assert_not_called()
             h.execution.close.assert_not_called()
@@ -102,19 +105,40 @@ class PickPlanningHandoffTests(unittest.TestCase):
         args = h.factory.call_args.args
         self.assertIs(args[0],self.config['control'])
         self.assertIs(args[1],self.config['drive_ready_control'])
-        self.assertEqual(args[2],self.plan)
+        self.assertEqual(args[2],dict(self.plan,planning_reference=self.reference))
+        self.assertIsNot(args[2]['planning_reference']['counts'],self.config['drive_ready_control']['goals'])
         self.assertEqual(args[3],dict(self.config['pick']['standalone_stage_policy'],
             **self.config['pick'].get('tracking_stage_policy',{})))
         self.assertEqual(args[4],17)
         self.assertIs(h.factory.call_args.kwargs['emit'],emit)
         self.assertIs(complete['execution'],h.execution)
 
+    def test_initial_and_recovery_step_plans_share_ready2_seed_without_read_or_ready_command(self):
+        for version, frame_id, actual_pose in (
+                (17,71,[2048,1200,2900,2800,2048,2332]),
+                (18,72,[1900,2600,2500,2300,1800,2200])):
+            with self.subTest(version=version):
+                self.start=actual_pose
+                self.observation['frame_id']=frame_id
+                with self.harness() as h:
+                    events=list(self.app.begin_from_observation_steps(self.config,
+                        self.observation,version,source_config=self.source))
+                self.assertEqual(events[0],{'stage':'planning_reference',
+                    'planning_reference':self.reference,'target_version':version,'frame_id':frame_id})
+                self.assertTrue(all(event['target_version']==version for event in events))
+                self.assertTrue(all(event['frame_id']==frame_id for event in events))
+                h.geometry.plan_steps.assert_called_once_with([.245,-.028],self.ready_counts)
+                h.read.assert_not_called()
+                self.assertEqual(h.factory.call_args.args[2]['planning_reference'],self.reference)
+                h.execution.step.assert_not_called()
+                for callback in h.forbidden.values():callback.assert_not_called()
+
     def test_default_event_callback_uses_existing_log_without_serializing_execution(self):
         with self.harness() as h:
             list(self.begin())
             h.factory.call_args.kwargs['emit']('status',{'phase':'hover'})
             h.logs.assert_any_call('status',{'phase':'hover'})
-            h.logs.assert_any_call('planned',self.plan)
+            h.logs.assert_any_call('planned',dict(self.plan,planning_reference=self.reference))
             for call in h.logs.call_args_list:
                 if len(call.args)>1 and isinstance(call.args[1],dict):
                     self.assertNotIn('execution',call.args[1])
@@ -129,7 +153,7 @@ class PickPlanningHandoffTests(unittest.TestCase):
             remaining = list(job)
             self.assertTrue(all(event['target_version']==17 for event in remaining))
             self.assertEqual(remaining[-1]['frame_id'],71)
-            h.geometry.plan_steps.assert_called_once_with([.245,-.028],self.start)
+            h.geometry.plan_steps.assert_called_once_with([.245,-.028],self.ready_counts)
             h.logs.assert_any_call('tracking_handoff_localized',{
                 'frame_id':71,'capture_timestamp_ms':5,
                 'cube_center_Base_mm':[245.,-28.,-65.],'target_version':17,
@@ -237,7 +261,7 @@ class PickPlanningHandoffTests(unittest.TestCase):
             next(job)
             estimate.assert_called_once()
             list(job)
-            h.geometry.plan_steps.assert_called_once_with([.245,-.028],self.start,orientation)
+            h.geometry.plan_steps.assert_called_once_with([.245,-.028],self.ready_counts,orientation)
 
     def test_real_geometry_step_plan_matches_existing_synchronous_geometry(self):
         with self.harness() as h,patch.object(self.app,'Geometry',Geometry):
@@ -246,7 +270,8 @@ class PickPlanningHandoffTests(unittest.TestCase):
         plane=self.config['vision']['localization']['table_plane_Base_mm']
         n=plane['normal'];xy=[245.,-28.]
         table_z=(plane['offset_mm']-n[0]*xy[0]-n[1]*xy[1])/n[2]
-        expected=Geometry(self.config['model'],self.config['pick'],table_z).plan([.245,-.028],self.start)
+        expected=Geometry(self.config['model'],self.config['pick'],table_z).plan([.245,-.028],self.ready_counts)
+        expected['planning_reference']=copy.deepcopy(self.reference)
         self.assertEqual(actual,expected)
         self.assertIs(result['execution'],h.execution)
 

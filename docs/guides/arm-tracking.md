@@ -18,7 +18,15 @@ elif progress['stage'] == 'complete':
     state = arm.step(target_version=current_target_version)
 ```
 
-新规划入口依次让出`arm_snapshot`、`planning_initialized`及原逆解候选/阶段进度，只有末尾`complete`携带惰性执行器。所有事件固定原`target_version/frame_id`；目标变化时关闭规划生成器，不能把旧计划换上新版本继续。旧`begin_from_observation`仍是同步兼容入口。新入口仅把几何搜索穷尽的`NoPickSolution`转成`PickPlanUnavailable`，供整车换视角；标定、观测契约和配置错误保持原异常，不能靠挪车重试解决。规划期间相机保持归整车所有；旧同步`Geometry.plan`与新`plan_steps`消费同一套候选数学，根排序、tilt顺序、阶段求解与报告值不变。单次六轴读取或底层FK/IK仍同步，不能把软时间片当成硬抢占。第一次执行器`step`才开始悬停。每次调用前传最新目标版本，规划期间目标有变化也不能执行旧计划。`invalidate_target(reason)`立即撤销未发阶段，下一次`step`优先同步发送准备位2；已发送目标由该新目标覆盖，包括4号已发、其他五轴尚未发的200ms期间。
+新规划入口依次让出`planning_reference`、`planning_initialized`及逆解进度，只有末尾`complete`携带惰性执行器。事件绑定原`target_version/frame_id`；目标变化时关闭旧规划，不重新贴版本。旧`begin_from_observation`保留同步兼容。
+
+按用户2026-11-02选择，所有K230在线规划入口（含旧单次和独立入口）无条件用`drive_ready_control.goals`作准备位2参考，初轮、恢复轮均不读取当前位置、不额外归位。`planning_reference`记录`source=ready_pose2_command`、参考计数和`measured=False`，不表示实物已到位。PC显式离线`start_counts`、纯Geometry接口，以及执行阶段真实反馈和夹持判据不变。
+
+追踪静态精定位采用`tracking_task.static_localization_policy=shared_side_only`：共享完整侧面未通过就带`search/rejected`交整车换视角，不进入同图旧恢复穷举、不交付部分XYZ。旧独立与离线入口保留全量恢复，详见[视觉模块](vision.md)。
+
+新入口只将几何搜索穷尽转换为`PickPlanUnavailable`，供整车换视角；标定、观测契约和配置错误保持原异常。旧同步`Geometry.plan`与新`plan_steps`消费同一套候选数学，选解顺序和报告值不变；底层FK/IK仍同步，时间片是软预算。相机始终归整车所有。
+
+第一次执行器`step`才发送悬停目标，每次调用前传最新目标版本。`invalidate_target(reason)`撤销未发阶段，下一次`step`用准备位2覆盖旧目标，包括4号已发、其他五轴尚未发的200ms期间。
 
 一步通常只发送一个阶段包或读取一轮反馈；发现空夹/失夹时，同一步立即发送恢复目标。步进无等待循环，但既有串口请求仍为同步、有原有超时，整车观察应在步进之间调度。观察调度方式和频率由整车决定。执行器不开关相机，不自行识别移动或把遮挡当移动。
 
