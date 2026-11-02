@@ -254,7 +254,11 @@ def _run_target(config,found,execute,start_counts=None):
           'policy':config['pick']['standalone_stage_policy']}
         arrival=run_pick_stage_direct(action,stage)
         if name=='descend':log('descend_position_sample',arrival)
-    log('complete_torque_on',{'actual_grasp_success':'requires observation','torque_state':'unchanged_not_checked'})
+        if name=='close':
+            plan['grip_confirmation']=arrival
+            plan['grasp_confirmed']=arrival.get('grasp_confirmed') if isinstance(arrival,dict) else None
+    log('complete_torque_on',{'actual_grasp_success':'requires observation','torque_state':'unchanged_not_checked',
+        'grasp_confirmed':plan.get('grasp_confirmed'),'grip_confirmation':plan.get('grip_confirmation')})
     return plan
 
 

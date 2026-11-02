@@ -104,6 +104,21 @@ class PcDirectTransportTests(unittest.TestCase):
         self.assertEqual(settled['positions'], [2200,2201,2199,2200,2201])
         self.assertLess(result.elapsed, 500)
 
+    def test_generated_close_reports_signed_delta_threshold_without_extra_samples(self):
+        for delta,confirmed in ((29,False),(30,True)):
+            with self.subTest(delta=delta):
+                result=self.run_generated('close',[2048+delta]*5)
+                self.assertEqual(result.reads,[6]*5)
+                self.assertEqual(len(result.writes),1)
+                self.assertLess(result.elapsed,500)
+                report=next(event['details'] for event in result.events
+                    if event['event']=='grip_confirmation')
+                self.assertEqual(report['goal'],2048)
+                self.assertEqual(report['position'],2048+delta)
+                self.assertEqual(report['delta_counts'],delta)
+                self.assertEqual(report['threshold_counts'],30)
+                self.assertIs(report['grasp_confirmed'],confirmed)
+
     def test_generated_lift_waits_one_second_without_extra_position_reads(self):
         result = self.run_generated('lift')
         self.assertEqual(result.reads, [])
@@ -141,7 +156,7 @@ class PcDirectTransportTests(unittest.TestCase):
 
 
 class PcDirectFlowTests(unittest.TestCase):
-    def exercise(self, missing_gate=None, fail_stage=None):
+    def exercise(self, missing_gate=None, fail_stage=None, grip_delta=30):
         pick, config = app.parameters(PROFILE)
         plan = {name: [2200+i]*6 for i,name in enumerate(('hover','descend','close','lift'))}
         plan['table_z_Base_mm'] = -53
@@ -177,8 +192,15 @@ class PcDirectFlowTests(unittest.TestCase):
                         'errors_actual_minus_goal':[v-g for v,g in zip(positions, plan[name])],
                         'tolerance_counts':30 if name=='hover' else 10, 'source':'arrival_gate'}})
                 if name=='close':
+                    position=plan[name][5]+(grip_delta or 0)
                     events.append({'event':'gripper_settled','details':{
-                        'sample_count':5,'tolerance_counts':1,'positions':[2199,2200,2199,2200,2199]}})
+                        'sample_count':5,'tolerance_counts':1,'positions':[position]*5}})
+                    if grip_delta is not None:
+                        events.append({'event':'grip_confirmation','details':{
+                            'axis':6,'goal':plan[name][5],'position':position,
+                            'delta_counts':grip_delta,'threshold_counts':30,
+                            'grasp_confirmed':grip_delta>=30,
+                            'method':'axis6_stable_goal_delta','position_reference':'last_stable_sample'}})
                 events.append({'event':'stage_complete','name':name,'arrival_checked':name in actual})
                 for event in events: kwargs['emit'](event)
                 return events
@@ -191,8 +213,9 @@ class PcDirectFlowTests(unittest.TestCase):
                  contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
                 result = app.main(['--pick-config', str(PROFILE), '--execute', '--hands-free'])
             record = json.loads(next(root.glob('data/logs/*/execution.json')).read_text())
+            recorded_events=[json.loads(line) for line in next(root.glob('data/logs/*/events.jsonl')).read_text().splitlines()]
         return SimpleNamespace(code=result, calls=calls, reports=reports, record=record,
-                               observed=actual, output=output.getvalue())
+                               observed=actual, output=output.getvalue(), events=recorded_events)
 
     def test_corrected_profile_uses_direct_stages_and_only_observed_gate_feedback_for_fk(self):
         result = self.exercise()
@@ -217,6 +240,38 @@ class PcDirectFlowTests(unittest.TestCase):
         self.assertIn('4号已提前200毫秒发送',result.output)
         self.assertIn('连续5次处于±1计数',result.output)
         self.assertNotIn('连续0.5秒',result.output)
+
+    def test_grip_threshold_results_are_logged_without_skipping_lift_or_forging_human_labels(self):
+        for delta,confirmed in ((29,False),(30,True)):
+            with self.subTest(delta=delta):
+                result=self.exercise(grip_delta=delta)
+                self.assertEqual(result.code,0)
+                self.assertEqual(result.calls,[('read','read'),('hold','hold')]+
+                    [('stage_direct',name) for name in ('hover','descend','close','lift')])
+                self.assertIs(result.record['grasp_confirmed'],confirmed)
+                confirmation=result.record['grip_confirmation']
+                self.assertEqual(confirmation['goal'],result.record['plan']['close'][5])
+                self.assertEqual(confirmation['delta_counts'],delta)
+                self.assertEqual(result.record['grasp_confirmation_method'],'axis6_stable_goal_delta')
+                self.assertEqual(result.record['stages'][2]['grip_confirmation'],confirmation)
+                self.assertIs(result.record['stages'][2]['grasp_confirmed'],confirmed)
+                self.assertEqual(result.record['physical_grasp_success'],'operator_observation_required')
+                self.assertEqual(result.record['status'],'motion_sequence_complete_torque_on')
+                stored=next(event['details'] for event in result.events if event['event']=='grip_confirmation')
+                self.assertEqual(stored,confirmation)
+                self.assertIn('Δ=%+d'%delta,result.output)
+                self.assertIn('门槛30计数',result.output)
+                self.assertIn('编码器规则判定：'+('成功' if confirmed else '未夹住'),result.output)
+                self.assertEqual(sum(kind=='read' for kind,name in result.calls),1)
+
+    def test_missing_grip_confirmation_does_not_manufacture_a_result(self):
+        result=self.exercise(grip_delta=None)
+        self.assertEqual(result.code,0)
+        self.assertIsNone(result.record['grasp_confirmed'])
+        self.assertNotIn('grip_confirmation',result.record)
+        self.assertEqual(result.record['physical_grasp_success'],'operator_observation_required')
+        self.assertIn('夹持判定不可用',result.output)
+        self.assertEqual(result.calls[-1],('stage_direct','lift'))
 
     def test_missing_position_gate_cannot_dispatch_next_stage(self):
         result = self.exercise(missing_gate='hover')

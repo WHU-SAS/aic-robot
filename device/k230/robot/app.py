@@ -134,7 +134,8 @@ def run_forever(root):
         try:
             if response['error'] is not None:raise response['error']
             result = dispatch(action, config,ready_dispatched=response['sent'])
-            emit('task_finished', {'status':result['status']})
+            emit('task_finished', {'status':result['status'],'grasp_confirmed':result.get('grasp_confirmed'),
+                                   'grip_confirmation':result.get('grip_confirmation')})
         except Exception as exc:
             emit('task_error', {'error':str(exc)})
         finally:

@@ -50,6 +50,13 @@ def execute_task(approach, grasp, emit=None):
     emit('grasp_started', {'frame_id':observation['frame_id'],
                           'capture_timestamp_ms':observation['capture_timestamp_ms']})
     result['arm_plan'] = grasp(observation)
-    result.update(status='complete', physical_grasp_confirmed=False)
-    emit('complete', {'physical_grasp_confirmed':False})
+    plan=result['arm_plan']
+    confirmation=plan.get('grip_confirmation') if isinstance(plan,dict) else None
+    confirmed=plan.get('grasp_confirmed') if isinstance(plan,dict) else None
+    # Complete means the four stages finished. Encoder classification is separate
+    # from any independent observation that the object was actually lifted.
+    result.update(status='complete', physical_grasp_confirmed=False,
+                  grasp_confirmed=confirmed,grip_confirmation=confirmation)
+    emit('complete', {'physical_grasp_confirmed':False,'grasp_confirmed':confirmed,
+                      'grip_confirmation':confirmation})
     return result

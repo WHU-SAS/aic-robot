@@ -28,7 +28,8 @@
     "descend_axis4_lead_ms": 200,
     "gripper_stable_samples": 5,
     "gripper_stable_tolerance_counts": 1,
-    "poll_interval_ms": 50
+    "poll_interval_ms": 50,
+    "grip_confirmation_delta_counts": 30
   },
   "model_urdf": "models/genkiarm/genkiarm_corrected.urdf",
   "comparison_parameters_approved_date": "2026-10-30",

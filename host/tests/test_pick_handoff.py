@@ -69,7 +69,7 @@ class PickHandoffTests(unittest.TestCase):
         self.events = []
 
     @contextmanager
-    def harness(self, real_geometry=None):
+    def harness(self, real_geometry=None, grip_delta=45):
         def snapshot(config):
             self.events.append('arm_snapshot')
             return [{'id': i+1, 'position': p} for i, p in enumerate(self.start)]
@@ -87,6 +87,10 @@ class PickHandoffTests(unittest.TestCase):
 
         def stage(action, policy):
             self.events.append(policy['name'])
+            if policy['name']=='close':
+                from device.k230.arm.pick_stage import classify_grip
+                goal=action['goals'][5]
+                return classify_grip(goal,[goal+grip_delta]*5)
             return {'stage': policy['name'], 'positions': action['goals']}
 
         with ExitStack() as stack:
@@ -117,7 +121,9 @@ class PickHandoffTests(unittest.TestCase):
         n = plane['normal']
         expected_z = (plane['offset_mm']-n[0]*245-n[1]*-28)/n[2]
         h.constructor.assert_called_once_with(self.config['model'], self.config['pick'], expected_z)
-        self.assertEqual(result, self.plan)
+        for name in STAGES:self.assertEqual(result[name], self.plan[name])
+        self.assertIs(result['grasp_confirmed'],True)
+        self.assertEqual(result['grip_confirmation']['delta_counts'],45)
         for name, call in zip(STAGES, h.stage.call_args_list):
             action, policy = call.args
             expected_action = dict(self.config['control'], goals=self.plan[name])
@@ -131,6 +137,23 @@ class PickHandoffTests(unittest.TestCase):
         h.log.assert_any_call('descend_position_sample',
                              {'stage': 'descend', 'positions': self.plan['descend']})
         self.assertEqual(self.observation, before)
+
+    def test_failed_grip_confirmation_still_lifts_once_and_returns_without_retry(self):
+        for delta,confirmed in ((29,False),(30,True)):
+            with self.subTest(delta=delta):
+                self.events=[]
+                with self.harness(grip_delta=delta) as h:
+                    result=self.call(execute=True)
+                self.assertEqual(self.events,['arm_snapshot','Geometry','plan']+list(STAGES))
+                self.assertEqual(h.stage.call_count,4)
+                self.assertEqual([call.args[1]['name'] for call in h.stage.call_args_list],list(STAGES))
+                self.assertIs(result['grasp_confirmed'],confirmed)
+                self.assertEqual(result['grip_confirmation']['delta_counts'],delta)
+                self.assertEqual(result['grip_confirmation']['goal'],self.plan['close'][5])
+                h.log.assert_any_call('complete_torque_on',unittest.mock.ANY)
+                final=h.log.call_args_list[-1].args
+                self.assertEqual(final[0],'complete_torque_on')
+                self.assertIs(final[1]['grasp_confirmed'],confirmed)
 
     def test_dry_plan_requires_explicit_pose_and_never_reads_or_dispatches(self):
         start = tuple(self.start)

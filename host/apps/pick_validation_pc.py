@@ -26,6 +26,16 @@ from host.vision.config import load_vision_config,table_height_at
 TRIAL=ROOT/'configs/arm/pick_validation_pc.json'
 
 
+def _grip_result_text(details):
+    confirmed=details.get('grasp_confirmed') if isinstance(details,dict) else None
+    if type(confirmed) is not bool:return '编码器夹持判定不可用，实际夹取结果请现场观察'
+    text='按6号编码器规则判定：'+('成功' if confirmed else '未夹住')
+    delta=details.get('delta_counts');threshold=details.get('threshold_counts')
+    if type(delta) in (int,float) and type(threshold) in (int,float):
+        text+='；Δ=%+g，门槛%g计数'%(delta,threshold)
+    return text
+
+
 def parameters(pick_config=None):
     profile=TRIAL if pick_config is None else ROOT/Path(pick_config)
     pick=json.loads(profile.read_text())
@@ -138,6 +148,7 @@ def main(argv=None):
     folder.mkdir(parents=True,exist_ok=False)
     record={'status':'created','execute':args.execute,'motion_performed':False,
         'torque_enable_attempted':False,'pid_writes_sent':False,'stages':[],
+        'grasp_confirmed':None,
         'pick_profile':pick,'baseline':config.baseline,'motion_defaults':config.defaults,
         'vision_config':pick['vision_config'],'timing_s':{},'arm_transport':'PC -> K230 USBDBG -> UART1 -> URT-2'}
     def save():
@@ -160,6 +171,12 @@ def main(argv=None):
                 elif event['event']=='gripper_settled':
                     record['gripper_settle']=event['details'];save()
                     print('夹爪连续%d次处于±%d计数静止带，准备抬升。'%(event['details']['sample_count'],event['details']['tolerance_counts']),flush=True)
+                elif event['event']=='grip_confirmation':
+                    confirmation=event['details']
+                    record.update(grip_confirmation=confirmation,
+                        grasp_confirmed=confirmation.get('grasp_confirmed'),
+                        grasp_confirmation_method=confirmation.get('method'))
+                    save();print(_grip_result_text(confirmation),flush=True)
                 elif event['event']=='board_message' and ('Traceback' in event['text'] or 'Error' in event['text']):
                     print(event['text'],file=sys.stderr,flush=True)
             started=time.monotonic()
@@ -235,10 +252,16 @@ def main(argv=None):
                         final_error_counts=[v-g for v,g in zip(counts,plan[name])],
                         final_FK=geometry.report(counts),feedback_source='position_gate_passed')
                     if name=='descend':record['descend_position_sample']=sample
+                elif name=='close':
+                    confirmation=next((event['details'] for event in reversed(result)
+                        if event['event']=='grip_confirmation'),None)
+                    if confirmation is not None:
+                        value.update(grip_confirmation=confirmation,
+                            grasp_confirmed=confirmation.get('grasp_confirmed'))
                 record['stages'].append(value);save()
                 print('STAGE_COMPLETE',name,json.dumps({'error_counts':value['final_error_counts'],'FK':value['final_FK']},ensure_ascii=False),flush=True)
             record.update(status='motion_sequence_complete_torque_on',physical_grasp_success='operator_observation_required')
-            save();print('流程完成：保留抬升姿态和扭矩，实际夹取结果请现场观察。',flush=True)
+            save();print('动作流程完成：保留抬升姿态和扭矩；'+_grip_result_text(record.get('grip_confirmation'))+'。',flush=True)
             return 0
     except BaseException as exc:
         record.update(status='error_no_extra_motion',error=repr(exc))

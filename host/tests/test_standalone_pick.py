@@ -495,7 +495,7 @@ class DirectReadyTransportTests(unittest.TestCase):
         self.assertEqual(r.writes,[])
 
 class DirectPickTests(unittest.TestCase):
-    def run_stage(self,name,positions=(),short_at=None,fail_read_at=None):
+    def run_stage(self,name,positions=(),short_at=None,fail_read_at=None,goal6=2048):
         cfg,files,_=deploy.build_bundle();writes=[];reads=[];closed=[];clock=[0];values=iter(positions)
         class Pins:
             UART1_TXD=1;UART1_RXD=2
@@ -518,7 +518,7 @@ class DirectPickTests(unittest.TestCase):
                   'time':SimpleNamespace(ticks_ms=lambda:clock[0],ticks_diff=lambda a,b:a-b,sleep_ms=sleep),'ujson':json}):
             exec(files['control.py'].decode(),ns)
         ns.update(read_checked=read,preflight=forbidden,initialize_hold=forbidden,send_sync=forbidden)
-        control=dict(cfg['control']);control['goals']=[2048]*6
+        control=dict(cfg['control']);control['goals']=[2048]*6;control['goals'][5]=goal6
         stage={'name':name,'duration_s':1,'policy':cfg['pick']['standalone_stage_policy']}
         error=None;result=None
         with contextlib.redirect_stdout(io.StringIO()) as output:
@@ -565,6 +565,39 @@ class DirectPickTests(unittest.TestCase):
         self.assertTrue(all(i==6 for t,i in r.reads));self.assertLess(r.elapsed,500)
         self.assertIn('"sample_count": 5',r.output);self.assertEqual(r.writes,[(0,r.expected)])
 
+    def test_close_classifies_signed_delta_at_30_without_extra_reads_or_wait(self):
+        for goal in (2048,2155):
+            for delta,confirmed in ((-40,False),(29,False),(30,True),(31,True)):
+                with self.subTest(goal=goal,delta=delta):
+                    r=self.run_stage('close',[goal+delta]*5,goal6=goal)
+                    self.assertIsNone(r.error)
+                    self.assertEqual(r.result['goal'],goal)
+                    self.assertEqual(r.result['position'],goal+delta)
+                    self.assertEqual(r.result['delta_counts'],delta)
+                    self.assertEqual(r.result['threshold_counts'],30)
+                    self.assertIs(r.result['grasp_confirmed'],confirmed)
+                    self.assertEqual(r.result['method'],'axis6_stable_goal_delta')
+                    self.assertEqual(len(r.reads),5)
+                    self.assertTrue(all(i==6 for unused,i in r.reads))
+                    self.assertEqual(r.elapsed,352)
+                    self.assertEqual(r.writes,[(0,r.expected)])
+                    self.assertIn('"event": "grip_confirmation"',r.output)
+
+    def test_close_uses_last_stable_sample_and_does_not_confirm_after_partial_read_failure(self):
+        goal=2155
+        r=self.run_stage('close',[goal+d for d in (31,30,29,30,29)],goal6=goal)
+        self.assertIsNone(r.error)
+        self.assertEqual(r.result['position'],goal+29)
+        self.assertEqual(r.result['delta_counts'],29)
+        self.assertIs(r.result['grasp_confirmed'],False)
+        self.assertEqual(len(r.reads),5)
+        failed=self.run_stage('close',[goal+40]*4,fail_read_at=5,goal6=goal)
+        self.assertIsInstance(failed.error,RuntimeError)
+        self.assertIsNone(failed.result)
+        self.assertNotIn('"event": "grip_confirmation"',failed.output)
+        self.assertEqual(len(failed.reads),5)
+        self.assertEqual(failed.closed,[True])
+
     def test_close_does_not_accept_creeping_single_count_motion(self):
         r=self.run_stage('close',list(range(2200,2210))+[2209]*5)
         self.assertIsNone(r.error);self.assertGreater(len(r.reads),10)
@@ -607,6 +640,9 @@ class DirectPickTests(unittest.TestCase):
             if s['name']=='descend':
                 if fail_read:raise RuntimeError('read timeout')
                 return sample
+            if s['name']=='close':
+                from device.k230.arm.pick_stage import classify_grip
+                return classify_grip(c['goals'][5],[c['goals'][5]+30]*5)
         with patch.dict(sys.modules,{'cv2':SimpleNamespace(imread=lambda p:object()),'control':SimpleNamespace()}), \
              patch.object(app,'CameraSession',Camera),patch.object(app,'Geometry',Model), \
              patch.object(app,'localize',return_value={'status':'complete_face_candidate','poses':[{'face_reprojection_rms_px':.5}],'cube_center_Base_mm':[240,0,-60]}), \

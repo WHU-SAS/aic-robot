@@ -70,7 +70,7 @@ def build_bundle(pick_config=None):
     files['config.json'] = encoded(config)
     manifest = {'schema':'aic.robot.v1', 'trigger':'思达思达',
         'startup_motion':False, 'pc_runtime_required':False,
-        'completion':'arm_stage_completed_not_verified_grasp',
+        'completion':'arm_stage_completed_with_encoder_grip_confirmation',
         'files':{name:{'bytes':len(data), 'sha256':digest(data)}
                  for name, data in sorted(files.items())}}
     manifest['release_id'] = digest(encoded(manifest))[:16]

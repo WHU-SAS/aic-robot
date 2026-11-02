@@ -63,6 +63,15 @@ class StatusDisplay:
         if line.strip() and not self.raw:self.emit('板端：'+line)
     def state(self,message):
         self.last_event=message;self.last_event_at=self.clock();self.emit(message)
+    def grip_result(self,details):
+        confirmed=details.get('grasp_confirmed') if isinstance(details,dict) else None
+        if type(confirmed) is not bool:return '编码器夹持判定不可用，实际夹取结果需观察'
+        text='按6号编码器规则判定：'+('成功' if confirmed else '未夹住')
+        delta=details.get('delta_counts');threshold=details.get('threshold_counts')
+        if type(delta) in (int,float) and type(threshold) in (int,float):
+            text+='；Δ=%+g，门槛%g计数'%(delta,threshold)
+        return text
+
     def application(self,event,details):
         messages={'startup_waiting_for_wake':'程序启动，正在初始化语音',
                   'voice_ready':'监听就绪：现在可以说“思达思达”',
@@ -87,6 +96,12 @@ class StatusDisplay:
             if isinstance(center,list) and len(center)==3:
                 text+='：方块Base坐标(mm) ['+', '.join(f'{v:.2f}' for v in center)+']'
             self.state(text)
+        elif event=='grip_confirmation':
+            self.state(self.grip_result(details))
+        elif event=='complete_torque_on' and isinstance(details,dict) and type(details.get('grasp_confirmed')) is bool:
+            confirmation=details.get('grip_confirmation')
+            if not isinstance(confirmation,dict):confirmation=details
+            self.state('本轮动作流程完成，保持抬升姿态和扭矩；'+self.grip_result(confirmation))
         elif event=='voice_failed':
             self.state('语音监听失败，当前不能唤醒：'+str(details))
         elif event in ('pick_failed_no_extra_motion','ready_failed_no_extra_motion'):
@@ -103,6 +118,8 @@ class StatusDisplay:
             details=event.get('details',{})
             rule=('连续%d次读数稳定'%details['sample_count']) if 'sample_count' in details else '连续0.5秒静止'
             self.state('夹爪已满足'+rule+'条件，准备抬升')
+        elif kind=='grip_confirmation':
+            self.state(self.grip_result(event.get('details')))
         elif kind=='position_gate_waiting':
             self.state('等待到位：'+name+'，各轴偏差 '+str(event.get('errors_actual_minus_goal',[])))
         elif kind=='position_gate_passed':self.state('位置偏差已满足要求：'+name)

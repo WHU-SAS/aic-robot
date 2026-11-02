@@ -45,6 +45,30 @@ class DisplayTests(unittest.TestCase):
         self.assertIn('+2',self.lines[-1])
         self.clock.sleep(1);self.feed('arm_feedback',event)
         self.assertEqual(sum('六轴编码' in v for v in self.lines),2)
+    def test_grip_confirmation_displays_29_and_30_boundaries_from_nested_or_direct_events(self):
+        for delta,confirmed in ((29,False),(30,True)):
+            details={'axis':6,'goal':2150,'position':2150+delta,'delta_counts':delta,
+                'threshold_counts':30,'grasp_confirmed':confirmed,'method':'axis6_stable_goal_delta'}
+            for nested in (False,True):
+                with self.subTest(delta=delta,nested=nested):
+                    if nested:self.feed('arm_feedback',{'event':'grip_confirmation','details':details})
+                    else:self.feed('grip_confirmation',details)
+                    self.assertIn('按6号编码器规则判定：'+('成功' if confirmed else '未夹住'),self.lines[-1])
+                    self.assertIn('Δ=%+d'%delta,self.lines[-1]);self.assertIn('门槛30计数',self.lines[-1])
+                    self.assertNotIn('实物抓取成功',self.lines[-1])
+
+    def test_complete_uses_encoder_verdict_without_claiming_independent_physical_confirmation(self):
+        for confirmed in (False,True):
+            with self.subTest(confirmed=confirmed):
+                details={'goal':2150,'position':2180 if confirmed else 2179,
+                    'delta_counts':30 if confirmed else 29,'threshold_counts':30,
+                    'grasp_confirmed':confirmed,'method':'axis6_stable_goal_delta'}
+                self.feed('complete_torque_on',{'grasp_confirmed':confirmed,
+                    'grip_confirmation':details,'actual_grasp_success':'requires observation'})
+                self.assertIn('动作流程完成',self.lines[-1])
+                self.assertIn('编码器规则判定：'+('成功' if confirmed else '未夹住'),self.lines[-1])
+                self.assertNotIn('实物抓取成功',self.lines[-1])
+
     def test_failure_and_traceback_remain_visible(self):
         self.feed('pick_failed_no_extra_motion','No reliable physical blue20mm face')
         self.assertIn('No reliable',self.lines[-1])

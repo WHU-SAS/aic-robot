@@ -59,7 +59,10 @@ class RobotTaskTests(unittest.TestCase):
             'verification': verdict, 'verification_observation': observation,
             'verifications': [{'verdict': verdict, 'observation': observation}],
             'stop_states': [{'run': 0, 'pwm': 0, 'reason': 1}]}
-        self.arm_result = {'stages_completed': True, 'torque_state': 'unchanged'}
+        self.arm_result = {'stages_completed': True, 'torque_state': 'unchanged',
+            'grasp_confirmed':True,'grip_confirmation':{
+                'axis':6,'goal':2155,'position':2185,'delta_counts':30,
+                'threshold_counts':30,'grasp_confirmed':True,'method':'axis6_stable_goal_delta'}}
 
     def execute(self, parking=None, approach_error=None, arm_error=None, emit=True):
         parking = self.parked if parking is None else parking
@@ -109,6 +112,28 @@ class RobotTaskTests(unittest.TestCase):
                          ['approach_started', 'approach_finished', 'grasp_started', 'complete'])
         self.assertEqual(self.parked, original)
         self.assertIsNot(result.get('actual_grasp_success'), True)
+
+    def test_motion_completion_remains_distinct_from_encoder_grasp_confirmation(self):
+        for delta,confirmed in ((29,False),(30,True)):
+            with self.subTest(delta=delta):
+                confirmation=dict(self.arm_result['grip_confirmation'],
+                    position=2155+delta,delta_counts=delta,grasp_confirmed=confirmed)
+                self.arm_result.update(grip_confirmation=confirmation,grasp_confirmed=confirmed)
+                result=self.execute()
+                self.assertEqual(result['status'],'complete')
+                self.assertTrue(result['arm_started'])
+                self.assertIs(result['grasp_confirmed'],confirmed)
+                self.assertEqual(result['grip_confirmation'],confirmation)
+                self.assertIs(result['physical_grasp_confirmed'],False)
+                self.approach.assert_called_once();self.grasp.assert_called_once()
+                self.assertIs(self.emit.call_args.args[1]['grasp_confirmed'],confirmed)
+
+    def test_missing_grip_result_does_not_become_a_positive_confirmation(self):
+        self.arm_result={'stages_completed':True}
+        result=self.execute()
+        self.assertEqual(result['status'],'complete')
+        self.assertIsNot(result.get('grasp_confirmed'),True)
+        self.assertIs(result['physical_grasp_confirmed'],False)
 
     def test_moving_range_history_is_not_reused_as_the_arm_observation(self):
         moving = {'status': 'no_complete_face', 'frame_id': 40,

@@ -52,6 +52,18 @@ def read_pick_positions(uart,goals):
             'read_ms':time.ticks_diff(time.ticks_ms(),started)}
 
 
+def classify_grip(goal,positions,threshold=30):
+    """Apply the user-selected signed-delta rule to an already stable window."""
+    if not positions:raise ValueError('Stable gripper positions required')
+    if type(goal) is not int or any(type(value) is not int for value in positions):
+        raise ValueError('Gripper goal and positions must be encoder counts')
+    if type(threshold) is not int or threshold<0:raise ValueError('Invalid grip delta threshold')
+    position=positions[-1];delta=position-goal
+    return {'axis':6,'goal':goal,'position':position,'delta_counts':delta,
+            'threshold_counts':threshold,'grasp_confirmed':delta>=threshold,
+            'method':'axis6_stable_goal_delta','position_reference':'last_stable_sample'}
+
+
 def run_pick_stage_direct(config,stage):
     """User-selected position gates and 200ms wrist lead; no torque/PID writes."""
     name=stage['name'];policy=stage['policy']
@@ -103,6 +115,9 @@ def run_pick_stage_direct(config,stage):
                         'sample_count':required,'position_min':min(window),'position_max':max(window),
                         'tolerance_counts':tolerance,'positions':list(window),
                         'elapsed_s':time.ticks_diff(time.ticks_ms(),started)/1000}}))
+                    result=classify_grip(config['goals'][5],window,
+                        policy.get('grip_confirmation_delta_counts',30))
+                    print('PICK_EVENT '+ujson.dumps({'event':'grip_confirmation','details':result}))
                     break
                 time.sleep_ms(policy['poll_interval_ms'])
         else:

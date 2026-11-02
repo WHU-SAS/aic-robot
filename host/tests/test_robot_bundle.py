@@ -43,7 +43,7 @@ class RobotBundleTests(unittest.TestCase):
                          config['arm']['vision']['localization']['table_plane_Base_mm'])
         self.assertFalse(manifest['startup_motion'])
         self.assertFalse(manifest['pc_runtime_required'])
-        self.assertEqual(manifest['completion'], 'arm_stage_completed_not_verified_grasp')
+        self.assertEqual(manifest['completion'], 'arm_stage_completed_with_encoder_grip_confirmation')
 
     def test_promoted_arm_default_keeps_authorized_motion_rules_and_shared_raw_calibration(self):
         config,unused,unused_manifest=self.build()
@@ -63,7 +63,8 @@ class RobotBundleTests(unittest.TestCase):
         self.assertEqual(pick['standalone_stage_policy'],{
             'hover_tolerance_counts':30,'descend_tolerance_counts':10,
             'descend_axis4_lead_ms':200,'gripper_stable_samples':5,
-            'gripper_stable_tolerance_counts':1,'poll_interval_ms':50})
+            'gripper_stable_tolerance_counts':1,'poll_interval_ms':50,
+            'grip_confirmation_delta_counts':30})
         self.assertEqual(arm['control']['profiles'],[
             {'speed_raw':v,'acceleration_raw':a} for v,a in
             [(150,5),(600,20),(600,20),(600,20),(150,5),(150,5)]])
