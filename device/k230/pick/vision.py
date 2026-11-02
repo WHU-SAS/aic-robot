@@ -390,7 +390,7 @@ def _close_localize_steps(steps):
     if close is not None:close()
 
 
-def _shared_side_steps(im,K,D,T,table_plane):
+def _shared_side_steps(im,K,D,T,table_plane,bbox_px=None):
     try:from ..vision.physical_side import localize_steps as sides
     except ImportError:
         try:from physical_side import localize_steps as sides
@@ -400,13 +400,13 @@ def _shared_side_steps(im,K,D,T,table_plane):
     # the actual capture identity; internal results never renew its timestamp.
     frame={'frame_id':'synchronous_current_image','capture_timestamp_ms':None,
            'image_size_px':[1280,960],'clock_domain':None,'timestamp_source':'unavailable'}
-    steps=sides(im,frame,None,intr,{'T_Base_from_Camera_mm':T},table_plane)
+    steps=sides(im,frame,bbox_px,intr,{'T_Base_from_Camera_mm':T},table_plane)
     try:
         for event in steps:yield event
     finally:_close_localize_steps(steps)
 
 
-def localize_steps(im,K,D,T,table_plane=None,allow_legacy=True):
+def localize_steps(im,K,D,T,table_plane=None,allow_legacy=True,bbox_px=None):
     """Yield the existing full localizer, ending with one raw ``result``.
 
     Default keeps the shared-side search then legacy recovery. Tracking may
@@ -430,7 +430,8 @@ def localize_steps(im,K,D,T,table_plane=None,allow_legacy=True):
     difference=getattr(time,'ticks_diff',None) or (lambda a,b:a-b)
     start=clock();observation=None
     try:
-        steps=_shared_side_steps(im,K,D,T,table_plane)
+        steps=(_shared_side_steps(im,K,D,T,table_plane,bbox_px=bbox_px) if bbox_px is not None
+               else _shared_side_steps(im,K,D,T,table_plane))
         try:
             for event in steps:
                 if event['stage']=='complete':

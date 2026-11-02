@@ -22,7 +22,7 @@ typedef struct {
     uint16_t distance_mm; /* Absolute distance; direction is separate. */
     bool reverse_move;
     int16_t angle_deg; /* Positive left, negative right; single-wheel forward arc. */
-    uint16_t left_speed, right_speed; /* mm/s, physical forward is positive. */
+    int16_t left_speed, right_speed; /* -80..80 mm/s, physical forward is positive. */
     int16_t arc_left_mm, arc_right_mm; /* Signed relative wheel travel. */
 } MotorParser;
 
@@ -127,10 +127,10 @@ static inline bool motor_parse(MotorParser *p)
         bool follow = name[0] == 'F';
         const char *left = name + (follow ? 7 : 6), *comma = strchr(left, ',');
         int32_t l, r;
-        if (!comma || !motor_number(left, (size_t)(comma-left), 80, false, &l) ||
-            !motor_number(comma+1, strlen(comma+1), 80, false, &r)) return false;
+        if (!comma || !motor_number(left, (size_t)(comma-left), 80, true, &l) ||
+            !motor_number(comma+1, strlen(comma+1), 80, true, &r)) return false;
         p->command = follow ? CMD_FOLLOW : CMD_SPEED;
-        p->left_speed = (uint16_t)l; p->right_speed = (uint16_t)r;
+        p->left_speed = (int16_t)l; p->right_speed = (int16_t)r;
     }
     else return false;
     return true;

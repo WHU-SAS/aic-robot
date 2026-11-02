@@ -125,16 +125,22 @@ class TrackingTask:
 
     def _fault(self, stage, error):
         reason = '%s: %s' % (stage, error)
-        if self.fault != reason:
-            self.emit('tracking_fault_wait', {'reason': reason, 'task_terminal': False})
+        changed=self.fault != reason
         self.fault = reason
-        self._cancel_job('execution_fault')
-        self._cancel_plan('execution_fault')
-        if self.state.get('run'):
+        # A lost ACK may leave state.run stale even after the MCU began motion.
+        # Stop before logging or generator cleanup, either of which may fail.
+        try:
+            self._command('STOP')
+        except Exception:
+            pass  # Existing MCU communication lease still applies.
+        for cancel in (self._cancel_job,self._cancel_plan):
             try:
-                self._command('STOP')
-            except Exception:
-                pass  # Existing MCU communication lease still applies.
+                cancel('execution_fault')
+            except Exception as exc:
+                self.metrics['cleanup_error']=str(exc)
+        if changed:
+            try:self.emit('tracking_fault_wait', {'reason': reason, 'task_terminal': False})
+            except Exception:pass
 
     def _save_job(self, reason=None):
         if self.job is None:
@@ -156,35 +162,34 @@ class TrackingTask:
                 'frame_id', 'capture_timestamp_ms', 'status', 'bbox_px',
                 'center_pixel', 'confirmations', 'ground_contact_proxy_Base_mm',
                 'visual_evidence', 'visual_candidates') if key in coarse}
-            item['frame']['localization_bbox_px'] = (
-                coarse.get('bbox_px') if job['purpose'] == 'moving' else None)
+            item['frame']['localization_bbox_px'] = job['localization_bbox_px']
             if reason:
                 item['frame']['discard_reason'] = reason
             self._release_evidence(job['target_version'], job['purpose'])
             self.evidence.append(item)
 
     def _release_evidence(self, version, replaced_purpose=None):
-        """Discard superseded RAM frames, not previously archived materials.
+        """Keep the last moving/static diagnostic images, across target loss.
 
-        At most the current target's latest moving and static pictures remain.
-        Obsolete intermediate images need no SD write or extra chassis stop.
+        They never grant control authority. Replacing the same purpose still
+        bounds RAM to two frames, without SD writes or a stop during motion.
         """
         retained = [item for item in self.evidence
-            if item['frame'].get('target_version') == version and
-            (replaced_purpose is None or item['frame'].get('tracking_purpose') != replaced_purpose)]
+            if replaced_purpose is None or item['frame'].get('tracking_purpose') != replaced_purpose]
         self.metrics['obsolete_frames_released'] += len(self.evidence)-len(retained)
         self.evidence[:] = retained
 
     def _cancel_job(self, reason):
-        if self.job is not None:
-            if reason in ('execution_fault', 'task_closed'):
-                self._save_job(reason)
-            cancel = getattr(self.job['session'], 'cancel', None)
-            if cancel:
-                cancel()
-            self.metrics['fine_cancelled'] += 1
-        self.job = self.complete = None
-        self.drive.cancel_fine()
+        try:
+            if self.job is not None:
+                if reason in ('execution_fault', 'task_closed'):
+                    self._save_job(reason)
+                cancel = getattr(self.job['session'], 'cancel', None)
+                if cancel:cancel()
+                self.metrics['fine_cancelled'] += 1
+        finally:
+            self.job = self.complete = None
+            self.drive.cancel_fine()
 
     def _wheel_delta(self, previous, current):
         if previous is None:
@@ -298,7 +303,8 @@ class TrackingTask:
             self._record('tracking_target', dict(target_version=self.memory.version,
                 event=self.target['event'], movement_state=self.target['movement_state'],
                 reason=self.target.get('reason'), residual_px=self.target.get('residual_px'),
-                bbox_px=self.coarse.get('bbox_px')))
+                bbox_px=self.coarse.get('bbox_px'),
+                visual_evidence=self.coarse.get('visual_evidence')))
         if self.job is not None and self.job['target_version'] != self.memory.version:
             self._cancel_job('target_version_changed')
         if self.complete is not None and self.complete['target_version'] != self.memory.version:
@@ -311,7 +317,8 @@ class TrackingTask:
             # establish a new color association instead of following old blue.
             self.reset_tracker()
         self._missing = (self._missing+1 if not (
-            self.target['visible'] and self.target['associated']) else 0)
+            self.target['visible'] and self.target['associated'] or
+            self.target.get('precise_candidate')) else 0)
         unsent_hover = self.arm is not None and self.arm.snapshot().get('pending_stage') == 'hover'
         if (self._missing >= self.config['tracking'].get('confirmation_frames', 3) and
                 (self.planning is not None or unsent_hover)):
@@ -332,20 +339,21 @@ class TrackingTask:
             fine_budget_ms=self.config.get('tracking_task', {}).get('fine_budget_ms', 20))
         session = self.factories[purpose](fine_config, self.clock)
         self.metrics['fine_started'] += 1
+        source=self.coarse.get('visual_evidence') or {}
+        bbox=(list(source['bbox_px']) if source.get('associated') is True and
+              source.get('ambiguous') is False and source.get('bbox_px') else None)
         self.job = {'session': session, 'purpose': purpose,
             'target_version': self.memory.version, 'paired_coarse': dict(self.coarse),
+            'localization_bbox_px':bbox,
             'request_id': self.decision.get('fine_request_id'),
             'number': self.metrics['fine_started']}
         self._record('tracking_fine_started', dict(purpose=purpose,
             frame_id=frame['frame_id'], target_version=self.memory.version,
             capture_timestamp_ms=frame['capture_timestamp_ms']))
         try:
-            session.start(image, frame, self.coarse.get('bbox_px') if purpose == 'moving' else None)
+            session.start(image, frame, bbox)
         except Exception as exc:
-            session.latest = dict(frame, schema='aic.vision_observation.v1', mode='precise',
-                                  status='no_complete_face', reason=str(exc))
-            session.latest_ready_ms = self.clock()
-            session.phase = None
+            self._fault('fine_start',exc)
 
     def _advance_job(self):
         if self.job is None:
@@ -354,10 +362,8 @@ class TrackingTask:
         try:
             job['session'].advance()
         except Exception as exc:
-            job['session'].latest = dict(job['paired_coarse'], mode='precise',
-                status='no_complete_face', reason=str(exc))
-            job['session'].latest_ready_ms = self.clock()
-            job['session'].phase = None
+            self._fault('fine_compute',exc)
+            return
         if not job['session'].phase:
             observation = job['session'].latest
             if observation.get('status') == 'localized' or observation.get('range_candidate'):
@@ -379,6 +385,8 @@ class TrackingTask:
                 frame_id=job['session'].latest.get('frame_id'),
                 status=observation.get('status'),
                 target_association=(observation.get('target_association') or {}).get('status'),
+                reason=observation.get('reason'),search=observation.get('search'),
+                request_id=job['request_id'],
                 elapsed_ms=age_ms(job['session'].latest_ready_ms,
                     job['session'].latest.get('capture_timestamp_ms', job['session'].latest_ready_ms))))
             self._save_job()
@@ -495,11 +503,24 @@ class TrackingTask:
                         self.drive.phase in ('settling', 'observing', 'observe')) and self._missing >=
                         self.config['tracking'].get('confirmation_frames', 3)):
                     event['search'] = True
-                eligible = self.complete if self.target.get('target_valid') else None
+                eligible = self.complete if (self.target.get('target_valid') or
+                                              self.target.get('precise_candidate')) else None
+                outstanding_request=(self.drive._fine_request or {}).get('request_id')
                 self.decision = self.drive.update(self.coarse, self.state, self.clock(),
                     precise=eligible, target_version=self.memory.version,
                     fine_pending=self.job is not None, target_event=event,
                     arm_active=self.arm is not None or self.planning is not None)
+                if self.decision.get('reset_tracker'):
+                    self.reset_tracker()
+                if self.complete is not None and not self.decision.get('precise_deferred'):
+                    self._record('tracking_fine_consumed',dict(
+                        purpose=self.complete['purpose'],
+                        frame_id=self.complete['observation'].get('frame_id'),
+                        offered_request_id=self.complete.get('request_id'),
+                        outstanding_request_id=outstanding_request,
+                        consumed=self.decision.get('precise_consumed'),
+                        anchor_present=self.drive.anchor is not None,
+                        phase=self.decision.get('phase')))
                 drive_event = (self.decision.get('phase'), self.decision.get('status'),
                     (self.decision.get('command') or '').split(',')[0])
                 if drive_event != self._last_drive_event:
@@ -511,9 +532,17 @@ class TrackingTask:
                 if self.complete is not None and self.decision.get('precise_consumed'):
                     done = self.complete
                     if done['observation'].get('target_association', {}).get('status') == 'matched':
-                        self.memory.bind_precise(done['observation'], done['paired_coarse'],
+                        bound=self.memory.bind_precise(done['observation'], done['paired_coarse'],
                             done['target_version'], self.drive.odometry.since(
                                 done['observation'].get('capture_timestamp_ms', self.clock()), self.clock()))
+                        if not bound:
+                            self.last_parking=None
+                            self.drive.restart_observation(discard_reference=True)
+                            self.decision.update(allow_arm=False,parking=None,phase='settling',
+                                command='STOP' if self.state.get('run') else None)
+                            self._force_observe=True
+                            self._record('tracking_fine_binding_rejected',dict(
+                                frame_id=done['observation'].get('frame_id')))
                 if not self.decision.get('precise_deferred'):
                     self.complete = None
                 if self.decision.get('command'):
@@ -549,7 +578,9 @@ class TrackingTask:
                         except Exception as exc:
                             self._fault('arm_plan', exc)
                     elif (self.decision.get('request_fine') and self.job is None and
-                            self.target.get('target_valid')):
+                            (self.target.get('target_valid') or
+                             self.decision['request_fine']=='static' and
+                             self.target.get('precise_candidate'))):
                         self._start_job(self.decision['request_fine'], image, frame)
         elif self.fault is None and self._status_due():
             try:

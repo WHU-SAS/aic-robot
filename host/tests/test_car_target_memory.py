@@ -348,8 +348,13 @@ class TargetMemoryTests(unittest.TestCase):
 
     def test_moving_target_explicitly_leaving_view_still_invalidates(self):
         coarse,fine=self.seed()
-        self.memory.update(self.visual((500,-600,0),distance_valid=False,
-            edge_directions=['left']),motion_state={'run':1})
+        # Same target moves across the image before its left side is clipped;
+        # an arbitrary one-frame weak cue at the far edge is not identity.
+        for x in range(600,0,-100):
+            self.memory.update(self.visual(distance_valid=False,
+                center_pixel=[x,520],bbox_px=[x-10,510,20,20]),motion_state={'run':1})
+        self.memory.update(self.visual(distance_valid=False,center_pixel=[6,520],
+            bbox_px=[0,510,12,20],edge_directions=['left']),motion_state={'run':1})
         state=self.memory.update(self.absent(),motion_state={'run':1})
         self.assertEqual(state['event'],'exited')
         self.assertEqual(state['version'],1)
@@ -392,11 +397,16 @@ class TargetMemoryTests(unittest.TestCase):
         self.assertFalse(self.memory.snapshot()['needs_precise'])
 
     def test_explicit_edge_departure_is_distinct_from_a_central_occlusion(self):
-        self.seed()
-        self.memory.update(self.visual((500,-600,0),distance_valid=False,
-            edge_directions=['left']))
+        # A coarse-valid target can already be near the edge. Its continuous
+        # weak clipped remainder then supports an explicit departure.
+        near=self.visual(center_pixel=[20,520],bbox_px=[10,510,20,20])
+        self.memory.update(near)
+        self.assertTrue(self.memory.bind_precise(self.precise(near),near,0))
+        self.memory.update(self.visual(distance_valid=False,
+            center_pixel=[6,520],bbox_px=[0,510,12,20],edge_directions=['left']))
         state=self.memory.update(self.absent())
         self.assertEqual(state['event'],'exited');self.assertEqual(state['version'],1)
+        self.assertFalse(state['anchor_valid'])
         self.assertEqual(state['last_disappearance_direction'],'left')
         for unused in range(20):state=self.memory.update(self.absent())
         self.assertEqual(state['version'],1)
@@ -411,6 +421,37 @@ class TargetMemoryTests(unittest.TestCase):
         self.assertTrue(state['target_valid'])
         self.memory.invalidate('another_real_recovery')
         self.assertEqual(self.memory.version,2)
+
+    def test_new_epoch_full_query_can_seed_weak_identity_without_reviving_old_fine(self):
+        old_coarse,old_fine=self.seed()
+        self.memory.invalidate('target_changed')
+        # Supplying the new version cannot re-label a pre-change photo.
+        self.assertFalse(self.memory.bind_precise(old_fine,old_coarse,1))
+        current=self.visual((500,230,0),distance_valid=False,
+            reason='inconsistent_with_20mm_height',association_confirmations=3)
+        state=self.memory.update(current)
+        self.assertTrue(state['precise_candidate'])
+        self.assertFalse(state['associated'])
+        self.assertFalse(state['target_valid'])
+        fine=self.precise(current)
+        self.assertFalse(self.memory.bind_precise(fine,current,1))
+        fine['target_association']={'status':'matched'}
+        self.assertFalse(self.memory.bind_precise(fine,current,0))
+        range_only=dict(fine,status='no_complete_face')
+        self.assertFalse(self.memory.bind_precise(range_only,current,1))
+        self.assertTrue(self.memory.bind_precise(fine,current,1))
+        state=self.memory.snapshot()
+        self.assertTrue(state['anchor_valid'])
+        self.assertTrue(state['target_valid'])
+        self.assertFalse(state['associated'])
+        self.assertTrue(state['needs_precise'])
+        # Only a subsequent current image can resume target identity.
+        state=self.memory.update(self.visual((500,230,0),distance_valid=False,
+            reason='inconsistent_with_20mm_height',association_confirmations=4))
+        self.assertTrue(state['associated'])
+        self.assertFalse(state['needs_precise'])
+        self.assertEqual(state['version'],1)
+        self.assertFalse(self.memory.bind_precise(old_fine,old_coarse,1))
 
     def test_recovery_latch_cannot_clear_and_retrigger_during_ready_delay(self):
         self.seed();self.memory.invalidate('empty_grip')
@@ -631,7 +672,8 @@ class TargetMemoryTests(unittest.TestCase):
     def test_visible_but_unusable_range_does_not_become_absent(self):
         state=self.memory.update(self.visual(distance_valid=False,
             reason='inconsistent_with_20mm_height'))
-        self.assertTrue(state['visible']);self.assertEqual(state['visibility'],'visible')
+        self.assertTrue(state['visible']);self.assertEqual(state['visibility'],'unknown')
+        self.assertFalse(state['associated'])
         self.assertFalse(state['table_distance_valid'])
         self.assertFalse(state['confirmed_moved'])
         self.assertTrue(state['needs_precise'])
@@ -640,7 +682,10 @@ class TargetMemoryTests(unittest.TestCase):
         coarse=self.visual(distance_valid=False,reason='inconsistent_with_20mm_height')
         self.memory.update(coarse)
         self.assertTrue(self.memory.bind_precise(self.precise(coarse),coarse,0))
-        self.assertFalse(self.memory.snapshot()['needs_precise'])
+        state=self.memory.snapshot()
+        self.assertTrue(state['anchor_valid'])
+        self.assertFalse(state['associated'])
+        self.assertTrue(state['needs_precise'])
         for unused in range(5):
             state=self.memory.update(self.visual(distance_valid=False,
                 reason='inconsistent_with_20mm_height'))
@@ -715,8 +760,78 @@ class TargetMemoryTests(unittest.TestCase):
     def test_slow_fine_does_not_clear_geometry_doubt_after_current_pixel_changed(self):
         coarse=self.visual(distance_valid=False);self.memory.update(coarse)
         self.memory.update(self.visual((500,100,0),distance_valid=False))
-        self.assertTrue(self.memory.bind_precise(self.precise(coarse),coarse,0,[]))
+        self.assertFalse(self.memory.bind_precise(self.precise(coarse),coarse,0,[]))
+        self.assertIsNone(self.memory.last_precise)
         self.assertTrue(self.memory.snapshot()['needs_precise'])
+
+    def test_late_full_query_cannot_seed_a_weak_target_that_moved_during_the_solve(self):
+        for recovering in (False,True):
+            with self.subTest(recovering=recovering):
+                self.setUp()
+                if recovering:
+                    self.seed();self.memory.invalidate('target_changed')
+                original_fine=self.memory.last_precise
+                source=self.visual((500,230,0),distance_valid=False,
+                    association_confirmations=3)
+                state=self.memory.update(source)
+                self.assertTrue(state['precise_candidate'])
+                self.assertFalse(state['associated'])
+                # Native identity remains unique and continuous, but this
+                # query-only colour is not part of target motion history.
+                state=self.memory.update(self.visual((500,270,0),distance_valid=False,
+                    association_confirmations=4))
+                self.assertTrue(state['precise_candidate'])
+                self.assertFalse(state['associated'])
+                fine=self.precise(source);fine['target_association']={'status':'matched'}
+                self.assertFalse(self.memory.bind_precise(fine,source,int(recovering),[]))
+                state=self.memory.snapshot()
+                self.assertEqual(state['version'],int(recovering))
+                self.assertEqual(state['last_precise'],original_fine)
+                self.assertEqual(state['target_valid'],not recovering)
+                self.assertFalse(state['anchor_valid'])
+                self.assertTrue(state['needs_precise'])
+
+    def test_late_weak_full_query_uses_current_input_and_encoder_rebased_native_ray(self):
+        for change in ('stationary','mask_expansion','encoder_motion'):
+            with self.subTest(change=change):
+                self.setUp()
+                source=self.visual(distance_valid=False,association_confirmations=3)
+                self.memory.update(source)
+                deltas=[(250,250)] if change=='encoder_motion' else []
+                point=(250,30,0) if deltas else (500,30,0)
+                current=self.visual(point,distance_valid=False,association_confirmations=4)
+                if change=='mask_expansion':
+                    current['visual_evidence']['bbox_px']=[640,480,60,60]
+                state=self.memory.update(current,deltas)
+                self.assertFalse(state['associated'])
+                self.assertIsNone(state['last_seen'])
+                fine=self.precise(source);fine['target_association']={'status':'matched'}
+                if deltas:
+                    # The same image change would be stale target geometry
+                    # without the capture-to-now wheel evidence.
+                    self.assertFalse(self.memory.bind_precise(fine,source,0,[]))
+                self.assertTrue(self.memory.bind_precise(fine,source,0,deltas))
+                self.assertFalse(self.memory.snapshot()['associated'])
+                state=self.memory.update(dict(current,frame_id=self.stamp+100,
+                    capture_timestamp_ms=self.stamp+100,timestamp_ms=self.stamp+100))
+                self.assertTrue(state['associated'])
+                self.assertFalse(state['needs_precise'])
+                self.assertEqual(state['version'],0)
+
+    def test_late_weak_full_query_needs_current_unique_input(self):
+        for interrupted in ('missing','ambiguous'):
+            with self.subTest(interrupted=interrupted):
+                self.setUp()
+                source=self.visual(distance_valid=False,association_confirmations=3)
+                self.memory.update(source)
+                current=(self.absent() if interrupted=='missing' else
+                    self.visual(distance_valid=False,associated=False,
+                        ambiguous=True,candidate_count=2))
+                self.memory.update(current)
+                fine=self.precise(source);fine['target_association']={'status':'matched'}
+                self.assertFalse(self.memory.bind_precise(fine,source,0,[]))
+                self.assertIsNone(self.memory.last_precise)
+                self.assertIsNone(self.memory._identity_visual)
 
     def test_ambiguous_targets_do_not_fall_back_to_legacy_largest_blob(self):
         self.seed()

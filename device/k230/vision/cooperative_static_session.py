@@ -28,7 +28,7 @@ def _decode(jpeg):
     return image
 
 
-def localize_steps(image, K, D, T, table_plane=None, allow_legacy=True):
+def localize_steps(image, K, D, T, table_plane=None, allow_legacy=True, bbox_px=None):
     """Resolve the existing raw detector lazily; no detector runs on import."""
     if type(allow_legacy) is not bool:
         raise ValueError('allow_legacy must be a boolean')
@@ -38,6 +38,8 @@ def localize_steps(image, K, D, T, table_plane=None, allow_legacy=True):
         from vision import localize_steps as solve
     if allow_legacy:
         return solve(image, K, D, T, table_plane)
+    if bbox_px is not None:
+        return solve(image, K, D, T, table_plane, allow_legacy=False, bbox_px=bbox_px)
     return solve(image, K, D, T, table_plane, allow_legacy=False)
 
 
@@ -97,7 +99,8 @@ class CooperativeStaticPickSession:
         self.frame = dict(frame)
         if isinstance(self.frame.get('image_size_px'), (list, tuple)):
             self.frame['image_size_px'] = list(self.frame['image_size_px'])
-        # Provenance only: full localization keeps its original candidate range.
+        # Shared-side tracking may seed its full side search from this frame's
+        # colour candidate. Legacy full recovery keeps its original search.
         self.bbox = list(bbox) if bbox is not None else None
         self.latest = self.latest_ready_ms = self.phase = None
         self.steps = self.bgr = None
@@ -161,7 +164,9 @@ class CooperativeStaticPickSession:
                     args = (self.bgr, K, intr['distortion_coefficients'],
                             c['extrinsics']['T_Base_from_Camera_mm'], c['table_plane'])
                     if self.localization_policy == 'shared_side_only':
-                        self.steps = localize_steps(*args, allow_legacy=False)
+                        options={'allow_legacy':False}
+                        if self.bbox is not None:options['bbox_px']=self.bbox
+                        self.steps = localize_steps(*args, **options)
                     else:
                         self.steps = localize_steps(*args)
                 event = next(self.steps)

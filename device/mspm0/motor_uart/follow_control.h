@@ -2,7 +2,7 @@
 #define AIC_FOLLOW_CONTROL_H
 #include "straight_control.h"
 
-/* Continuous forward wheel-speed control. Updates preserve PI and ramp state;
+/* Continuous signed wheel-speed control. Updates preserve PI and ramp state;
  * unequal wheel targets intentionally steer, with no equal-distance correction. */
 typedef struct {
     uint32_t previous_a, previous_b;
@@ -18,13 +18,24 @@ static inline void follow_begin(FollowControl *s, uint32_t a, uint32_t b)
 static inline int16_t follow_wheel(float target, float speed, float *reference,
                                    float *integral, int16_t previous)
 {
+    float previous_reference = *reference;
     *reference += straight_clip(target - *reference,
         -STRAIGHT_ACCEL_MM_S2 * 0.01f, STRAIGHT_ACCEL_MM_S2 * 0.01f);
-    if (*reference <= 0) {
+    if (*reference == 0) {
         /* The straight PI's fixed breakaway feedforward must not drive zero. */
         *integral = 0;
         return remote_ramp(previous, 0);
     }
+    if ((*reference < 0 && previous_reference > 0) ||
+        (*reference > 0 && previous_reference < 0)) *integral = 0;
+    if ((*reference < 0 && previous > 0) || (*reference > 0 && previous < 0)) {
+        /* Finish this wheel's PWM ramp to zero before applying reverse drive.
+         * The other wheel retains its independent reference and PI state. */
+        *integral = 0;
+        return remote_ramp(previous, 0);
+    }
+    if (*reference < 0) return (int16_t)-straight_wheel(-*reference, -speed,
+        integral, (int16_t)-previous);
     return straight_wheel(*reference, speed, integral, previous);
 }
 
@@ -42,6 +53,7 @@ static inline void follow_step(FollowControl *s, RemoteControl *motor,
     motor->right_pwm = follow_wheel(motor->right_speed, s->speed_right,
         &s->reference_right, &s->integral_right, motor->right_pwm);
     motor->target_left = motor->left_pwm; motor->target_right = motor->right_pwm;
-    motor->pwm = motor->left_pwm > motor->right_pwm ? motor->left_pwm : motor->right_pwm;
+    uint16_t left = remote_magnitude(motor->left_pwm), right = remote_magnitude(motor->right_pwm);
+    motor->pwm = left > right ? left : right;
 }
 #endif

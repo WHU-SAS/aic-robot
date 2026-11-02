@@ -3,6 +3,7 @@ import copy
 import unittest
 
 from device.k230.car.blue_tracker import BlueTracker
+from device.k230.car.target_memory import TargetMemory
 from device.k230.car.observations import for_approach
 from device.k230.vision.runtime import track_coarse
 
@@ -28,6 +29,9 @@ class Image:
 
 
 class Projection:
+    normal = [0.,0.,1.]
+    offset = 0.
+
     def __init__(self, ratio=1):
         self.ratio = ratio
 
@@ -35,6 +39,10 @@ class Projection:
         return {'ground_contact_proxy_Base_mm': [box[0]+200., 0., 0.],
                 'expected_vertical_height_px': box[3]/self.ratio,
                 'observed_to_expected_height_ratio': self.ratio}
+
+    def base_to_pixel(self, point): return list(point[:2])
+    def pixel_to_plane(self, pixel, height_mm=0): return list(pixel)+[height_mm]
+    def camera_table_foot(self): return [0.,0.,0.]
 
 
 class VisualEvidenceTests(unittest.TestCase):
@@ -128,6 +136,140 @@ class VisualEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence['bbox_px'][0], 0)
         self.assertEqual(evidence['reason'], 'clipped_blob')
         self.assertFalse(evidence['distance_valid'])
+
+    def test_short_gap_keeps_identity_gate_for_weak_noise_and_resets_navigation(self):
+        target=Blob([604,277,109,142])
+        for stamp in (0,50,100):self.tracker.detect_frame(Image(target),stamp)
+        self.tracker.detect_frame(Image(),150)
+        self.tracker.projection.ratio=4
+        result=self.tracker.detect_frame(Image(Blob([353,341,9,5],31)),200)
+        self.assertTrue(result['visual_evidence']['visible'])
+        self.assertFalse(result['visual_evidence']['associated'])
+        self.assertFalse(result['visual_evidence']['navigation_confirmed'])
+        # Both dimensions matter: a thin strip matching the old height does
+        # not gain identity from that height alone.
+        result=self.tracker.detect_frame(Image(Blob([604,277,9,142])),250)
+        self.assertFalse(result['visual_evidence']['associated'])
+        self.tracker.projection.ratio=1
+        for stamp,count in ((300,1),(350,2),(400,3)):
+            result=self.tracker.detect_frame(Image(target),stamp)
+            self.assertEqual(result['confirmations'],count)
+            self.assertEqual(result['status'],'tracking' if count==3 else 'confirming')
+
+    def test_ambiguous_gap_does_not_turn_an_unrelated_weak_edge_into_our_target(self):
+        target=Blob([604,277,109,142])
+        self.tracker.detect_frame(Image(target),0)
+        self.tracker.detect_frame(Image(target,Blob([610,280,109,142])),50)
+        result=self.tracker.detect_frame(Image(Blob([0,915,11,5],27)),100)
+        self.assertTrue(result['visual_evidence']['visible'])
+        self.assertEqual(result['visual_evidence']['edge_directions'],['left'])
+        self.assertFalse(result['visual_evidence']['associated'])
+
+    def test_tracker_memory_rejects_recorded_tiny_noise_even_after_tracker_reacquires(self):
+        class RecordedBlob(Blob):
+            def __init__(self,box,pixels,center):
+                super().__init__(box,pixels);self.center=center
+            def cx(self):return self.center[0]
+            def cy(self):return self.center[1]
+        class RecordedProjection(Projection):
+            def blob_geometry(self,box):
+                self.ratio=4 if box[2]<20 else 1
+                return super().blob_geometry(box)
+        projection=RecordedProjection();tracker=BlueTracker(self.config,projection)
+        memory=TargetMemory(projection,{'tracking':self.config})
+        def update(blobs,stamp):
+            frame=dict(self.frame,frame_id=stamp,capture_timestamp_ms=stamp,timestamp_ms=stamp)
+            coarse=for_approach(track_coarse(Image(*blobs),frame,tracker.detect_frame),'coarse')
+            return coarse,memory.update(coarse,motion_state={'run':1})
+        target=RecordedBlob([604,277,109,142],11587,[649.,346.])
+        for stamp in (0,50,100):coarse,state=update([target],stamp)
+        fine={'schema':'aic.vision_observation.v1','mode':'precise','status':'localized',
+            'frame_id':100,'capture_timestamp_ms':100,'timestamp_ms':100,
+            'clock_domain':'k230_ticks_ms','image_size_px':[1280,960],
+            'coordinate_frame':'Base','units':'mm','reference_point':'cube_geometric_center',
+            'xy_compensation_applied':False,'cube_center_Base_mm':[650,346,10]}
+        self.assertTrue(memory.bind_precise(fine,coarse,0))
+        trusted=memory.last_seen
+        update([],150)
+        # Frozen native noise sizes/pixel counts from interrupted_run.json.
+        interior=RecordedBlob([353,341,9,5],31,[357.,343.])
+        edge=RecordedBlob([0,915,11,5],27,[6.,917.])
+        for stamp,blobs in ((200,[interior]),(250,[interior]),(700,[edge]),
+                            (750,[interior,edge]),(800,[])):
+            coarse,state=update(blobs,stamp)
+            self.assertEqual(state['version'],0)
+            self.assertFalse(state['confirmed_moved'])
+            self.assertFalse(state['associated'])
+            self.assertTrue(state['anchor_valid'])
+            self.assertTrue(state['target_valid'])
+            self.assertTrue(state['needs_precise'])
+            self.assertEqual(state['last_seen'],trusted)
+            self.assertIsNone(state['last_disappearance_direction'])
+            if stamp==750:
+                # The detector may legitimately acquire fresh colour after
+                # its old reference expires; target identity stays separate.
+                self.assertTrue(coarse['visual_evidence']['associated'])
+                self.assertEqual(coarse['visual_evidence']['bbox_px'],[0,915,11,5])
+                self.assertEqual(coarse['visual_evidence']['center_pixel'],[6.,917.])
+
+    def test_tracker_memory_preserves_continuous_crop_then_explicit_exit(self):
+        projection=Projection();tracker=BlueTracker(self.config,projection)
+        memory=TargetMemory(projection,{'tracking':self.config})
+        def update(box,stamp):
+            frame=dict(self.frame,frame_id=stamp,capture_timestamp_ms=stamp,timestamp_ms=stamp)
+            coarse=track_coarse(Image(*(Blob(box),) if box is not None else ()),frame,tracker.detect_frame)
+            return memory.update(coarse,motion_state={'run':1})
+        for stamp,x in enumerate((300,220,140,60)):
+            state=update([x,400,40,40],stamp*50)
+            self.assertEqual(state['version'],0)
+        # Clipping shrinks only the horizontal dimension, each step stays
+        # within the existing identity ratios and centre-jump limit.
+        for stamp,width in ((200,30),(250,15),(300,6)):
+            state=update([0,400,width,40],stamp)
+            self.assertTrue(state['associated'])
+            self.assertFalse(state['table_distance_valid'])
+            self.assertEqual(state['version'],0)
+        state=update(None,350)
+        self.assertEqual(state['event'],'exited')
+        self.assertEqual(state['reason'],'left_view_left')
+        self.assertEqual(state['version'],1)
+
+    def test_stable_initial_weak_candidate_can_query_full_pose_without_claiming_identity(self):
+        projection=Projection(ratio=4);tracker=BlueTracker(self.config,projection)
+        memory=TargetMemory(projection,{'tracking':self.config})
+        def update(stamp,blobs):
+            frame=dict(self.frame,frame_id=stamp,capture_timestamp_ms=stamp,timestamp_ms=stamp)
+            coarse=track_coarse(Image(*blobs),frame,tracker.detect_frame)
+            return coarse,memory.update(coarse)
+        for stamp,count in ((0,1),(50,2),(100,3)):
+            coarse,state=update(stamp,[Blob([300,400,40,40])])
+            self.assertEqual(coarse['visual_evidence']['association_confirmations'],count)
+            self.assertEqual(state['precise_candidate'],count==3)
+            self.assertTrue(state['visible'])
+            self.assertFalse(state['associated'])
+            self.assertFalse(state['table_distance_valid'])
+            self.assertIsNone(state['last_seen'])
+            self.assertIsNone(memory._last_center)
+            self.assertEqual(state['version'],0)
+        # The query path loses qualification with native ambiguity, and the
+        # original three-frame association must be established again.
+        unused,state=update(150,[Blob([300,400,40,40]),Blob([310,400,40,40])])
+        self.assertFalse(state['precise_candidate'])
+        for stamp,count in ((200,1),(250,2),(300,3)):
+            coarse,state=update(stamp,[Blob([300,400,40,40])])
+            self.assertEqual(state['precise_candidate'],count==3)
+        fine={'schema':'aic.vision_observation.v1','mode':'precise','status':'localized',
+            'frame_id':300,'capture_timestamp_ms':300,'timestamp_ms':300,
+            'clock_domain':'k230_ticks_ms','image_size_px':[1280,960],
+            'coordinate_frame':'Base','units':'mm','reference_point':'cube_geometric_center',
+            'xy_compensation_applied':False,'cube_center_Base_mm':[320,420,10],
+            'target_association':{'status':'matched'}}
+        self.assertTrue(memory.bind_precise(fine,coarse,0))
+        self.assertFalse(memory.snapshot()['associated'])
+        unused,state=update(350,[Blob([300,400,40,40])])
+        self.assertTrue(state['associated'])
+        self.assertFalse(state['needs_precise'])
+        self.assertFalse(state['table_distance_valid'])
 
     def test_ambiguous_acquisition_does_not_claim_largest_blob_is_current_target(self):
         result = self.tracker.detect_frame(Image(Blob([300, 400, 40, 40]),

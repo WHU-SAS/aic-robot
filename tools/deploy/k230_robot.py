@@ -87,6 +87,7 @@ def build_bundle(pick_config=None, tracking=False):
         manifest.update(mode='continuous_tracking',
             completion='encoder_grip_confirmed_after_lift',
             continuous_observation=True, requires_mspm0_arc=True,
+            requires_mspm0_signed_follow=True,
             physical_tracking_validated=False)
     manifest['release_id'] = digest(encoded(manifest))[:16]
     files['manifest.json'] = encoded(manifest)

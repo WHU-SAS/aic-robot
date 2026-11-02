@@ -28,6 +28,7 @@ class TrackingBundleTests(unittest.TestCase):
         self.assertTrue(config['car']['tracking_task']['enabled'])
         self.assertEqual(manifest['mode'],'continuous_tracking')
         self.assertTrue(manifest['continuous_observation'])
+        self.assertTrue(manifest['requires_mspm0_signed_follow'])
         self.assertFalse(manifest['physical_tracking_validated'])
         for name in ('robot_tracking.py','target_memory.py','tracking_drive.py',
                      'cooperative_static_session.py','candidate_association.py'):

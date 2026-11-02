@@ -243,7 +243,7 @@ class CooperativeStaticPickSessionTests(unittest.TestCase):
                 self.assertEqual(self.session.latest['status'], 'localized')
                 self.session.take_evidence('full_recovery')
 
-    def test_shared_side_only_disables_legacy_without_changing_inputs_or_search_bbox(self):
+    def test_shared_side_only_uses_the_same_frame_hint_without_recompressing(self):
         config = dict(self.config, tracking_task={'static_localization_policy':'shared_side_only'})
         self.session = self.make_session(config)
         self.session.start(self.image, self.frame, [1, 2, 3, 4])
@@ -252,8 +252,8 @@ class CooperativeStaticPickSessionTests(unittest.TestCase):
         self.assertIs(self.received[0][0], self.bgr)
         self.assertEqual(self.received[0][1], self.config['intrinsics']['camera_matrix'])
         self.assertIs(self.received[0][4], self.config['table_plane'])
-        self.assertEqual(self.received_kwargs, [{'allow_legacy':False}])
-        self.assertEqual(self.generator.call_args.kwargs, {'allow_legacy':False})
+        self.assertEqual(self.received_kwargs, [{'allow_legacy':False,'bbox_px':[1,2,3,4]}])
+        self.assertEqual(self.generator.call_args.kwargs, {'allow_legacy':False,'bbox_px':[1,2,3,4]})
         self.assertEqual(self.compress_calls, [95])
         self.assertEqual(self.session.latest['status'], 'localized')
 

@@ -38,8 +38,15 @@ class TargetMemory:
         self._held_candidate = None
         self._held_region = None
         self._invalidated = False
+        self._epoch_start_stamp = None
+        self._precise_candidate = False
+        self._query_visual = None
         self._last_frame = self._last_stamp = None
         self._last_center = None
+        # Only a measured target or its original full-pose pair can seed this
+        # identity chain. Weak blue may continue it, but cannot start another
+        # trajectory after a detector gap or a shape/position discontinuity.
+        self._identity_visual = None
         self._exit_direction = None
         self._gap = False
         self._gap_ended_at = None
@@ -96,7 +103,7 @@ class TargetMemory:
 
     def _held_match(self, current, previous):
         """Colour/size continuity using tracker limits, not object identity."""
-        if previous is None:
+        if current is None or previous is None:
             return False
         tracking = self.config.get('tracking', {})
         width, height = tracking.get('image_size_px', [1280, 960])
@@ -157,6 +164,8 @@ class TargetMemory:
             self.version += 1
             self._invalidated = True
             self._acquire_count = 0
+            self._epoch_start_stamp = self._last_stamp
+        self._precise_candidate = False
         self._geometry_unknown = True
         self._motion_rows = []
         self._motion_count = 0
@@ -203,6 +212,18 @@ class TargetMemory:
         self._visible = evidence.get('visible') is True
         ambiguous = evidence.get('ambiguous') is True
         self._associated = evidence.get('associated') is True and not ambiguous
+        box, pixel = evidence.get('bbox_px'), evidence.get('center_pixel')
+        native_count = evidence.get('association_confirmations', 0)
+        self._query_visual = ({'bbox_px':list(box),'center_pixel':list(pixel)}
+            if self._visible and self._associated and _point(box,4) and
+            min(box[2:]) > 0 and _point(pixel,2) else None)
+        # Query authority is deliberately weaker than target identity: a
+        # stable native colour candidate may request a stopped full pose,
+        # without becoming a navigation, motion or arm reference.
+        self._precise_candidate = bool(self._visible and self._associated and
+            _point(box,4) and min(box[2:]) > 0 and _point(pixel,2) and
+            isinstance(native_count,(int,float)) and native_count >=
+            self.config.get('tracking',{}).get('confirmation_frames',3))
         point = evidence.get('ground_contact_proxy_Base_mm')
         self._distance_valid = evidence.get('distance_valid') is True and _point(point, 3)
         unique = (self._visible and not ambiguous and
@@ -265,8 +286,21 @@ class TargetMemory:
         self._held_suspect_count = 0
         self._held_candidate = None
         self._held_region = None
-        self._visibility = 'ambiguous' if ambiguous else ('visible' if unique else 'unknown')
         center = evidence.get('center_pixel')
+        bbox = evidence.get('bbox_px', [])
+        visual = ({'center_pixel':list(center), 'bbox_px':list(bbox)}
+                  if _point(center,2) and _point(bbox,4) and min(bbox[2:]) > 0 else None)
+        if unique and not self._distance_valid:
+            # A colour detector's unique/associated flag is not target proof:
+            # after loss it may have acquired a tiny unrelated blue edge.
+            # Retain visibility, but keep its centre and edges out of motion,
+            # exit and reacquisition history until the target supports it.
+            self._associated = self._held_match(visual,self._identity_visual)
+            unique = self._associated
+        if unique and visual is not None and (self._identity_visual is None or
+                self._held_match(visual,self._identity_visual)):
+            self._identity_visual = visual
+        self._visibility = 'ambiguous' if ambiguous else ('visible' if unique else 'unknown')
         if unique and _point(center, 2):
             self._exit_direction = None
             if self._last_center is not None:
@@ -285,6 +319,10 @@ class TargetMemory:
             self._visual_previous = None
             self._moving_jump_candidate = self._moving_jump_origin = None
             self._moving_jump_count = 0
+            if self._visible:
+                # Unrelated or ambiguous blue between the edge observation
+                # and a blank frame does not prove the target left the view.
+                self._exit_direction = None
             if not self._visible and self._exit_direction is not None:
                 direction = self._exit_direction
                 was_invalidated = self._invalidated
@@ -295,9 +333,6 @@ class TargetMemory:
             else:
                 self._event = 'unknown' if not was_gap else 'none'
             return self.snapshot()
-        bbox = evidence.get('bbox_px', [])
-        visual = ({'center_pixel':list(center), 'bbox_px':list(bbox)}
-                  if _point(center,2) and len(bbox) == 4 and min(bbox[2:]) > 0 else None)
         previous_visual = self._visual_previous
         same_visual = visual is not None and self._held_match(visual,previous_visual)
         self._visual_previous = visual
@@ -344,6 +379,7 @@ class TargetMemory:
                 self._moved = not was_invalidated
                 self._event, self._movement_state = 'moved', 'confirmed'
                 self._associated = True
+                self._identity_visual = visual
             self.last_seen = dict(observation)
             return self.snapshot()
         if visual is not None and self._motion_visual is not None and (
@@ -393,6 +429,7 @@ class TargetMemory:
                 self._moved = not was_invalidated
                 self._event,self._movement_state = 'moved','confirmed'
                 self._associated = True
+                self._identity_visual = visual
             self.last_seen = dict(observation)
             return self.snapshot()
         self._geometry_unknown = (not self._associated or
@@ -424,20 +461,63 @@ class TargetMemory:
         and grasp authority remain the coordinator's fresh static verification.
         For a delayed result, wheel_deltas is capture-to-now motion (unlike
         update's per-call increments), used to rebase the paired coarse point.
+        A fresh matched full pose can seed an invalidated current epoch;
+        current-image identity is established by the following update.
         """
-        if version != self.version or self._invalidated:
+        if version != self.version:
             return False
         if (observation.get('frame_id') != coarse.get('frame_id') or
                 observation.get('capture_timestamp_ms') is None or
                 observation.get('capture_timestamp_ms') != coarse.get('capture_timestamp_ms')):
             return False
+        if (self._epoch_start_stamp is not None and
+                age_ms(observation['capture_timestamp_ms'],self._epoch_start_stamp) <= 0):
+            return False
+        evidence = self._evidence(coarse)
+        recovering = self._invalidated
+        if recovering and (observation.get('status') != 'localized' or
+                observation.get('target_association',{}).get('status') != 'matched' or
+                evidence.get('visible') is not True or evidence.get('ambiguous') is True or
+                not _point(evidence.get('center_pixel'),2) or
+                not _point(evidence.get('bbox_px'),4) or min(evidence['bbox_px'][2:]) <= 0):
+            # A new epoch may acquire a fresh full same-frame pose directly.
+            # An old job/range-only result cannot revive the previous target.
+            return False
         try:
             unused, fine_point, unused = distance_anchor(observation)
         except (ValueError, TypeError):
             return False
+        seeding = observation.get('status') == 'localized' and (
+            recovering or self._identity_visual is None or
+            not self._associated and not self._full_anchor())
+        seed_visual = None
+        if seeding:
+            pixel, box = evidence.get('center_pixel'), evidence.get('bbox_px')
+            if (self._query_visual is None or not _point(pixel,2) or
+                    not _point(box,4) or min(box[2:]) <= 0 or
+                    age_ms(self._last_stamp,coarse['capture_timestamp_ms']) < 0):
+                return False
+            # Query-only colour was deliberately excluded from target motion
+            # history. Before this delayed pose can seed identity, check its
+            # original ray against the current query input without turning
+            # that input into target/exit evidence.
+            height = sum(a*b for a,b in zip(self.projection.normal,fine_point))-self.projection.offset
+            try:
+                reference = self.projection.pixel_to_plane(pixel,height)
+                if wheel_deltas is not None:
+                    reference = self._propagate(reference,wheel_deltas)
+                elif coarse['capture_timestamp_ms'] != self._last_stamp:
+                    return False
+                expected = self.projection.base_to_pixel(reference)
+                paired = {'center_pixel':pixel,'bbox_px':box}
+                shift = self._common_translation(self._query_visual,paired,expected)
+                if math.sqrt(sum(value*value for value in shift)) > self._pixel_limit(evidence):
+                    return False
+            except (ValueError, TypeError):
+                return False
+            seed_visual = self._query_visual
         self.last_precise, self.paired_coarse = dict(observation), dict(coarse)
         self._anchor_version = version
-        evidence = self._evidence(coarse)
         proxy = evidence.get('ground_contact_proxy_Base_mm')
         if evidence.get('distance_valid') and _point(proxy, 3):
             if wheel_deltas is not None:
@@ -447,7 +527,25 @@ class TargetMemory:
         elif observation.get('status') == 'localized':
             self._expected = None
         pixel = evidence.get('center_pixel')
+        bound_source = False
         if observation.get('status') == 'localized' and _point(pixel,2):
+            paired_box = evidence.get('bbox_px', [])
+            if _point(paired_box,4) and min(paired_box[2:]) > 0:
+                paired = {'center_pixel':list(pixel),'bbox_px':list(paired_box)}
+                if seeding or coarse['capture_timestamp_ms'] == self._last_stamp:
+                    self._identity_visual = seed_visual or paired
+                if seeding or coarse['capture_timestamp_ms'] == self._last_stamp:
+                    # Full geometry validates this original same-frame weak
+                    # source. Public identity remains unchanged until the
+                    # next update re-associates a current image to this seed.
+                    bound_source = True
+                    self._motion_visual = self._visual_previous = seed_visual or paired
+                    self._last_center = list(self._motion_visual['center_pixel'])
+                    self.last_seen = dict(coarse)
+                    if recovering:
+                        self._invalidated = False
+                        self._associated = False
+                        self._gap = True
             height = sum(a*b for a,b in zip(self.projection.normal,fine_point))-self.projection.offset
             try:
                 reference = self.projection.pixel_to_plane(pixel,height)
@@ -457,7 +555,7 @@ class TargetMemory:
                     reference = None
                 current = self._motion_visual
                 paired_box = evidence.get('bbox_px', [])
-                if (reference is not None and self._associated and self._visible and
+                if (reference is not None and (bound_source or self._associated and self._visible) and
                         current is not None and len(paired_box) == 4):
                     paired = {'center_pixel':pixel,'bbox_px':paired_box}
                     expected = self.projection.base_to_pixel(reference)
@@ -487,6 +585,7 @@ class TargetMemory:
         return {'version':self.version, 'event':self._event,
             'confirmed_moved':self._moved, 'visibility':self._visibility,
             'visible':self._visible, 'associated':self._associated,
+            'precise_candidate':self._precise_candidate,
             'table_distance_valid':self._distance_valid and self._associated,
             'movement_state':self._movement_state, 'target_valid':not self._invalidated,
             'anchor_valid':anchor, 'needs_precise':not anchor or self._invalidated or

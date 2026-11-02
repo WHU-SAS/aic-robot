@@ -426,6 +426,44 @@ class FullLocalizationStepsTests(unittest.TestCase):
                 self.assertLessEqual(actual['poses'][0]['face_reprojection_rms_px'], 2.)
                 np.testing.assert_allclose(actual['cube_center_Base_mm'], [10., -10., -10.], atol=3.)
 
+    def test_stopped_session_uses_same_frame_hint_through_real_side_solver(self):
+        from device.k230.vision.cooperative_static_session import CooperativeStaticPickSession
+        image, transform = self.synthetic_scene(.7)
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        mask = cv2.inRange(hsv, (90, 120, 220), (140, 255, 255))
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        top_hint = list(cv2.boundingRect(max(contours, key=cv2.contourArea)))
+        # A larger distant blue object must not redirect this stopped query.
+        cv2.rectangle(image, (50, 500), (450, 800), (180, 120, 10), -1)
+        config = {'intrinsics': {'camera_matrix': self.K, 'distortion_coefficients': self.D,
+                                'image_width': 1280, 'image_height': 960},
+                  'extrinsics': {'T_Base_from_Camera_mm': transform},
+                  'table_plane': self.plane,
+                  'tracking_task': {'static_localization_policy': 'shared_side_only'}}
+        frame = {'frame_id': 7, 'capture_timestamp_ms': 100,
+                 'image_size_px': [1280, 960], 'clock_domain': 'k230_ticks_ms',
+                 'timestamp_source': 'software_snapshot_call'}
+        def compressed(quality):
+            ok, jpeg = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, quality])
+            self.assertTrue(ok)
+            return SimpleNamespace(bytearray=lambda: bytearray(jpeg.tobytes()))
+        outcomes = []
+        for hint in (None, top_hint):
+            session = CooperativeStaticPickSession(config, lambda: 100)
+            with patch.object(physical_side, 'localize_steps', wraps=physical_side.localize_steps) as solver:
+                session.start(SimpleNamespace(compressed=compressed), frame, hint)
+                for _ in range(10000):
+                    if session.phase is None:
+                        break
+                    session.advance()
+                self.assertIsNone(session.phase)
+                self.assertEqual(solver.call_args.args[2], hint)
+            outcomes.append(session.latest)
+        self.assertEqual(outcomes[0]['status'], 'no_complete_face')
+        self.assertEqual(outcomes[1]['status'], 'localized', outcomes[1])
+        self.assertEqual(outcomes[1]['frame_id'], 7)
+        np.testing.assert_allclose(outcomes[1]['cube_center_Base_mm'], [10., -10., -10.], atol=3.)
+
 
 if __name__ == '__main__':
     unittest.main()

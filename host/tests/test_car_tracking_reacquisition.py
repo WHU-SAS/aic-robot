@@ -18,7 +18,7 @@ from device.k230.arm.pick_execution import PickExecution
 from device.k230.robot.tracking import TrackingTask
 from device.k230.vision.runtime import track_coarse
 from tools.deploy.k230_robot import build_bundle
-from host.tests.test_robot_tracking import Clock, Motor, ArmIO, PLAN, synthetic_fine_match
+from host.tests.test_robot_tracking import Clock, Motor, ArmIO, PLAN, synthetic_fine_match, is_search_spin
 
 
 # The flat box comes from fa30's abnormal-motion log. Its being a supplied blue
@@ -108,7 +108,8 @@ class TrackingReacquisitionTests(unittest.TestCase):
     def setUp(self): self.chain = Chain(copy.deepcopy(self.config))
 
     def assert_no_forward(self, row):
-        self.assertFalse((row['decision'].get('command') or '').startswith(('FOLLOW,','SPEED,')))
+        command=row['decision'].get('command') or ''
+        self.assertTrue(not command.startswith(('FOLLOW,','SPEED,')) or is_search_spin(command))
 
     def test_ambiguous_legacy_history_cannot_authorize_one_unique_frame(self):
         smaller = ([900,222,40,35],700)
@@ -180,7 +181,7 @@ class TrackingReacquisitionTests(unittest.TestCase):
         self.chain.drive.request_search('left')
         self.chain.sample([])
         row = self.chain.sample([])
-        self.assertTrue(row['decision']['command'].startswith('ARC,'))
+        self.assertTrue(is_search_spin(row['decision']['command']))
         for unused in range(2):
             row = self.chain.sample([FAR],run=1)
             self.assert_no_forward(row)
@@ -294,8 +295,8 @@ class TrackingReacquisitionTests(unittest.TestCase):
 
     def test_real_tracker_search_then_near_reacquisition_finishes_grasp(self):
         task,motor = self.near_task_success(initial_missing=3)
-        self.assertTrue(any(command.startswith('ARC,') for stamp,command in motor.commands))
-        self.assertFalse(any(command.startswith(('FOLLOW,','SPEED,'))
+        self.assertTrue(any(is_search_spin(command) for stamp,command in motor.commands))
+        self.assertFalse(any(command.startswith(('FOLLOW,','SPEED,')) and not is_search_spin(command)
                              for stamp,command in motor.commands))
 
     def run_task(self, scene, ticks=180):
@@ -348,15 +349,16 @@ class TrackingReacquisitionTests(unittest.TestCase):
         self.assertIsNone(task.fault)
         commands = [command for stamp,command in motor.commands]
         backwards = [command for command in commands if command == 'ARC,-10,-10']
-        self.assertEqual(len(backwards),1,commands)
-        self.assertTrue(any(command.startswith('ARC,') and command != 'ARC,-10,-10'
-                            for command in commands))
+        # One distant cube cannot become a tiny bottom edge in a single frame.
+        # That flash supplies no verified departure and earns no blind retreat.
+        self.assertEqual(len(backwards),0,commands)
+        self.assertTrue(any(is_search_spin(command) for command in commands))
         self.assertTrue(any(row['status'] == 'lost' for row in observed))
         self.assertGreater(task._missing,0)
         self.assertIsNone(task.fault)
         self.assertEqual(task.metrics['arm_attempts'],0)
-        first_search = next(stamp for stamp,command in motor.commands if command.startswith('ARC,'))
-        self.assertFalse(any(command.startswith(('FOLLOW,','SPEED,'))
+        first_search = next(stamp for stamp,command in motor.commands if is_search_spin(command))
+        self.assertFalse(any(command.startswith(('FOLLOW,','SPEED,')) and not is_search_spin(command)
             for stamp,command in motor.commands if stamp >= first_search))
 
     def test_task_three_missing_frames_dispatch_search_without_an_exit_event(self):
@@ -365,12 +367,13 @@ class TrackingReacquisitionTests(unittest.TestCase):
         task,motor,observed = self.run_task(scene,ticks=100)
         self.assertIsNone(task.fault)
         commands = [command for stamp,command in motor.commands]
-        self.assertTrue(any(command.startswith('ARC,') for command in commands))
-        self.assertFalse(any(command.startswith(('FOLLOW,','SPEED,')) for command in commands))
+        self.assertTrue(any(is_search_spin(command) for command in commands))
+        self.assertFalse(any(command.startswith(('FOLLOW,','SPEED,')) and not is_search_spin(command)
+                             for command in commands))
         # Three initial blank captures trigger the coordinator's missing
         # policy before any blue cue can produce an exit/movement event.
-        first_arc = next(stamp for stamp,command in motor.commands if command.startswith('ARC,'))
-        self.assertLessEqual(first_arc,300)
+        first_spin = next(stamp for stamp,command in motor.commands if is_search_spin(command))
+        self.assertLessEqual(first_spin,300)
         self.assertIsNone(task.fault)
         self.assertEqual(task.metrics['arm_attempts'],0)
         self.assertTrue(all(not (item['visual_evidence'].get('edge_directions')) for item in observed))

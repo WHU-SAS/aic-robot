@@ -24,6 +24,11 @@ def synthetic_fine_match(coarse, observation):
             'source':'synthetic_fine_api_fixture'}
 
 
+def is_search_spin(command):
+    parts=command.split(',')
+    return len(parts)==3 and parts[0] in ('FOLLOW','SPEED') and int(parts[1])*int(parts[2])<0
+
+
 class Clock:
     def __init__(self): self.ms = 0
     def now(self): return self.ms
@@ -197,7 +202,8 @@ class RobotTrackingTests(unittest.TestCase):
         evidence = dict(visible=True,associated=True,ambiguous=False,candidate_count=1,
             center_pixel=pixel,bbox_px=[int(pixel[0])-30,int(pixel[1])-30,60,60],
             pixels=3600,timestamp_ms=frame['capture_timestamp_ms'],
-            distance_valid=distance_valid,edge_directions=[])
+            distance_valid=distance_valid,navigation_confirmed=distance_valid,
+            association_confirmations=3,edge_directions=[])
         if not distance_valid: evidence['reason']='inconsistent_with_20mm_height'
         if distance_valid: evidence['ground_contact_proxy_Base_mm'] = contact
         return dict(frame,schema='aic.vision_observation.v1',mode='coarse',status='tracking',
@@ -246,7 +252,8 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertEqual(saved['paired_coarse']['frame_id'], saved['frame_id'])
         self.assertEqual(saved['paired_coarse']['capture_timestamp_ms'],
                          saved['capture_timestamp_ms'])
-        self.assertIsNone(saved['localization_bbox_px'])
+        self.assertEqual(saved['localization_bbox_px'],
+                         saved['paired_coarse']['visual_evidence']['bbox_px'])
         self.assertFalse(any(c.startswith(('FOLLOW','SPEED','ARC')) for t,c in self.motor.commands))
 
     def test_far_start_reaches_parking_and_grasp_with_one_moving_and_one_static_image(self):
@@ -332,6 +339,62 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertEqual(len(self.arms),1)
         self.assertEqual(self.handoffs[0][1]['target_association']['status'],'matched')
         self.assertEqual(self.task.memory.last_precise['target_association']['status'],'matched')
+
+    def test_real_association_moving_range_requires_later_static_full_pose_before_arm(self):
+        self.x=650
+        self.use_real_association_with_synthetic_pose()
+        projected=self.Fine.advance
+        def moving_range(session):
+            projected(session)
+            if session.index!=0 or session.latest is None or session.phase is not None:
+                return
+            point=session.latest.pop('cube_center_Base_mm')
+            session.latest['status']='no_complete_face'
+            session.latest['range_candidate']={
+                'schema':'aic.car.side_range.v1','status':'range_candidate',
+                'coordinate_frame':'Base','units':'mm','Base_X_mm':point[0],
+                'raw_center_Base_mm':point,'not_arm_or_parking_authority':True,
+                'selected_faces':copy.deepcopy(session.latest['payload']['side_faces'])}
+        self.Fine.advance=moving_range
+        for unused in range(1000):
+            self.tick()
+            if self.task.memory.last_precise is not None:
+                break
+        else:
+            self.fail('Moving range was not consumed by Memory and Drive')
+        distance=self.task.memory.last_precise
+        self.assertEqual(distance['status'],'no_complete_face')
+        self.assertNotIn('cube_center_Base_mm',distance)
+        self.assertEqual(distance['target_association']['status'],'matched')
+        self.assertEqual(distance['target_association']['geometry_capability'],'moving_range')
+        self.assertTrue(distance['range_candidate']['not_arm_or_parking_authority'])
+        self.assertEqual(self.task.drive.anchor['frame_id'],distance['frame_id'])
+        self.assertEqual(self.task.drive.anchor['range_candidate'],distance['range_candidate'])
+        self.assertFalse(self.task.decision.get('allow_arm'))
+        self.assertIsNone(self.task.drive.parking)
+        self.assertIsNone(self.task.last_parking)
+        self.assertFalse(self.handoffs)
+        self.assertFalse(self.arms)
+        moving_frame=distance['frame_id']
+        result=self.finish()
+        completed=[(details['purpose'],details['status'],details['target_association'])
+            for event,details in self.events if event=='tracking_fine_completed']
+        self.assertEqual(completed,[('moving','no_complete_face','matched'),
+                                    ('static','localized','matched')])
+        self.assertEqual(result['status'],'succeeded')
+        self.assertEqual(result['metrics']['arm_attempts'],1)
+        self.assertEqual(len(self.handoffs),1)
+        handoff=self.handoffs[0][1]
+        self.assertEqual(handoff['status'],'localized')
+        self.assertNotIn('range_candidate',handoff)
+        self.assertEqual(handoff['target_association']['geometry_capability'],'full_pose')
+        static=next(item for item in self.task.evidence
+            if item['frame']['tracking_purpose']=='static')
+        self.assertEqual(handoff['frame_id'],static['frame']['frame_id'])
+        self.assertNotEqual(handoff['frame_id'],moving_frame)
+        moving=next(item for item in self.task.evidence
+            if item['frame']['tracking_purpose']=='moving')
+        self.assertIn('range_candidate',moving['observation'])
 
     def test_real_association_helper_blocks_same_frame_other_cube_before_consumption(self):
         destination=self.point()
@@ -626,12 +689,10 @@ class RobotTrackingTests(unittest.TestCase):
                 break
         else:
             self.fail('The synthetic occlusion never finished')
-        # Fake ARC completes a whole turn immediately. After several hidden
-        # frames its target is outside the image; do not ask an out-of-frame
-        # fake tracking result to authorize a new grasp. Real tracker
-        # reacquisition is covered in test_car_tracking_reacquisition.
+        # The persistent gap must release the unsent hover and start searching.
+        # Real tracker reacquisition is covered in test_car_tracking_reacquisition.
         self.assertEqual([e[0] for e in self.arms[0].io.events],['close'])
-        self.assertTrue(any(c.startswith('ARC,') for t,c in self.motor.commands))
+        self.assertTrue(any(is_search_spin(c) for t,c in self.motor.commands))
         self.assertIsNone(self.task.fault)
         self.assertEqual(self.task.status,'running')
 
@@ -667,7 +728,7 @@ class RobotTrackingTests(unittest.TestCase):
                     self.assertEqual(result['metrics']['fine_started'],1)
                 else:
                     self.assertEqual([e[0] for e in self.arms[0].io.events],['close'])
-                    self.assertTrue(any(c.startswith('ARC,') for t,c in self.motor.commands))
+                    self.assertTrue(any(is_search_spin(c) for t,c in self.motor.commands))
                     self.assertIsNone(self.task.fault)
                     self.assertEqual(self.task.status,'running')
 
@@ -676,6 +737,62 @@ class RobotTrackingTests(unittest.TestCase):
         self.finish()
         self.assertEqual(len(self.arms),1)
         self.assertFalse(any(c.startswith(('FOLLOW','ARC')) for t,c in self.motor.commands))
+
+    def test_new_epoch_weak_candidate_can_reacquire_with_a_fresh_full_pose(self):
+        self.geometry_invalid=True
+        self.task.memory.invalidate('test_new_epoch')
+        self.use_real_association_with_synthetic_pose()
+        result=self.finish()
+        self.assertEqual(result['status'],'succeeded')
+        self.assertEqual(result['target_version'],1)
+        self.assertEqual(len(self.arms),1)
+        self.assertFalse(any(c.startswith(('FOLLOW','SPEED','ARC')) for t,c in self.motor.commands))
+
+    def test_weak_target_moving_during_first_fine_rejects_old_pose_and_rephotographs(self):
+        self.geometry_invalid=True
+        self.move_when=lambda:self.task.job is not None and self.task.job['session'].ticks>=5
+        for unused in range(500):
+            self.tick()
+            rejected=any(event=='tracking_fine_binding_rejected' for event,details in self.events)
+            if rejected and self.task.metrics['fine_started']>=2:break
+        else:self.fail(self.task.snapshot())
+        self.assertFalse(self.arms)
+        self.assertFalse(self.task.drive._awaiting_query_identity)
+        self.assertFalse(any(c.startswith(('FOLLOW','SPEED','ARC')) for t,c in self.motor.commands))
+
+    def test_motion_applied_then_ack_lost_still_issues_stop_with_stale_host_state(self):
+        self.x=650
+        expect=self.motor.expect
+        lost=[]
+        def lose_once(command):
+            result=expect(command)
+            if command.startswith('FOLLOW,') and not lost:
+                lost.append(True)
+                raise OSError('ACK lost after MCU applied movement')
+            return result
+        self.motor.expect=lose_once
+        self.tick()
+        self.assertTrue(lost)
+        self.assertEqual(self.motor.run,0)
+        self.assertIn('ACK lost',self.task.fault)
+        self.assertEqual(self.motor.commands[-1][1],'STOP')
+
+    def test_fine_resource_failure_stops_without_turning_for_another_view(self):
+        def fail(session):raise MemoryError('BGR allocation exhausted')
+        self.Fine.advance=fail
+        self.tick(100)
+        self.assertIn('fine_compute',self.task.fault)
+        self.assertIsNone(self.task.job)
+        self.assertFalse(any(c.startswith(('FOLLOW','SPEED','ARC')) for t,c in self.motor.commands))
+        self.assertEqual(self.motor.run,0)
+
+    def test_fault_logging_failure_cannot_prevent_stop_or_fault_latch(self):
+        self.motor.expect('FOLLOW,40,40')
+        self.task.emit=lambda *args:(_ for _ in ()).throw(OSError('log unavailable'))
+        self.task._fault('test','communication uncertain')
+        self.assertEqual(self.motor.run,0)
+        self.assertEqual(self.task.fault,'test: communication uncertain')
+        self.assertEqual(self.motor.commands[-1][1],'STOP')
 
     def test_only_scene_plan_unavailable_changes_view_not_bad_calibration(self):
         original=self.task.begin_arm
@@ -703,8 +820,24 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertGreaterEqual(self.task.metrics['fine_started'],5)
         self.assertLessEqual(len(self.task.evidence),2)
         self.assertGreaterEqual(self.task.metrics['obsolete_frames_released'],3)
-        self.assertTrue(all(item['frame']['target_version']==self.task.memory.version
-                            for item in self.task.evidence))
+        self.assertEqual(len({item['frame']['tracking_purpose'] for item in self.task.evidence}),
+                         len(self.task.evidence))
+
+    def test_target_loss_preserves_the_last_failed_static_image_for_diagnosis(self):
+        self.fail_every_fine=True
+        self.tick(200)
+        saved=next(item for item in self.task.evidence
+                   if item['frame']['tracking_purpose']=='static')
+        old_frame=copy.deepcopy(saved['frame'])
+        self.assertEqual(saved['observation']['status'],'no_complete_face')
+        self.task.memory.invalidate('test_confirmed_departure')
+        self.task._release_evidence(self.task.memory.version)
+        self.assertIn(saved,self.task.evidence)
+        self.assertEqual(saved['frame'],old_frame)
+        self.assertNotEqual(saved['frame']['target_version'],self.task.memory.version)
+        self.assertFalse(self.task.memory.bind_precise(saved['observation'],
+            old_frame['paired_coarse'],old_frame['target_version']))
+        self.assertFalse(self.arms)
 
     def test_broken_evidence_copy_does_not_skip_exit_stop(self):
         while self.task.job is None: self.tick()

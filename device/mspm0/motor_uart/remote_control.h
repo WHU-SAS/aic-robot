@@ -24,7 +24,7 @@ typedef struct {
     uint16_t distance_mm, last_distance_mm;
     bool reverse_move, last_reverse_move;
     int16_t angle_deg, last_angle_deg;
-    uint16_t left_speed, right_speed, last_left_speed, last_right_speed;
+    int16_t left_speed, right_speed, last_left_speed, last_right_speed;
     int16_t arc_left_mm, arc_right_mm, last_arc_left_mm, last_arc_right_mm;
 } RemoteControl;
 
@@ -55,7 +55,8 @@ static inline MotorResult remote_request(RemoteControl *s, const MotorParser *re
         remote_magnitude(request->right_pwm) > MOTOR_PWM_LIMIT ||
         !request->duration_ticks || request->duration_ticks > REMOTE_RUN_TICKS)) return RES_INVALID;
     if ((cmd == CMD_FOLLOW || cmd == CMD_SPEED) &&
-        (request->left_speed > 80 || request->right_speed > 80)) return RES_INVALID;
+        (remote_magnitude(request->left_speed) > 80 ||
+         remote_magnitude(request->right_speed) > 80)) return RES_INVALID;
     if (cmd == CMD_STATUS) return RES_OK; /* Does not renew the run lease. */
     if (s->has_sequence && (int32_t)(sequence - s->last_sequence) <= 0) {
         /* Even a delayed STOP removes drive. Never restart or renew on replay. */

@@ -17,20 +17,26 @@ class BlueTracker:
     def __init__(self, config, projection):
         self.config, self.projection = config, projection
         self.previous = None
+        # Navigation confirmation resets on a gap. Keep the short-lived
+        # identity reference separately, so the next weak patch is not a new
+        # acquisition merely because one frame was missing or ambiguous.
+        self._association_previous = None
         self.confirmations = 0
         self.association_confirmations = 0
 
     def reset(self):
         self.previous, self.confirmations = None, 0
+        self._association_previous = None
         self.association_confirmations = 0
 
     def _match(self, candidate, old):
         width, height = self.config['image_size_px']
         dx = (candidate['center_pixel'][0]-old['center_pixel'][0])/width
         dy = (candidate['center_pixel'][1]-old['center_pixel'][1])/height
-        ratio = candidate['bbox_px'][3]/old['bbox_px'][3]
+        ratios = [candidate['bbox_px'][k]/old['bbox_px'][k] for k in (2, 3)]
         if (math.sqrt(dx*dx+dy*dy) <= self.config['max_center_jump_fraction'] and
-                1/self.config['max_size_ratio'] <= ratio <= self.config['max_size_ratio']):
+                all(1/self.config['max_size_ratio'] <= ratio <= self.config['max_size_ratio']
+                    for ratio in ratios)):
             return dx*dx+dy*dy
         return None
 
@@ -56,7 +62,7 @@ class BlueTracker:
             'candidate_count': len(cues), 'timestamp_ms': timestamp_ms,
             'distance_valid': False, 'edge_directions': [], 'reason': 'no_blue_evidence',
             'confirmations': 0, 'association_confirmations': 0, 'navigation_confirmed': False}
-        old = self.previous
+        old = self.previous or self._association_previous
         if not cues:
             return None, evidence
         independent = self._independent(candidates)
@@ -72,12 +78,13 @@ class BlueTracker:
         # At acquisition, original tabletop checks can distinguish a unique
         # cube candidate from unrelated weak blue patches. Do not choose the
         # largest of multiple equally plausible targets.
-        pool = matched if matched else (independent if old is None and independent else active)
+        pool = matched if matched else (independent if self.previous is None and independent else active)
         if len(pool) != 1:
             evidence.update(ambiguous=True, reason='ambiguous_blue_candidates')
             return None, evidence
         selected = pool[0]
-        associated = old is None or bool(matched)
+        associated = (bool(matched) or old is None or
+                      (self.previous is None and selected['distance_valid']))
         for key in ('bbox_px', 'center_pixel', 'pixels', 'edge_directions'):
             evidence[key] = selected[key]
         width = self.config['image_size_px'][0]
@@ -138,6 +145,9 @@ class BlueTracker:
         if self.previous is not None and not 0 < age_ms(timestamp_ms, self.previous['timestamp_ms']) <= c['max_age_ms']:
             self.previous, self.confirmations = None, 0
             self.association_confirmations = 0
+        if (self._association_previous is not None and not
+                0 < age_ms(timestamp_ms, self._association_previous['timestamp_ms']) <= c['max_age_ms']):
+            self._association_previous = None
         had_measurement = self.confirmations > 0
         selected, evidence = self._select(cues, candidates, timestamp_ms)
         if selected is None or not evidence['associated']:
@@ -147,6 +157,7 @@ class BlueTracker:
                     'candidates': candidates, 'visual_candidates': cues,
                     'rejected': rejected, 'visual_evidence': evidence}
         self.previous = selected
+        self._association_previous = selected
         self.association_confirmations += 1
         evidence['association_confirmations'] = self.association_confirmations
         if not selected['distance_valid']:

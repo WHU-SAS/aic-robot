@@ -10,6 +10,7 @@
   "movement_distance_fraction": 0.1,
   "movement_confirmation_frames": 2,
   "search_angle_deg": 10,
+  "search_speed_mm_s": 20,
   "reobserve_angle_deg": 5,
   "reobserve_reverse_mm": 10,
   "notes": "User-approved startup-priority scheduling: moving observation100ms; stopped full precise localization and arm planning observation250ms; stopped chassis STATUS500ms independently, with fresh checks at handoff. Tracking static localization uses shared_side_only: complete physical-side verification or a new viewpoint, without legacy single-image exhaustive recovery. Background20ms is a soft slice, not a hard real-time guarantee. Continuous coarse estimates bearing/distance; precise corrects both on demand. Recovery thresholds remain initial candidates; no correction/attempt limit or new task-terminal condition. Existing calibration, inset window, near-quarter target and drive speeds remain. Hardware activation awaits commissioning."

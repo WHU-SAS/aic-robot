@@ -41,15 +41,23 @@ PC单图入口、独立抓取及小车`observations.py`已接入该协议。部�
 
 主要文件：`pick/side_faces.py`负责侧面搜索与面积选择，`reflection_faces.py`负责反光/分界及边缘测量，`top_boundaries.py`验证顶面，`pose.py`解算位姿，`table_pose.py`处理桌面约束。PC与K230共用这些文件。
 
-## 下一版分步精定位（未部署）
+## 分步精定位与追踪候选
 
-`CooperativeStaticPickSession(config, clock_ms)`使用同一张JPEG95，`start(image, frame, bbox=None)`后每次`advance()`只解码或推进一个检测步骤。`phase=None`表示结束，只有`latest`是完整观测；`latest_ready_ms`是处理完成时间，不替换原采集时刻。相机仍由整车唯一持有，`bbox`仅留来源记录，不改变原搜索范围。
+已安装的追踪版`0d5e760691b3ba45`整车试验未通过并已STOP；以下同帧搜索提示、候选权限及异常诊断修复属于当前离线候选，尚未安装，不能当作现场通过。整车状态与成对固件要求见[全流程追踪](full-process-tracking.md)。
 
-追踪静态入口通过`tracking_task.static_localization_policy=shared_side_only`只做共享完整侧面精定位，保留其静态局部恢复、候选预算和全部数值门槛；失败返回`no_complete_face`及原`search/rejected`，交整车换视角，不在同图继续旧全量恢复，也不返回部分坐标。旧独立、离线及未设此字段的分步入口默认`full_recovery`，保持原恢复链。底层`pick/vision.py:localize_steps(..., allow_legacy=False)`提供相同策略。
+`CooperativeStaticPickSession(config, clock_ms)`使用同一张JPEG95，`start(image, frame, bbox=None)`后每次`advance()`只解码或推进一个检测步骤。`phase=None`表示结束，只有已正常发布的`latest`是观测；`latest_ready_ms`是处理完成时间，不替换原采集时刻，相机仍由整车唯一持有。
+
+追踪静态入口通过`tracking_task.static_localization_policy=shared_side_only`只做共享完整侧面精定位。仅该策略将同帧唯一关联粗候选的原`bbox`传入共享侧面搜索作为提示，保留静态局部恢复、候选预算、四边、2px、面积选择和桌面约束等全部标准。提示不能补边、提供坐标或替代完成后的严格`target_association`检查：仍用原粗质心与实际选中姿态的完整20mm方块投影核对，同帧号或搜索ROI本身不能证明选中同一物体。关联不确定时保留原解作诊断，清除下游XYZ／测距能力，继续观察恢复。
+
+正常视觉拒绝返回`no_complete_face`及原`search/rejected`，交整车换视角，不在同图继续旧全量恢复，也不返回部分坐标。旧独立、离线及未设此字段的分步入口默认`full_recovery`，保持原搜索范围及恢复链，不使用这个`bbox`提示。底层`pick/vision.py:localize_steps(..., allow_legacy=False, bbox_px=...)`提供该共享侧面策略。
 
 分步结果不在完成前提供抓取坐标。预算取`tracking_task.fine_budget_ms`，其次`near_parking.fine_budget_ms`，默认20ms；每步记录实际耗时与`over_budget`，单个OpenCV或候选处理仍可超时，属于软预算。禁用旧恢复不是硬时限，也不保证原来依赖顶面或旧恢复的图仍会成功。观察和串口应按截止时间交织，不必每个检测步骤都重新拍图。
 
-目标版本由整车绑定到采集帧。`cancel()`关闭所有未完生成器、释放BGR并清除旧结果，JPEG保留；`take_evidence(label)`在运行中会先取消，再复制原图。旧图证据未取走时不能开始下一张，取消帧不能被贴上新版本再用于抓取。
+目标版本由整车绑定到采集帧。`cancel()`关闭所有未完生成器、释放BGR并清除旧结果，JPEG保留；`take_evidence(label)`在运行中会先取消，再复制原图。旧图证据未取走时不能开始下一张，取消帧不能被贴上新版本再用于抓取。整车RAM跨版本各保留最近一张行进图和一张静态图供诊断，同用途新图替换旧图，另可有正在计算的一张；原版本、采集时间、配对粗测和实际搜索框一并留存。诊断留图不保留导航、停车或抓取权限。
+
+颜色线索的方位、精测查询、目标身份和桌面距离是不同能力。稳定且可检查的外观可在粗距离无效或原目标身份未恢复时请求停车精测；`precise_candidate`只授权这次查询，不更新目标运动参考、不证明旧目标移位或建立新行程。弱线索只有与可信完整框具备连续的位置和尺度支持，才可参与原目标移动／出画确认；陌生小蓝片保持未知。完整精测通过同帧严格关联后才能建立新几何。停车测量失败时，同版本历史近处几何及里程预测只供小幅恢复，不能当新观测或抓取坐标；新静态完整图仍须通过原停车验窗及交臂条件。
+
+压图、解码、求解器协议、相机或串口等运行异常向任务层报告真实故障；整车先尝试`STOP`再归档／清理并进入`fault_wait`，不把异常包装成正常视觉拒绝。处理中断或取消图记为`processing_interrupted`，不提供旧XYZ；保留JPEG及错误阶段便于离线诊断。正常边界或位姿验证拒绝仍按原视觉恢复流程处理。
 
 ## 标定与采集
 
