@@ -77,6 +77,8 @@ void TIMER_0_INST_IRQHandler(void)
     elapsed_ms += 10;
     remote_step(&control, DL_GPIO_readPins(KEY_PORT, KEY_key_PIN) == 0);
     if (control.follow_mode) follow_step(&follow, &control, encoder_a_total, encoder_b_total);
+    else if (control.arc_mode) straight_short_step(&straight, &control, encoder_a_total,
+        encoder_b_total, 8);
     else if (control.angle_deg) turn_step(&turn, &control, encoder_a_total, encoder_b_total);
     else straight_step(&straight, &control, encoder_a_total, encoder_b_total);
     motor_output(control.running, control.left_pwm, control.right_pwm);
@@ -117,13 +119,16 @@ static void put_string(UART_Regs *uart, const char *text)
 static void respond(const MotorParser *request)
 {
     char body[160], frame[180];
-    static const char *const names[] = {"STATUS", "START", "STOP", "HB", "DRIVE", "MOVE", "TURN", "FOLLOW", "SPEED"};
+    static const char *const names[] = {"STATUS", "START", "STOP", "HB", "DRIVE", "MOVE", "TURN", "FOLLOW", "SPEED", "ARC"};
     RemoteControl snapshot;
     uint32_t ms, a, b;
     __disable_irq();
     MotorResult result = remote_request(&control, request);
     if (request->command == CMD_MOVE && result == RES_OK)
         straight_begin(&straight, encoder_a_total, encoder_b_total);
+    if (request->command == CMD_ARC && result == RES_OK)
+        straight_short_begin(&straight, encoder_a_total, encoder_b_total,
+            request->arc_left_mm, request->arc_right_mm);
     if (request->command == CMD_TURN && result == RES_OK)
         turn_begin(&turn, encoder_a_total, encoder_b_total);
     if (request->command == CMD_FOLLOW && result == RES_OK)
@@ -164,7 +169,7 @@ int main(void)
     NVIC_EnableIRQ(TIMER_0_INST_INT_IRQN);
     DL_Timer_startCounter(TIMER_0_INST);
     __enable_irq();
-    put_string(UART0, "AIC_MOTOR_UART_READY v2+MOVE+TURN+FOLLOW 115200 PWM=0 STBY=0\r\n");
+    put_string(UART0, "AIC_MOTOR_UART_READY v2+MOVE+TURN+FOLLOW+ARC 115200 PWM=0 STBY=0\r\n");
     for (;;) {
         if (!DL_UART_Main_isRXFIFOEmpty(UART1) &&
             motor_feed(&parser, DL_UART_Main_receiveData(UART1))) respond(&parser);

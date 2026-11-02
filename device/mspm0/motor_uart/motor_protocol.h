@@ -10,7 +10,7 @@
  * An '@' always resynchronizes, including inside an incomplete frame. */
 #define MOTOR_PWM_LIMIT 1600
 typedef enum { CMD_STATUS, CMD_START, CMD_STOP, CMD_HEARTBEAT, CMD_DRIVE, CMD_MOVE, CMD_TURN,
-               CMD_FOLLOW, CMD_SPEED } MotorCommand;
+               CMD_FOLLOW, CMD_SPEED, CMD_ARC } MotorCommand;
 typedef struct {
     char data[48];
     size_t used;
@@ -23,6 +23,7 @@ typedef struct {
     bool reverse_move;
     int16_t angle_deg; /* Positive left, negative right; single-wheel forward arc. */
     uint16_t left_speed, right_speed; /* mm/s, physical forward is positive. */
+    int16_t arc_left_mm, arc_right_mm; /* Signed relative wheel travel. */
 } MotorParser;
 
 static inline uint16_t motor_crc(const char *text, size_t size)
@@ -81,6 +82,7 @@ static inline bool motor_parse(MotorParser *p)
     p->reverse_move = false;
     p->angle_deg = 0;
     p->left_speed = p->right_speed = 0;
+    p->arc_left_mm = p->arc_right_mm = 0;
     if (!strcmp(name, "STATUS")) p->command = CMD_STATUS;
     else if (!strcmp(name, "START")) p->command = CMD_START;
     else if (!strcmp(name, "STOP")) p->command = CMD_STOP;
@@ -112,6 +114,14 @@ static inline bool motor_parse(MotorParser *p)
         if (!motor_number(name + 5, strlen(name + 5), 30, true, &degrees) || !degrees) return false;
         p->command = CMD_TURN;
         p->angle_deg = (int16_t)degrees;
+    }
+    else if (!strncmp(name, "ARC,", 4)) {
+        const char *left = name + 4, *split = strchr(left, ',');
+        int32_t l, r;
+        if (!split || !motor_number(left, (size_t)(split-left), 32767, true, &l) ||
+            !motor_number(split+1, strlen(split+1), 32767, true, &r)) return false;
+        p->command = CMD_ARC;
+        p->arc_left_mm = (int16_t)l; p->arc_right_mm = (int16_t)r;
     }
     else if (!strncmp(name, "FOLLOW,", 7) || !strncmp(name, "SPEED,", 6)) {
         bool follow = name[0] == 'F';

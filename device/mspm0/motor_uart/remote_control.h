@@ -8,11 +8,11 @@
 #define REMOTE_RUN_TICKS 500U
 #define REMOTE_FOLLOW_RUN_TICKS 2000U
 #define REMOTE_LEASE_TICKS 100U
-/* Stop reasons: boot=0, command=1, B21=2, deadline=3, heartbeat=4, pulse=5, distance=6, angle=7.
+/* Stop reasons: boot=0, command=1, B21=2, deadline=3, heartbeat=4, pulse=5, distance=6, angle=7, arc=8.
  * Deadline is 5s for existing modes, 20s only for FOLLOW. */
 typedef enum { RES_OK, RES_DUPLICATE, RES_STALE, RES_BUSY, RES_INVALID } MotorResult;
 typedef struct {
-    bool running, has_sequence, follow_mode;
+    bool running, has_sequence, follow_mode, arc_mode;
     bool button_candidate, button_stable;
     uint8_t button_ticks, stop_reason;
     uint16_t pwm, run_ticks, lease_ticks;
@@ -25,6 +25,7 @@ typedef struct {
     bool reverse_move, last_reverse_move;
     int16_t angle_deg, last_angle_deg;
     uint16_t left_speed, right_speed, last_left_speed, last_right_speed;
+    int16_t arc_left_mm, arc_right_mm, last_arc_left_mm, last_arc_right_mm;
 } RemoteControl;
 
 static inline uint16_t remote_magnitude(int16_t value)
@@ -41,6 +42,8 @@ static inline void remote_stop(RemoteControl *s, uint8_t reason)
     s->reverse_move = false;
     s->angle_deg = 0;
     s->follow_mode = false;
+    s->arc_mode = false;
+    s->arc_left_mm = s->arc_right_mm = 0;
     s->left_speed = s->right_speed = 0;
     s->stop_reason = reason;
 }
@@ -63,6 +66,8 @@ static inline MotorResult remote_request(RemoteControl *s, const MotorParser *re
         if (cmd == CMD_MOVE) same = same && request->distance_mm == s->last_distance_mm &&
             request->reverse_move == s->last_reverse_move;
         if (cmd == CMD_TURN) same = same && request->angle_deg == s->last_angle_deg;
+        if (cmd == CMD_ARC) same = same && request->arc_left_mm == s->last_arc_left_mm &&
+            request->arc_right_mm == s->last_arc_right_mm;
         if (cmd == CMD_FOLLOW || cmd == CMD_SPEED) same = same &&
             request->left_speed == s->last_left_speed && request->right_speed == s->last_right_speed;
         return same ? RES_DUPLICATE : RES_STALE;
@@ -76,6 +81,7 @@ static inline MotorResult remote_request(RemoteControl *s, const MotorParser *re
     s->last_reverse_move = request->reverse_move;
     s->last_angle_deg = request->angle_deg;
     s->last_left_speed = request->left_speed; s->last_right_speed = request->right_speed;
+    s->last_arc_left_mm = request->arc_left_mm; s->last_arc_right_mm = request->arc_right_mm;
     if (cmd == CMD_STOP) remote_stop(s, 1);
     else if (cmd == CMD_HEARTBEAT) {
         if (s->running) s->lease_ticks = 0;
@@ -84,19 +90,26 @@ static inline MotorResult remote_request(RemoteControl *s, const MotorParser *re
         if (!s->running || !s->follow_mode) return RES_BUSY;
         s->left_speed = request->left_speed; s->right_speed = request->right_speed;
         s->lease_ticks = 0;
-    } else if (cmd == CMD_START || cmd == CMD_DRIVE || cmd == CMD_MOVE || cmd == CMD_TURN || cmd == CMD_FOLLOW) {
+    } else if (cmd == CMD_START || cmd == CMD_DRIVE || cmd == CMD_MOVE || cmd == CMD_TURN || cmd == CMD_FOLLOW || cmd == CMD_ARC) {
         if (cmd == CMD_DRIVE && !request->left_pwm && !request->right_pwm) {
             remote_stop(s, 1);
             return RES_OK;
         }
         if (s->running) return RES_BUSY;
         if (s->button_stable || s->button_candidate) return RES_BUSY;
+        if (cmd == CMD_ARC && !request->arc_left_mm && !request->arc_right_mm) {
+            remote_stop(s, 8); /* Explicit zero-distance capability query. */
+            return RES_OK;
+        }
         s->running = true;
         s->pwm = s->run_ticks = s->lease_ticks = 0;
         s->left_pwm = s->right_pwm = 0;
         s->target_left = cmd == CMD_START ? REMOTE_PWM_TARGET : request->left_pwm;
         s->target_right = cmd == CMD_START ? REMOTE_PWM_TARGET : request->right_pwm;
         s->follow_mode = cmd == CMD_FOLLOW;
+        s->arc_mode = cmd == CMD_ARC;
+        s->arc_left_mm = s->arc_mode ? request->arc_left_mm : 0;
+        s->arc_right_mm = s->arc_mode ? request->arc_right_mm : 0;
         s->duration_ticks = cmd == CMD_DRIVE ? request->duration_ticks :
             (s->follow_mode ? REMOTE_FOLLOW_RUN_TICKS : REMOTE_RUN_TICKS);
         s->distance_mm = cmd == CMD_MOVE ? request->distance_mm : 0;
@@ -138,7 +151,7 @@ static inline void remote_step(RemoteControl *s, bool button_pressed)
     if (s->run_ticks >= (s->follow_mode ? REMOTE_FOLLOW_RUN_TICKS : REMOTE_RUN_TICKS)) remote_stop(s, 3);
     else if (s->lease_ticks >= REMOTE_LEASE_TICKS) remote_stop(s, 4);
     else if (s->run_ticks >= s->duration_ticks) remote_stop(s, 5);
-    else if (!s->distance_mm && !s->angle_deg && !s->follow_mode) {
+    else if (!s->distance_mm && !s->angle_deg && !s->follow_mode && !s->arc_mode) {
         s->left_pwm = remote_ramp(s->left_pwm, s->target_left);
         s->right_pwm = remote_ramp(s->right_pwm, s->target_right);
         uint16_t left = remote_magnitude(s->left_pwm), right = remote_magnitude(s->right_pwm);

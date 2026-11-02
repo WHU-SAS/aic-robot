@@ -60,6 +60,104 @@ static void simulate(float gain_left, float gain_right, float coast_s, uint32_t 
     assert(fabs(average-distance) <= tolerance && fabs(left-right) < 2);
 }
 
+typedef struct { float gain_l,gain_r,dead_l,dead_r,tau; } ShortPlant;
+static double short_max_error, short_max_difference, short_max_passive;
+static unsigned short_cases, arc_cases, short_max_ms;
+static double long_arc_max_error, long_arc_max_passive;
+static unsigned long_arc_cases, long_arc_max_ms;
+
+/* These varied gain/dead-zone/inertia plants are not identified vehicle
+ * parameters. They exercise tiny targets that the former >=30mm tests missed. */
+static void simulate_short(ShortPlant plant, int left_goal, int right_goal,
+                           bool arc, uint32_t origin)
+{
+    RemoteControl motor={0}; StraightControl control; MotorParser request={0};
+    request.sequence=1;
+    if(arc) {
+        request.command=CMD_ARC;
+        request.arc_left_mm=left_goal; request.arc_right_mm=right_goal;
+    } else {
+        assert(left_goal==right_goal);
+        request.command=CMD_MOVE; request.distance_mm=abs(left_goal);
+        request.reverse_move=left_goal<0;
+    }
+    assert(remote_request(&motor,&request)==RES_OK);
+    if(arc) straight_short_begin(&control,origin,origin,left_goal,right_goal);
+    else straight_begin(&control,origin,origin);
+    double left=0,right=0,vl=0,vr=0;
+    bool left_latched=false,right_latched=false;
+    unsigned ticks=0;
+    for(;ticks<500&&motor.running;++ticks) {
+        if(ticks%10==0)remote_command(&motor,ticks+2,CMD_HEARTBEAT);
+        remote_step(&motor,false);
+        uint32_t a=origin+(uint32_t)(int32_t)lround(left/STRAIGHT_MM_PER_COUNT);
+        uint32_t b=origin-(uint32_t)(int32_t)lround(right/STRAIGHT_MM_PER_COUNT);
+        if(arc)straight_short_step(&control,&motor,a,b,8);
+        else straight_step(&control,&motor,a,b);
+        assert((left_goal<0 ? -motor.left_pwm : motor.left_pwm)>=0);
+        assert((right_goal<0 ? -motor.right_pwm : motor.right_pwm)>=0);
+        assert(remote_magnitude(motor.left_pwm)<=REMOTE_PWM_TARGET);
+        assert(remote_magnitude(motor.right_pwm)<=REMOTE_PWM_TARGET);
+        if(!left_goal||left_latched)assert(!motor.left_pwm);
+        if(!right_goal||right_latched)assert(!motor.right_pwm);
+        left_latched=left_latched||control.left_done;
+        right_latched=right_latched||control.right_done;
+        if(left_latched)assert(!motor.left_pwm);
+        if(right_latched)assert(!motor.right_pwm);
+        double target_l=(motor.left_pwm<0 ? -1:1)*
+            fmax(0,remote_magnitude(motor.left_pwm)-plant.dead_l)*plant.gain_l;
+        double target_r=(motor.right_pwm<0 ? -1:1)*
+            fmax(0,remote_magnitude(motor.right_pwm)-plant.dead_r)*plant.gain_r;
+        /* A zero-PWM passive wheel can roll while the other drives. */
+        if(!left_goal)target_l+=.03*vr;
+        if(!right_goal)target_r+=.03*vl;
+        vl+=(target_l-vl)*.01/plant.tau;
+        vr+=(target_r-vr)*.01/plant.tau;
+        left+=vl*.01;right+=vr*.01;
+    }
+    if(motor.running||motor.stop_reason!=(arc?8:6)||ticks>=500)
+        fprintf(stderr,"tiny completion goals=%d/%d actual=%.3f/%.3f dead=%.0f/%.0f tau=%.2f ticks=%u reason=%u\n",
+            left_goal,right_goal,left,right,plant.dead_l,plant.dead_r,plant.tau,ticks,motor.stop_reason);
+    assert(!motor.running&&motor.stop_reason==(arc?8:6)&&ticks<500);
+    assert(left_latched&&right_latched);
+    for(unsigned tick=0;tick<200;++tick) {
+        vl+=-vl*.01/plant.tau;vr+=-vr*.01/plant.tau;
+        left+=vl*.01;right+=vr*.01;
+        remote_step(&motor,false);
+        if(arc)straight_short_step(&control,&motor,origin,origin,8);
+        else straight_step(&control,&motor,origin,origin);
+        assert(!motor.running&&!motor.left_pwm&&!motor.right_pwm);
+    }
+    double error=fmax(fabs(left-left_goal),fabs(right-right_goal));
+    bool long_arc=arc&&(abs(left_goal)>STRAIGHT_SHORT_LIMIT_MM||abs(right_goal)>STRAIGHT_SHORT_LIMIT_MM);
+    if(long_arc) {
+        double active_error=fmax(left_goal?fabs(left-left_goal):0,right_goal?fabs(right-right_goal):0);
+        double passive=fmax(left_goal?0:fabs(left),right_goal?0:fabs(right));
+        if(active_error>long_arc_max_error)long_arc_max_error=active_error;
+        if(!left_goal&&fabs(left)>long_arc_max_passive)long_arc_max_passive=fabs(left);
+        if(!right_goal&&fabs(right)>long_arc_max_passive)long_arc_max_passive=fabs(right);
+        if(ticks*10>long_arc_max_ms)long_arc_max_ms=ticks*10;
+        ++long_arc_cases;
+        /* Larger arcs retain the 5s deadline and the 1mm driven-wheel
+         * model bound; passive travel is separately bounded by 3% coupling.
+         * Neither bound is a physical accuracy claim. */
+        if(active_error>1.)fprintf(stderr,"long ARC goals=%d/%d actual=%.3f/%.3f tau=%.2f\n",
+            left_goal,right_goal,left,right,plant.tau);
+        assert(active_error<=1.);
+        assert(passive<=.031*fmax(abs(left_goal),abs(right_goal)));
+        return;
+    }
+    if(error>short_max_error)short_max_error=error;
+    if(!arc&&fabs(left-right)>short_max_difference)short_max_difference=fabs(left-right);
+    if(!left_goal&&fabs(left)>short_max_passive)short_max_passive=fabs(left);
+    if(!right_goal&&fabs(right)>short_max_passive)short_max_passive=fabs(right);
+    if(ticks*10>short_max_ms)short_max_ms=ticks*10;
+    if(error>1.)fprintf(stderr,"tiny model goals=%d/%d actual=%.3f/%.3f dead=%.0f/%.0f tau=%.2f\n",
+        left_goal,right_goal,left,right,plant.dead_l,plant.dead_r,plant.tau);
+    assert(error<=1.); /* Model regression target, not physical acceptance. */
+    if(arc)++arc_cases;else ++short_cases;
+}
+
 int main(void)
 {
     simulate(0.20f,0.18f,0.08f,0,150,900,1000);
@@ -113,5 +211,32 @@ int main(void)
     straight_begin(&straight,0,0);
     for(unsigned i=0;i<3;++i){remote_step(&motor,true);straight_step(&straight,&motor,0,0);}
     assert(!motor.running && motor.stop_reason==2 && !motor.left_pwm && !motor.right_pwm);
+    const ShortPlant plants[]={
+        {.20f,.18f,900,1000,.03f},{.20f,.18f,900,1000,.06f},
+        {.20f,.18f,900,1000,.08f},{.17f,.16f,900,1000,.12f},
+        {.23f,.20f,900,1000,.06f},{.20f,.20f,900,600,.08f},
+        {.20f,.20f,600,900,.08f},{.20f,.18f,1000,1050,.08f},
+        {.20f,.18f,1050,1000,.08f},{.20f,.18f,1100,1000,.08f}};
+    const int lengths[]={3,6,7,12,20,30};
+    const int arcs[][2]={{2,9},{9,2},{0,9},{9,0},{3,-5},{1,9},{9,1}};
+    const int long_arcs[][2]={{31,31},{31,-31},{0,31},{60,60},{60,-60},{60,0},
+        {100,100},{100,-100},{0,100},{1,63},{2,64},{38,100},{0,62},
+        {31,1},{63,1},{64,2},{100,38},{62,0},{100,-38}};
+    for(unsigned model=0;model<sizeof(plants)/sizeof(*plants);++model)
+        for(int direction=-1;direction<=1;direction+=2) {
+            for(unsigned goal=0;goal<sizeof(lengths)/sizeof(*lengths);++goal)
+                simulate_short(plants[model],direction*lengths[goal],direction*lengths[goal],
+                    false,model%2?0xFFFFFF00U:0);
+            for(unsigned goal=0;goal<sizeof(arcs)/sizeof(*arcs);++goal)
+                simulate_short(plants[model],direction*arcs[goal][0],direction*arcs[goal][1],
+                    true,model%2?0xFFFFFF00U:0);
+            for(unsigned goal=0;goal<sizeof(long_arcs)/sizeof(*long_arcs);++goal)
+                simulate_short(plants[model],direction*long_arcs[goal][0],direction*long_arcs[goal][1],
+                    true,model%2?0xFFFFFF00U:0);
+        }
+    printf("tiny/ARC model cases=%u/%u max wheel error=%.3fmm, straight difference=%.3fmm, passive roll=%.3fmm, max=%ums\n",
+        short_cases,arc_cases,short_max_error,short_max_difference,short_max_passive,short_max_ms);
+    printf("long ARC models=%u max driven-wheel error=%.3fmm, passive roll=%.3fmm, max=%ums\n",
+        long_arc_cases,long_arc_max_error,long_arc_max_passive,long_arc_max_ms);
     puts("PASS: distance models, asymmetric wheels, wrap, one stop, replay and inherited stops");
 }

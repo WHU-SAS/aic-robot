@@ -120,6 +120,16 @@ class InteropTests(unittest.TestCase):
                     turned = link.turn(angle)
                     self.assertEqual((turned['command'], turned['run']), ('TURN', 1))
                     self.assertFalse(link.expect('STOP')['run'])
+                # ARC uses the same real frame encoder/parser. Finite-distance
+                # motion is exercised by the dedicated controller plant tests.
+                zero = link.expect('ARC,0,0')
+                self.assertEqual((zero['command'],zero['run'],zero['pwm'],zero['reason']),
+                                 ('ARC',0,0,8))
+                for left,right in ((-2,-9),(3,-5),(0,6)):
+                    moved = link.expect('ARC,%d,%d' % (left,right))
+                    self.assertEqual((moved['command'],moved['run']),('ARC',1))
+                    clock.sleep_ms(10)
+                    self.assertFalse(link.expect('STOP')['run'])
                 board.run_drive_once(link, (-400, 400, 300))
                 board.run_drive_once(link, (0, 0, 10))
                 # Real client/C parser: continuous SPEED updates retain PWM

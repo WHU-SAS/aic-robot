@@ -144,5 +144,48 @@ int main(void)
     for(unsigned n=0;n<sizeof(bad_moves)/sizeof(bad_moves[0]);++n){
         frame(motion,2000+n,bad_moves[n]);assert(feed(&p,motion)==0);
     }
-    puts("PASS: noise/CRC/framing, replay, ramp, stop, watchdog, deadline, B21, wrap, signed MOVE");
+    RemoteControl arc = {0};
+    frame(motion,1,"ARC,-2,-9");
+    assert(feed(&p,motion)==1 && p.command==CMD_ARC);
+    assert(p.arc_left_mm==-2 && p.arc_right_mm==-9);
+    assert(remote_request(&arc,&p)==RES_OK && arc.running && arc.arc_mode);
+    for(unsigned n=0;n<20;++n) remote_step(&arc,false);
+    assert(!arc.left_pwm && !arc.right_pwm && arc.duration_ticks==500);
+    assert(remote_request(&arc,&p)==RES_DUPLICATE && arc.run_ticks==20);
+    p.arc_right_mm=-8;
+    assert(remote_request(&arc,&p)==RES_STALE && arc.arc_right_mm==-9);
+    p.sequence=2;
+    assert(remote_request(&arc,&p)==RES_BUSY && arc.run_ticks==20);
+    assert(remote_command(&arc,3,CMD_STOP)==RES_OK && !arc.running && !arc.arc_mode);
+    frame(motion,4,"ARC,0,0");
+    assert(feed(&p,motion)==1 && remote_request(&arc,&p)==RES_OK);
+    assert(!arc.running && !arc.left_pwm && !arc.right_pwm && arc.stop_reason==8);
+    assert(remote_request(&arc,&p)==RES_DUPLICATE && !arc.running);
+    const char *arcs[]={"ARC,0,6","ARC,3,-5","ARC,-32767,32767"};
+    for(unsigned n=0;n<sizeof(arcs)/sizeof(arcs[0]);++n){
+        frame(motion,10+n,arcs[n]);
+        assert(feed(&p,motion)==1 && p.command==CMD_ARC);
+    }
+    const char *bad_arcs[]={"ARC,32768,0","ARC,0,-32768","ARC,1","ARC,1,2,3",
+        "ARC,+1,2","ARC,1.5,2","ARC,,2"};
+    for(unsigned n=0;n<sizeof(bad_arcs)/sizeof(bad_arcs[0]);++n){
+        frame(motion,20+n,bad_arcs[n]);assert(feed(&p,motion)==0);
+    }
+    frame(motion,100,"ARC,-2,-9");
+    assert(feed(&p,motion)==1 && remote_request(&arc,&p)==RES_OK);
+    for(unsigned n=0;n<100;++n) remote_step(&arc,false);
+    assert(!arc.running && !arc.arc_mode && arc.stop_reason==4);
+    frame(motion,101,"ARC,3,-5");
+    assert(feed(&p,motion)==1 && remote_request(&arc,&p)==RES_OK);
+    for(unsigned n=0;n<3;++n) remote_step(&arc,true);
+    assert(!arc.running && !arc.arc_mode && arc.stop_reason==2);
+    for(unsigned n=0;n<3;++n)remote_step(&arc,false);
+    frame(motion,102,"ARC,100,100");
+    assert(feed(&p,motion)==1 && remote_request(&arc,&p)==RES_OK);
+    for(unsigned n=0;n<500;++n){
+        if(n%20==0)remote_command(&arc,200+n,CMD_HEARTBEAT);
+        remote_step(&arc,false);
+    }
+    assert(!arc.running && !arc.arc_mode && arc.stop_reason==3);
+    puts("PASS: noise/CRC/framing, replay, ramp, stop, watchdog, deadline, B21, wrap, signed MOVE/ARC");
 }

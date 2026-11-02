@@ -229,44 +229,65 @@ def verify_parked(observation, projection, workspace, config, now_ms,
 
 
 def correction_plan(verification, projection, workspace, config):
-    """One existing MOVE or TURN command, using a new static fine result.
+    """One constant-curvature wheel move toward the agreed depth and midline.
 
-    Signed MOVE corrects depth when lateral window membership is already valid.
-    Otherwise choose a single-wheel forward TURN with the greatest nominal
-    margin to all four window edges, never exceeding the old midline command.
-    The uncalibrated axle lever arm limits this prediction; only the mandatory
-    final static image can accept parking. The existing TURN limit is 30 degrees.
+    Solve its nominal wheel distances on the declared table axes, then select
+    the integer-millimetre pair closest to that SAME destination. Window margin
+    is reported for review, never used as a replacement destination. Retain the
+    existing 30-degree turn bound and the user's 100mm per-wheel short-step bound.
+    Only the subsequent static image can confirm actual parking.
     """
     if verification.get('accepted'):
         return {'status': 'none'}
     if verification.get('status') != 'not_parked':
         return {'status': 'unavailable'}
-    if verification['window']['lateral_allowed']:
-        distance = ((verification['cube_center_Base_mm'][0]-verification['target_Base_X_mm']) /
-                    verification.get('forward_X_per_mm', 1.))
-        distance = int(abs(distance)+.5) * (1 if distance >= 0 else -1)
-        return {'status': 'move', 'distance_mm': distance, 'command': 'MOVE,%d' % distance,
-                'expected_reason': 6}
-    bearing = verification['bearing_deg']
-    limit = min(30, max(1, int(abs(bearing)+.5)))
-    direction = 1 if bearing >= 0 else -1
+    point = verification['cube_center_Base_mm']
+    x = target_x(workspace)
+    y = sum(bounds_mm(workspace, x)['Base_Y_mm'])/2
+    n = projection.normal
+    # Preserve this raw observation's table-normal height; it is not a new pose.
+    z = (sum(a*b for a,b in zip(n, point))-n[0]*x-n[1]*y)/n[2]
+    destination = [x, y, z]
+    axis = getattr(projection, 'forward_axis_Base', None)
+    origin = getattr(projection, 'motion_origin_Base_mm', None) or [0., 0., 0.]
+    forward = table_forward(n, axis)
+    left = [n[1]*forward[2]-n[2]*forward[1], n[2]*forward[0]-n[0]*forward[2],
+            n[0]*forward[1]-n[1]*forward[0]]
+    q, target = [[sum((p[k]-origin[k])*basis[k] for k in range(3))
+                  for basis in (forward, left)] for p in (point, destination)]
+    yaw = 2*math.atan2(q[1]-target[1], q[0]+target[0])
+    yaw = (yaw+math.pi) % (2*math.pi)-math.pi
+    yaw = max(-math.pi/6, min(math.pi/6, yaw))
+    if abs(yaw) < 1e-8:
+        distance = q[0]-target[0]
+    else:
+        c, s = math.cos(yaw), math.sin(yaw)
+        a = [s/yaw, (c-1)/yaw]
+        b = [c*q[0]+s*q[1]-target[0], -s*q[0]+c*q[1]-target[1]]
+        distance = sum(u*v for u,v in zip(a,b))/sum(u*u for u in a)
     track = config['track_width_mm']
+    limit = 100-track*abs(yaw)/2
+    distance = max(-limit, min(limit, distance))
+    dl, dr = distance-track*yaw/2, distance+track*yaw/2
     best = None
-    for magnitude in range(1, limit+1):
-        travel = track*math.radians(magnitude)
-        deltas = [(0, travel)] if direction > 0 else [(travel, 0)]
-        point = predict_center(verification['cube_center_Base_mm'], deltas,
-            track, projection.normal, getattr(projection, 'forward_axis_Base', None),
-            getattr(projection, 'motion_origin_Base_mm', None))
-        bounds = bounds_mm(workspace, point[0])
-        margin = min(point[0]-bounds['Base_X_mm'][0], bounds['Base_X_mm'][1]-point[0],
-                     point[1]-bounds['Base_Y_mm'][0], bounds['Base_Y_mm'][1]-point[1])
-        rank = (margin, -magnitude)
-        if best is None or rank > best[0]:
-            best = (rank, magnitude, point)
-    angle, point = direction*best[1], best[2]
-    return {'status': 'turn', 'angle_deg': angle, 'command': 'TURN,%d' % angle,
-            'expected_reason': 7, 'nominal_predicted_center_Base_mm': point,
-            'nominal_predicted_window': evaluate(point[0], point[1], workspace),
-            'nominal_window_margin_mm': best[0][0],
-            'prediction_basis': 'nominal single-wheel arc; uncalibrated axle lever arm; final static verification required'}
+    for il in (math.floor(dl), math.ceil(dl)):
+        for ir in (math.floor(dr), math.ceil(dr)):
+            if not (il or ir) or max(abs(il), abs(ir)) > 100 or abs(ir-il) > track*math.pi/6:
+                continue
+            predicted = predict_center(point, [(il, ir)], track, n, axis, origin)
+            bounds = bounds_mm(workspace, predicted[0])
+            margin = min(predicted[0]-bounds['Base_X_mm'][0], bounds['Base_X_mm'][1]-predicted[0],
+                         predicted[1]-bounds['Base_Y_mm'][0], bounds['Base_Y_mm'][1]-predicted[1])
+            error = (predicted[0]-x)**2+(predicted[1]-y)**2
+            rank = (error, -margin, abs(il)+abs(ir), il, ir)
+            if best is None or rank < best[0]:
+                best = (rank, il, ir, predicted, margin)
+    rank, il, ir, predicted, margin = best
+    return {'status': 'arc', 'left_mm': il, 'right_mm': ir,
+            'command': 'ARC,%d,%d' % (il, ir), 'expected_reason': 8,
+            'target_Base_X_mm': x, 'target_Base_Y_mm': y,
+            'nominal_predicted_center_Base_mm': predicted,
+            'nominal_predicted_window': evaluate(predicted[0], predicted[1], workspace),
+            'nominal_window_margin_mm': margin, 'nominal_target_error_mm': math.sqrt(rank[0]),
+            'nominal_yaw_deg': math.degrees((ir-il)/track),
+            'prediction_basis': 'nominal signed-wheel arc to agreed destination; uncalibrated axle lever arm; final static verification required'}

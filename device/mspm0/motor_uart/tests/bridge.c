@@ -26,7 +26,7 @@ void bridge_tick(void)
 const char *bridge_feed(uint8_t byte)
 {
     if (!motor_feed(&parser, byte)) return "";
-    static const char *const names[] = {"STATUS", "START", "STOP", "HB", "DRIVE", "MOVE", "TURN", "FOLLOW", "SPEED"};
+    static const char *const names[] = {"STATUS", "START", "STOP", "HB", "DRIVE", "MOVE", "TURN", "FOLLOW", "SPEED", "ARC"};
     MotorResult result = remote_request(&state, &parser);
     if (parser.command == CMD_FOLLOW && result == RES_OK)
         follow_begin(&follow, (uint32_t)a, (uint32_t)b);

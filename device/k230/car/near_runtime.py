@@ -310,7 +310,7 @@ def run_parking(capture, track, link, projection, config, clock_ms, sleep_ms, fi
             return result
         correction = correction_plan(verdict, projection, config['workspace'], config['near_parking'])
         result['correction'] = correction
-        if correction['status'] not in ('move', 'turn'):
+        if correction['status'] not in ('move', 'turn', 'arc'):
             result['status'] = verdict['status']
             return result
         states = []

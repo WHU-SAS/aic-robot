@@ -11,7 +11,8 @@ from device.k230.car.continuous_approach import midline_heading
 from device.k230.car.continuous_math import (forward_x_per_mm, predict_bearing,
                                             table_forward)
 from device.k230.car.ground_projection import GroundProjection
-from device.k230.car.near_control import correction_plan, predict_center
+from device.k230.car.near_control import correction_plan, predict_center, target_x
+from device.k230.car.parking_window import bounds_mm
 from device.k230.car.visual_align import motion_plan
 from host.car.runtime import load
 
@@ -91,17 +92,24 @@ class ForwardAxisTests(unittest.TestCase):
             self.assertAlmostEqual(predict_bearing(12, 500, old_heading, 2, 5, 119.2),
                                    predict_bearing(12, 500, new_heading, 2, 5, 119.2), places=10)
 
-    def test_MOVE_distance_divides_by_projected_forward_x(self):
+    def test_arc_correction_targets_current_Base_depth_and_midline(self):
         scale = forward_x_per_mm(self.new)
         self.assertAlmostEqual(scale, table_forward(self.new.normal, self.axis)[0])
         workspace, _, _ = load()
         config = json.loads((ROOT / 'configs/car/near_parking.json').read_text())
+        target = target_x(workspace)
+        target_y = sum(bounds_mm(workspace, target)['Base_Y_mm'])/2
         for distance in (-30, 30):
             verdict = {'status': 'not_parked', 'accepted': False,
-                'window': {'lateral_allowed': True}, 'target_Base_X_mm': 250,
-                'cube_center_Base_mm': [250+distance*scale, 0, 0],
+                'window': {'lateral_allowed': True}, 'target_Base_X_mm': target,
+                'cube_center_Base_mm': [target+distance*scale, target_y+8, 0],
                 'forward_X_per_mm': scale}
-            self.assertEqual(correction_plan(verdict, self.new, workspace, config)['distance_mm'], distance)
+            result = correction_plan(verdict, self.new, workspace, config)
+            self.assertEqual(result['status'], 'arc')
+            self.assertAlmostEqual(result['target_Base_X_mm'], target)
+            self.assertAlmostEqual(result['target_Base_Y_mm'], target_y)
+            self.assertLess(result['nominal_target_error_mm'], 1.5)
+            self.assertTrue(result['nominal_predicted_window']['inside'])
         # Historical calls without the new axis retain their old X/mm shortcut.
         self.assertEqual(forward_x_per_mm(self.old), 1.)
 
@@ -124,22 +132,23 @@ class ForwardAxisTests(unittest.TestCase):
             'ground_contact_proxy_Base_mm': [config['forward']['near_Base_X_mm']+50.9*scale, 0, 0]}
         self.assertEqual(motion_plan(observation, projection, config, 100)['distance_mm'], 50)
 
-    def test_turn_candidate_prediction_keeps_axis_and_origin_covariance(self):
+    def test_arc_candidate_prediction_keeps_axis_and_origin_covariance(self):
         workspace, _, _ = load()
         config = json.loads((ROOT / 'configs/car/near_parking.json').read_text())
-        old_point = [250, -30, -55]
-        for bearing in (-10, 10):
+        for lateral in (-30, 30):
+            old_point = [250, lateral, -55]
             verdict = {'status': 'not_parked', 'accepted': False,
-                'window': {'lateral_allowed': False}, 'bearing_deg': bearing,
+                'window': {'lateral_allowed': False},
                 'cube_center_Base_mm': self.mapped(old_point)}
             result = correction_plan(verdict, self.new, workspace, config)
-            angle = result['angle_deg']
-            travel = config['track_width_mm']*math.radians(abs(angle))
-            deltas = [(0, travel)] if angle > 0 else [(travel, 0)]
+            deltas = [(result['left_mm'], result['right_mm'])]
             expected = self.mapped(predict_center(old_point, deltas,
                 config['track_width_mm'], self.old.normal))
             np.testing.assert_allclose(result['nominal_predicted_center_Base_mm'],
                                        expected, atol=1e-10)
+            wrong = predict_center(self.mapped(old_point), deltas,
+                                   config['track_width_mm'], self.new.normal)
+            self.assertGreater(np.linalg.norm(np.array(wrong)-expected), .1)
 
     def test_refitted_plane_is_an_approximation_separate_from_rigid_covariance(self):
         self.assertGreater(np.linalg.norm(np.array(self.refit.normal)-self.new.normal), 1e-5)

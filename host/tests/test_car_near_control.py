@@ -2,6 +2,7 @@
 import copy
 import json
 import math
+from types import SimpleNamespace
 import unittest
 
 from device.k230.car.near_control import near_plan, predict_center, verify_parked, correction_plan, target_x
@@ -16,15 +17,19 @@ class PlanarPlant:
     Synthetic nominal mechanics, not identification of the physical robot.
     Its world pose and delayed absolute images do not use controller prediction.
     """
-    def __init__(self, point, normal, track):
+    def __init__(self, point, normal, track, forward_axis=None, origin=None):
         self.n, self.track = normal, track
-        f = [1-normal[0]**2, -normal[0]*normal[1], -normal[0]*normal[2]]
+        self.origin = origin or [0., 0., 0.]
+        axis = forward_axis or [1., 0., 0.]
+        component = sum(a*b for a,b in zip(axis, normal))
+        f = [axis[k]-component*normal[k] for k in range(3)]
         norm = math.sqrt(sum(v*v for v in f))
         self.f = [v/norm for v in f]
         self.l = [normal[1]*self.f[2]-normal[2]*self.f[1],
                   normal[2]*self.f[0]-normal[0]*self.f[2],
                   normal[0]*self.f[1]-normal[1]*self.f[0]]
-        self.target = [sum(a*b for a,b in zip(point, basis))
+        offset = [point[k]-self.origin[k] for k in range(3)]
+        self.target = [sum(a*b for a,b in zip(offset, basis))
                        for basis in (self.f, self.l, self.n)]
         self.x = self.y = self.yaw = 0
         self.vl = self.vr = 30
@@ -33,7 +38,8 @@ class PlanarPlant:
         dx, dy = self.target[0]-self.x, self.target[1]-self.y
         c, s = math.cos(self.yaw), math.sin(self.yaw)
         x, y = c*dx+s*dy, -s*dx+c*dy
-        return [self.f[k]*x+self.l[k]*y+self.n[k]*self.target[2] for k in range(3)]
+        return [self.origin[k]+self.f[k]*x+self.l[k]*y+self.n[k]*self.target[2]
+                for k in range(3)]
 
     def advance(self, dt):
         distance = (self.vl+self.vr)*dt/2
@@ -366,66 +372,108 @@ class NearControlTests(unittest.TestCase):
                                 steering_bearing_deg=bearing)
             self.assertEqual(stopped['status'],'stop_for_verification')
 
-    def test_single_correction_selects_signed_move_or_lateral_turn(self):
-        for x in (self.far+5, self.near-5):
-            verdict = self.verify(self.observation(self.center(x)))
-            plan = self.correction(verdict)
-            self.assertEqual(plan['status'], 'move')
-            self.assertEqual(plan['expected_reason'], 6)
-            self.assertEqual(plan['distance_mm'], round(x-self.target))
-            self.assertEqual(plan['command'], 'MOVE,%d' % plan['distance_mm'])
-        for offset in (-25,25):
-            verdict = self.verify(self.observation(self.center(self.far+5,offset)))
-            plan = self.correction(verdict)
-            self.assertEqual(plan['status'], 'turn')
-            self.assertEqual(plan['expected_reason'], 7)
-            self.assertLessEqual(abs(plan['angle_deg']), 30)
-            self.assertLessEqual(abs(plan['angle_deg']), max(1, int(abs(verdict['bearing_deg'])+.5)))
-            self.assertGreater(plan['angle_deg']*verdict['bearing_deg'], 0)
+    def test_single_arc_targets_the_agreed_depth_and_image_midline(self):
+        target_y = sum(bounds_mm(self.workspace, self.target)['Base_Y_mm'])/2
+        for x, offset in ((self.far+5, 0), (self.near-5, 0),
+                          (self.far+5, -25), (self.far+5, 25)):
+            with self.subTest(x=x, offset=offset):
+                verdict = self.verify(self.observation(self.center(x, offset)))
+                plan = self.correction(verdict)
+                self.assertEqual(plan['status'], 'arc')
+                self.assertEqual(plan['expected_reason'], 8)
+                self.assertEqual(plan['command'], 'ARC,%d,%d' %
+                                 (plan['left_mm'], plan['right_mm']))
+                self.assertAlmostEqual(plan['target_Base_X_mm'], self.target)
+                self.assertAlmostEqual(plan['target_Base_Y_mm'], target_y)
+                self.assertLess(plan['nominal_target_error_mm'], 1.6)
+                self.assertTrue(plan['nominal_predicted_window']['inside'])
+                self.assertGreater(plan['nominal_window_margin_mm'], 3.)
+                self.assertLessEqual(abs(plan['nominal_yaw_deg']), 30.)
+                self.assertNotIn('accepted', plan)
         self.assertEqual(self.correction(self.verify(self.observation(self.center(self.target)))),
                          {'status': 'none'})
         self.assertEqual(self.correction({'status': 'no_precise_target', 'accepted': False}),
                          {'status': 'unavailable'})
 
-    def test_single_turn_considers_depth_margin_in_220879_replay_without_promising_recovery(self):
-        # Actual pre-correction vision from robot_task_220879_0: only 1.19mm
-        # longitudinal margin, so the former full -5degree turn wastes depth.
+    def test_latest_reverse_correction_preserves_lateral_room_and_targets_both_axes(self):
+        # Raw pre-correction observation from robot_task_32483_0. The former
+        # MOVE,-6 only corrected depth while starting3mm from a lateral edge.
+        point = [242.6074, -10.35546, -54.81823]
+        verdict = self.verify(self.observation(point))
+        self.assertTrue(verdict['window']['lateral_allowed'])
+        self.assertFalse(verdict['window']['longitudinal_allowed'])
+        plan = self.correction(verdict)
+        self.assertLess(plan['left_mm'], 0)
+        self.assertLess(plan['right_mm'], plan['left_mm'])
+        self.assertLess(plan['nominal_target_error_mm'], 1.)
+        self.assertGreater(plan['nominal_window_margin_mm'], 4.)
+        self.assertTrue(plan['nominal_predicted_window']['inside'])
+        self.assertIn('uncalibrated axle lever arm', plan['prediction_basis'])
+
+    def test_single_arc_can_reverse_one_wheel_and_hold_the_other(self):
+        # The old forward TURN,-5 used up the available depth. A signed wheel
+        # arc moves toward the same destination instead of accepting a1mm rim.
         point = [243.9062, -14.30987, -55.05993]
         verdict = self.verify(self.observation(point))
-        self.assertTrue(verdict['window']['longitudinal_allowed'])
-        self.assertFalse(verdict['window']['lateral_allowed'])
-        self.assertEqual(-int(abs(verdict['bearing_deg'])+.5), -5)
         travel = self.config['track_width_mm']*math.radians(5)
         old = predict_center(point, [(travel, 0)], self.config['track_width_mm'],
             self.projection.normal, self.projection.forward_axis_Base,
             self.projection.motion_origin_Base_mm)
         self.assertFalse(evaluate(old[0], old[1], self.workspace)['longitudinal_allowed'])
         plan = self.correction(verdict)
-        self.assertEqual(plan['command'], 'TURN,-1')
+        self.assertEqual(plan['left_mm'], 0)
+        self.assertLess(plan['right_mm'], 0)
+        self.assertLess(plan['nominal_target_error_mm'], 1.)
+        self.assertGreater(plan['nominal_window_margin_mm'], 4.)
         self.assertTrue(plan['nominal_predicted_window']['inside'])
-        self.assertAlmostEqual(plan['nominal_predicted_center_Base_mm'][0], 242.9189, places=3)
-        self.assertGreater(plan['nominal_window_margin_mm'], 0)
-        self.assertLess(plan['nominal_window_margin_mm'], 1)
-        self.assertNotIn('accepted', plan)
-        self.assertIn('uncalibrated axle lever arm', plan['prediction_basis'])
 
-    def test_no_nominal_turn_enters_window_still_reports_only_one_attempt(self):
-        verdict = self.verify(self.observation(self.center(self.near-20, 50)))
-        plan = self.correction(verdict)
-        self.assertEqual(plan['status'], 'turn')
-        self.assertFalse(plan['nominal_predicted_window']['inside'])
-        self.assertLess(plan['nominal_window_margin_mm'], 0)
-        self.assertNotIn('accepted', plan)
+    def test_lateral_error_at_the_right_depth_can_use_opposite_wheel_distances(self):
+        point = [247.2403, -13.36438, -54.8549]
+        plan = self.correction(self.verify(self.observation(point)))
+        self.assertLess(plan['left_mm']*plan['right_mm'], 0)
+        self.assertLess(plan['nominal_target_error_mm'], 1.)
+        self.assertTrue(plan['nominal_predicted_window']['inside'])
+        self.assertGreater(plan['nominal_window_margin_mm'], 4.)
 
-    def test_large_bearing_retains_existing_thirty_degree_turn_limit(self):
-        # Synthetic far-out coordinates exercise the protocol boundary; this
-        # is not a claim that these targets are visible or physically reachable.
+    def test_signed_arc_reaches_destination_in_independent_world_frame_plant(self):
+        point = [242.6074, -10.35546, -54.81823]
+        # Exercise the actual paired calibration plus a visibly rotated and
+        # translated synthetic motion frame. Neither plant uses predict_center.
+        rotated = SimpleNamespace(normal=[0., 0., 1.],
+            forward_axis_Base=[math.cos(.35), math.sin(.35), 0.],
+            motion_origin_Base_mm=[31., -22., 4.])
+        for projection in (self.projection, rotated):
+            with self.subTest(origin=projection.motion_origin_Base_mm):
+                verdict = {'status':'not_parked', 'accepted':False,
+                           'cube_center_Base_mm':point}
+                plan = correction_plan(verdict, projection, self.workspace, self.config)
+                self.assertLess(plan['left_mm'], 0)
+                self.assertLess(plan['right_mm'], 0)
+                plant = PlanarPlant(point, projection.normal, self.config['track_width_mm'],
+                    projection.forward_axis_Base, projection.motion_origin_Base_mm)
+                plant.vl, plant.vr = plan['left_mm'], plan['right_mm']
+                for unused in range(1000):
+                    plant.advance(.001)
+                actual = plant.center()
+                error = math.hypot(actual[0]-plan['target_Base_X_mm'],
+                                   actual[1]-plan['target_Base_Y_mm'])
+                self.assertLess(error, 1.5)
+                self.assertTrue(evaluate(actual[0], actual[1], self.workspace)['inside'])
+                for observed, predicted in zip(actual, plan['nominal_predicted_center_Base_mm']):
+                    self.assertAlmostEqual(observed, predicted, places=6)
+
+    def test_unreachable_destination_is_one_bounded_nominal_attempt_not_acceptance(self):
+        # Synthetic coordinates test actuator budgeting, not visibility or a
+        # guarantee that a far-away target can be corrected in one short move.
         for sign in (-1, 1):
-            point = self.center(100, sign*10000)
-            verdict = {'status': 'not_parked', 'accepted': False,
-                'window': evaluate(point[0], point[1], self.workspace),
-                'bearing_deg': sign*90, 'cube_center_Base_mm': point}
-            self.assertEqual(self.correction(verdict)['angle_deg'], sign*30)
+            verdict = self.verify(self.observation(self.center(self.far+500, sign*10000)))
+            plan = self.correction(verdict)
+            self.assertEqual(plan['status'], 'arc')
+            self.assertLessEqual(max(abs(plan['left_mm']), abs(plan['right_mm'])), 100)
+            self.assertLessEqual(abs(plan['nominal_yaw_deg']), 30.)
+            self.assertFalse(plan['nominal_predicted_window']['inside'])
+            self.assertLess(plan['nominal_window_margin_mm'], 0)
+            self.assertNotIn('accepted', plan)
 
 
 if __name__ == '__main__':

@@ -82,6 +82,16 @@ class Link:
             if self.nudge_next_status:
                 self.left += 20
                 self.nudge_next_status = False
+        elif name == 'ARC':
+            left,right = map(int,command.split(',')[1:])
+            span = max(abs(left),abs(right))
+            self.run = span > 0
+            self.action_remaining = span/25*1000
+            self.action_reason = 8
+            self.left_speed = 25*left/span if span else 0
+            self.right_speed = 25*right/span if span else 0
+            if self.fail_correction:
+                raise RuntimeError('correction ACK absent')
         elif name in ('MOVE', 'TURN'):
             value = int(command.split(',')[1])
             self.run = True
@@ -247,6 +257,7 @@ class NearRuntimeTests(unittest.TestCase):
         self.assertEqual(self.names().count('STOP'), 1)
         self.assertNotIn('MOVE', self.names())
         self.assertNotIn('TURN', self.names())
+        self.assertNotIn('ARC', self.names())
         self.assertEqual(len(result['fine_observations']), 1)
         self.assertEqual(self.fines[0].starts, 1)
         self.assertEqual(self.fine_start_states[-1]['bbox'], None)
@@ -308,6 +319,7 @@ class NearRuntimeTests(unittest.TestCase):
         self.assertFalse(result['fine_observations'])
         self.assertNotIn('MOVE', self.names())
         self.assertNotIn('TURN', self.names())
+        self.assertNotIn('ARC', self.names())
 
     def test_near_start_can_use_cruise_when_strict_remaining_distance_allows_it(self):
         self.coarse_x = [480]
@@ -324,8 +336,8 @@ class NearRuntimeTests(unittest.TestCase):
         result = self.run_task()
         self.assertEqual(result['status'], 'parked')
         self.assertNotIn('FOLLOW', self.names())
-        self.assertEqual(self.names().count('MOVE'), 1)
-        self.assertIn('MOVE,-20', self.link.commands)
+        self.assertEqual(self.names().count('ARC'), 1)
+        self.assertTrue(result['correction']['left_mm'] < 0 and result['correction']['right_mm'] < 0)
         self.assertTrue(result['motion_performed'])
         self.assertEqual(len(result['verifications']), 2)
         self.assertEqual([item['label'] for item in self.evidence],
@@ -340,7 +352,7 @@ class NearRuntimeTests(unittest.TestCase):
         self.assertEqual(result['status'], 'parking_failed')
         self.assertNotIn('FOLLOW', self.names())
         self.assertNotIn('MOVE', self.names())
-        self.assertEqual(self.names().count('TURN'), 1)
+        self.assertEqual(self.names().count('ARC'), 1)
         self.assertEqual(len(result['verifications']), 2)
 
     def test_near_start_range_only_static_result_never_starts_moving(self):
@@ -367,7 +379,7 @@ class NearRuntimeTests(unittest.TestCase):
         result = self.run_task()
         self.assertEqual(result['status'], 'parked')
         self.assertEqual(self.names().count('FOLLOW'), 1)
-        self.assertEqual(self.names().count('MOVE'), 1)
+        self.assertEqual(self.names().count('ARC'), 1)
         self.assertEqual(len(result['verifications']), 2)
         initial_id = result['initial_verification']['observation']['frame_id']
         self.assertTrue(all(item['observation']['frame_id'] > initial_id
@@ -469,6 +481,7 @@ class NearRuntimeTests(unittest.TestCase):
         self.assertEqual(len(result['verifications']), 1)
         self.assertNotIn('MOVE', self.names())
         self.assertNotIn('TURN', self.names())
+        self.assertNotIn('ARC', self.names())
 
     def test_static_range_candidate_cannot_accept_window_or_trigger_correction(self):
         self.moving_range_only = self.static_range_only = True
@@ -479,6 +492,7 @@ class NearRuntimeTests(unittest.TestCase):
         self.assertEqual(len(result['verifications']), 1)
         self.assertNotIn('MOVE', self.names())
         self.assertNotIn('TURN', self.names())
+        self.assertNotIn('ARC', self.names())
         self.assertFalse(self.link.run)
 
     def test_default_factory_limits_range_purpose_to_moving_capture(self):
@@ -498,26 +512,27 @@ class NearRuntimeTests(unittest.TestCase):
         self.assertGreater(self.clock.now()-result['after']['capture_timestamp_ms'],500)
         self.assertFalse(self.link.run)
 
-    def test_depth_correction_is_one_signed_move_then_a_new_verification(self):
+    def test_depth_correction_is_one_signed_arc_then_a_new_verification(self):
         for offset in (-20,20):
             with self.subTest(offset=offset):
                 self.setUp()
                 self.static_offsets=[offset,0]
                 result=self.run_task()
                 self.assertEqual(result['status'],'parked')
-                self.assertIn('MOVE,%d' % offset,self.link.commands)
-                self.assertEqual(self.names().count('MOVE'),1)
+                plan=result['correction']
+                self.assertAlmostEqual((plan['left_mm']+plan['right_mm'])/2,offset,delta=1.)
+                self.assertEqual(self.names().count('ARC'),1)
                 self.assertNotIn('TURN',self.names())
                 self.assertEqual(len(result['verifications']),2)
                 self.assertEqual(self.fines[0].starts,1)
                 self.assertTrue(all(not running for unused,running in self.captures[-2:]))
 
-    def test_both_axes_outside_choose_only_one_turn_and_final_failure_is_explicit(self):
+    def test_both_axes_outside_choose_only_one_arc_and_final_failure_is_explicit(self):
         self.static_offsets=[20,20]
         self.static_y_offsets=[25,25]
         result=self.run_task()
         self.assertEqual(result['status'],'parking_failed')
-        self.assertEqual(self.names().count('TURN'),1)
+        self.assertEqual(self.names().count('ARC'),1)
         self.assertNotIn('MOVE',self.names())
         self.assertEqual(len(result['verifications']),2)
         self.assertFalse(result['verification']['accepted'])
@@ -530,6 +545,7 @@ class NearRuntimeTests(unittest.TestCase):
         self.assertFalse(result['verification']['preferred'])
         self.assertNotIn('MOVE',self.names())
         self.assertNotIn('TURN',self.names())
+        self.assertNotIn('ARC',self.names())
         self.assertEqual(len(result['verifications']),1)
 
     def test_encoder_movement_during_static_capture_invalidates_verdict(self):
@@ -653,7 +669,7 @@ class NearRuntimeTests(unittest.TestCase):
         self.link.fail_correction=True
         with self.assertRaisesRegex(RuntimeError,'correction ACK absent'):
             self.run_task()
-        self.assertEqual(self.names().count('MOVE'),1)
+        self.assertEqual(self.names().count('ARC'),1)
         self.assertEqual(self.names().count('STOP'),2)
         self.assertFalse(self.link.run)
 
