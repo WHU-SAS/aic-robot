@@ -51,7 +51,8 @@ def build_bundle(pick_config=None):
     ready=(ROOT/'device/k230/arm/ready_pose.py').read_text()
     text=(ROOT/'host/arm/blue_pick_settle.py').read_text();node=next(n for n in ast.parse(text).body if isinstance(n,ast.ClassDef) and n.name=='PositionSettled')
     settle='\n'.join(text.splitlines()[node.lineno-1:node.end_lineno])
-    files['control.py']='\n'.join([read,ready,settle,(ROOT/'device/k230/arm/pick_stage.py').read_text()]).encode()
+    files['control.py']='\n'.join([read,ready,settle,(ROOT/'device/k230/arm/pick_stage.py').read_text(),
+        (ROOT/'device/k230/arm/pick_execution.py').read_text()]).encode()
     files['config.json']=encoded(cfg)
     manifest={'schema':'aic.standalone_pick.v1','trigger':'思达思达','voice_commands':[{'word':c['word'],'action':c['action']} for c in commands],'startup_motion':False,
               'pc_runtime_required':False,'cube_offset_toward_moving_finger_mm':pick['cube_offset_toward_moving_finger_mm'],

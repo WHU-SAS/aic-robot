@@ -41,5 +41,11 @@
     "tested_opening_count": 2389
   },
   "accepted_date": "2026-10-31",
-  "acceptance": "User accepted the corrected model trial and requested integration into the complete robot version"
+  "acceptance": "User accepted the corrected model trial and requested integration into the complete robot version",
+  "tracking_stage_policy": {
+    "lift_tolerance_counts": 10,
+    "lift_gripper_stable_tolerance_counts": 1,
+    "lift_gripper_stable_ms": 200,
+    "recovery_observation_delay_ms": 500
+  }
 }

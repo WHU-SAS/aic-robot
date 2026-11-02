@@ -279,6 +279,35 @@ def run_from_observation(config,observation,execute=False,start_counts=None,sour
     return _run_target(config,found,execute,start_counts)
 
 
+
+def begin_from_observation(config,observation,target_version,source_config=None,emit=None):
+    """Plan a cooperative pick without taking ownership of camera or motion.
+
+    The task keeps the shared camera and owns target versions. Construction
+    reads current joints once and plans, but sends no servo targets. The caller
+    must pass its current version to every execution.step(target_version=...).
+    invalidate_target() cancels pending stages; the next step sends ready pose2.
+    Re-observation may start only when the execution reports can_reobserve.
+    close() releases transport; it is not an in-flight servo stop.
+    """
+    _same_calibration(config,source_config)
+    found=_handoff_target(observation)
+    import control as arm_control
+    factory=arm_control.open_pick_execution
+    ready=config['drive_ready_control']
+    policy=dict(config['pick']['standalone_stage_policy'])
+    policy.update(config['pick'].get('tracking_stage_policy',{}))
+    rows=arm_snapshot(config['control'])
+    start=[row['position'] for row in rows]
+    plan=_run_target(config,found,False,start_counts=start)
+    log('tracking_handoff_localized',{'frame_id':observation['frame_id'],
+        'capture_timestamp_ms':observation['capture_timestamp_ms'],
+        'cube_center_Base_mm':found['cube_center_Base_mm'],
+        'target_version':target_version,'source':'accepted_static_observation'})
+    if emit is None:emit=lambda event,details:log(event,details)
+    return factory(config['control'],ready,plan,policy,target_version,emit=emit)
+
+
 def run_once(config,execute=False):
     found=perceive(config)
     if not execute:return found
