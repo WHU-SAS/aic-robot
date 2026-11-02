@@ -59,6 +59,7 @@ class FakeIO:
         self.fail_read = False
         self.fail_send = False
         self.fail_ready = False
+        self.read_cost_ms = 0
 
     def send_goals(self, goals, servo_ids):
         self.events.append(('goals', self.clock.now(), list(goals), list(servo_ids)))
@@ -67,6 +68,7 @@ class FakeIO:
 
     def read_positions(self, servo_ids):
         self.events.append(('read', self.clock.now(), list(servo_ids)))
+        self.clock.advance(self.read_cost_ms)
         if self.fail_read:
             self.fail_read = False
             raise RuntimeError('fake missing feedback')
@@ -398,6 +400,102 @@ class PickExecutionTests(unittest.TestCase):
         self.assertIn('lift_observation_gap', [name for name, details in self.emitted])
         self.assertNotEqual(self.observe(150)['status'], 'succeeded')
         self.assertEqual(self.step(50)['status'], 'succeeded')
+
+    def test_realistic_180ms_read_plus_50ms_idle_can_confirm_stability(self):
+        self.make()
+        self.begin_lift()
+        self.io.read_cost_ms = 180
+        first = self.step(50)
+        self.assertEqual(first['status'], 'running')
+        self.assertEqual(first['last_sample']['read_ms'], 180)
+        first_end = first['last_sample']['timestamp_ms']
+        result = self.step(50)
+        self.assertEqual(result['status'], 'succeeded')
+        sample = result['last_sample']
+        self.assertEqual(self.clock.diff(sample['timestamp_ms'], first_end), 230)
+        self.assertEqual(self.clock.diff(sample['read_started_ms'], first_end), 50)
+        self.assertEqual(sample['read_ms'], 180)
+        self.assertEqual(result['grip_confirmation']['stable_ms'], 230)
+        self.assertNotIn('lift_observation_gap', [name for name, details in self.emitted])
+
+    def test_extra_idle_gap_still_restarts_window_with_slow_reads(self):
+        self.make()
+        self.begin_lift()
+        self.io.read_cost_ms = 180
+        self.step(50)
+        state = self.step(1000)
+        self.assertEqual(state['status'], 'running')
+        gaps = [details for name, details in self.emitted if name == 'lift_observation_gap']
+        self.assertEqual(len(gaps), 1)
+        self.assertEqual(gaps[0]['idle_gap_ms'], 1000)
+        self.assertEqual(gaps[0]['sample_gap_ms'], 1180)
+        self.assertEqual(gaps[0]['read_ms'], 180)
+        self.assertEqual(self.step(50)['status'], 'succeeded')
+
+    def test_idle_100_101_boundary_excludes_the_180ms_read_duration(self):
+        for idle, resets in ((100, False), (101, True)):
+            with self.subTest(idle=idle):
+                self.make()
+                self.begin_lift()
+                self.io.read_cost_ms = 180
+                first = self.step(50)
+                first_end = first['last_sample']['timestamp_ms']
+                state = self.step(idle)
+                self.assertEqual(self.clock.diff(state['last_sample']['timestamp_ms'], first_end), idle + 180)
+                gaps = [details for name, details in self.emitted if name == 'lift_observation_gap']
+                if resets:
+                    self.assertEqual(state['status'], 'running')
+                    self.assertEqual(len(gaps), 1)
+                    self.assertEqual(gaps[0]['idle_gap_ms'], 101)
+                    self.assertEqual(gaps[0]['sample_gap_ms'], 281)
+                    self.assertEqual(self.step(50)['status'], 'succeeded')
+                else:
+                    self.assertEqual(state['status'], 'succeeded')
+                    self.assertEqual(gaps, [])
+
+    def test_real_band_exit_still_restarts_stability_with_slow_reads(self):
+        self.make()
+        self.begin_lift()
+        self.io.read_cost_ms = 180
+        self.step(50)
+        self.io.positions[5] += 2
+        state = self.step(50)
+        self.assertEqual(state['status'], 'running')
+        self.assertIs(state['grasp_confirmed'], True)
+        self.assertEqual(self.ready(), [])
+        result = self.step(50)
+        self.assertEqual(result['status'], 'succeeded')
+        self.assertEqual(result['grip_confirmation']['stable_reference'], self.io.positions[5])
+        self.assertEqual(result['grip_confirmation']['stable_ms'], 230)
+
+    def test_failed_slow_read_is_unknown_and_requires_a_new_stability_window(self):
+        self.make()
+        self.begin_lift()
+        self.io.read_cost_ms = 180
+        self.step(50)
+        self.io.fail_read = True
+        unknown = self.step(50)
+        self.assertEqual(unknown['status'], 'running')
+        self.assertEqual(unknown['feedback_status'], 'unknown')
+        self.assertIsNone(unknown['grasp_confirmed'])
+        self.assertFalse(unknown['success_ready'])
+        self.assertEqual(self.ready(), [])
+        self.assertEqual(self.step(50)['status'], 'running')
+        self.assertEqual(self.step(50)['status'], 'succeeded')
+
+    def test_slow_read_timing_across_tick_wrap_preserves_only_50ms_idle(self):
+        self.make(clock=Clock(start=1100, period=2048))
+        self.begin_lift()
+        self.io.read_cost_ms = 180
+        first = self.step(50)
+        first_end = first['last_sample']['timestamp_ms']
+        result = self.step(50)
+        self.assertLess(result['last_sample']['timestamp_ms'], first_end)
+        self.assertEqual(result['status'], 'succeeded')
+        self.assertEqual(result['last_sample']['read_ms'], 180)
+        self.assertEqual(self.clock.diff(result['last_sample']['read_started_ms'], first_end), 50)
+        self.assertEqual(result['grip_confirmation']['stable_ms'], 230)
+        self.assertNotIn('lift_observation_gap', [name for name, details in self.emitted])
 
     def test_lift_delta29_recovers_on_first_valid_sample(self):
         self.make()

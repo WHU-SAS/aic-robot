@@ -111,6 +111,7 @@ class PickExecution:
                 self.ticks_diff(now, self._last_poll_ms) >= self.policy['poll_interval_ms'])
 
     def _read(self, ids):
+        read_started_ms = self.clock_ms()
         try:
             values = self.io.read_positions(ids)
             if len(values) != len(ids) or any(type(v) is not int for v in values):
@@ -126,7 +127,9 @@ class PickExecution:
             self._lift_reference = None
             self._lift_arrived = False
             self._lift_last_sample_ms = None
-            self._event('feedback_unavailable', {'error': self.error, 'axes': list(ids)})
+            self._event('feedback_unavailable', {'error': self.error, 'axes': list(ids),
+                        'read_started_ms': read_started_ms,
+                        'read_ms': self.ticks_diff(self._last_poll_ms, read_started_ms)})
             return None
         now = self.clock_ms()
         self._last_poll_ms = now
@@ -134,7 +137,9 @@ class PickExecution:
         self.error = None
         for axis, value in zip(ids, values):
             self.last_positions[axis - 1] = value
-        self.last_sample = {'axes': list(ids), 'positions': list(values), 'timestamp_ms': now}
+        self.last_sample = {'axes': list(ids), 'positions': list(values),
+                            'timestamp_ms': now, 'read_started_ms': read_started_ms,
+                            'read_ms': self.ticks_diff(now, read_started_ms)}
         return values
 
     def _confirmation(self, position):
@@ -207,16 +212,20 @@ class PickExecution:
             self._event('grip_confirmation', {'details': dict(self.grip_confirmation)})
             self._recover('grip_lost')
             return
-        now = self.clock_ms()
-        # A long vision/IK pause is unobserved time, not evidence of stability.
-        # Derive continuity from the existing poll cadence; no task stop/retry.
+        now = self.last_sample['timestamp_ms']
+        # Distinguish scheduler idle from the UART round itself. Six normal
+        # checked reads can cost180ms; that is not a missed scheduling turn.
+        # Keep real sample spacing visible; do not claim50ms axis6 sampling.
         if self._lift_last_sample_ms is not None:
-            gap_ms = self.ticks_diff(now, self._lift_last_sample_ms)
+            idle_gap_ms = self.ticks_diff(self.last_sample['read_started_ms'],
+                                          self._lift_last_sample_ms)
             gap_limit_ms = 2 * self.policy['poll_interval_ms']
-            if gap_ms > gap_limit_ms:
+            if idle_gap_ms > gap_limit_ms:
                 self._lift_stable_since = None
                 self._lift_reference = position
-                self._event('lift_observation_gap', {'gap_ms': gap_ms,
+                self._event('lift_observation_gap', {'idle_gap_ms': idle_gap_ms,
+                            'sample_gap_ms': self.ticks_diff(now, self._lift_last_sample_ms),
+                            'read_ms': self.last_sample['read_ms'],
                             'cadence_limit_ms': gap_limit_ms})
         self._lift_last_sample_ms = now
         errors = [positions[i] - self.plan['lift'][i] for i in range(5)]
