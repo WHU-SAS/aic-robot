@@ -228,6 +228,12 @@ class RobotTrackingTests(unittest.TestCase):
                          self.handoffs[0][1]['frame_id'])
         self.assertTrue(any(item['frame']['frame_id']==self.handoffs[0][1]['frame_id']
                             for item in self.task.evidence))
+        saved = next(item['frame'] for item in self.task.evidence
+                     if item['frame']['frame_id']==self.handoffs[0][1]['frame_id'])
+        self.assertEqual(saved['paired_coarse']['frame_id'], saved['frame_id'])
+        self.assertEqual(saved['paired_coarse']['capture_timestamp_ms'],
+                         saved['capture_timestamp_ms'])
+        self.assertIsNone(saved['localization_bbox_px'])
         self.assertFalse(any(c.startswith(('FOLLOW','SPEED','ARC')) for t,c in self.motor.commands))
 
     def test_far_start_reaches_parking_and_grasp_with_one_moving_and_one_static_image(self):
@@ -238,6 +244,10 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertEqual(result['metrics']['arm_attempts'],1)
         self.assertLessEqual(result['metrics']['max_observation_gap_ms'],275)
         self.assertLessEqual(len(self.task.evidence),2)
+        moving = next(item['frame'] for item in self.task.evidence
+                      if item['frame']['tracking_purpose']=='moving')
+        self.assertEqual(moving['localization_bbox_px'],
+                         moving['paired_coarse']['bbox_px'])
 
     def test_running_chassis_model_disagreement_does_not_cancel_fixed_target(self):
         self.task._observe(force_status=True)
@@ -503,10 +513,20 @@ class RobotTrackingTests(unittest.TestCase):
             if len(self.arms)==1:self.hide_frames=8
             return arm
         self.task.begin_arm=plan
-        self.finish()
+        for unused in range(1000):
+            self.tick()
+            if self.arms and not self.hide_frames:
+                break
+        else:
+            self.fail('The synthetic occlusion never finished')
+        # Fake ARC completes a whole turn immediately. After several hidden
+        # frames its target is outside the image; do not ask an out-of-frame
+        # fake tracking result to authorize a new grasp. Real tracker
+        # reacquisition is covered in test_car_tracking_reacquisition.
         self.assertEqual([e[0] for e in self.arms[0].io.events],['close'])
         self.assertTrue(any(c.startswith('ARC,') for t,c in self.motor.commands))
-        self.assertGreaterEqual(len(self.arms),2)
+        self.assertIsNone(self.task.fault)
+        self.assertEqual(self.task.status,'running')
 
     def test_ambiguous_before_hover_preserves_one_frame_but_can_reobserve_if_persistent(self):
         for count in (1,8):
@@ -527,14 +547,22 @@ class RobotTrackingTests(unittest.TestCase):
                     return result
                 self.task.begin_arm=plan
                 self.task.track=ambiguous
-                result=self.finish()
-                self.assertEqual(result['status'],'succeeded')
+                for unused in range(1000):
+                    self.tick()
+                    if self.arms and not remaining[0]:
+                        break
+                else:
+                    self.fail('The synthetic ambiguity never finished')
                 if count==1:
+                    result=self.finish()
+                    self.assertEqual(result['status'],'succeeded')
                     self.assertEqual(len(self.arms),1)
                     self.assertEqual(result['metrics']['fine_started'],1)
                 else:
                     self.assertEqual([e[0] for e in self.arms[0].io.events],['close'])
                     self.assertTrue(any(c.startswith('ARC,') for t,c in self.motor.commands))
+                    self.assertIsNone(self.task.fault)
+                    self.assertEqual(self.task.status,'running')
 
     def test_visible_coarse_geometry_rejection_can_be_rescued_by_full_static_pose(self):
         self.geometry_invalid=True

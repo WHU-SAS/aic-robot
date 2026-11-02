@@ -395,23 +395,24 @@ class TargetMemory:
                 self._associated = True
             self.last_seen = dict(observation)
             return self.snapshot()
-        self._geometry_unknown = not self._distance_valid and not self._full_anchor()
+        self._geometry_unknown = (not self._associated or
+            (not self._distance_valid and not self._full_anchor()))
         self._movement_state = 'unknown_geometry' if self._geometry_unknown else 'consistent'
         self.last_seen = dict(observation)
         self._acquire_count = self._acquire_count+1 if same_visual else 1
         recovering = (arm_state or {}).get('status') == 'recovering'
         if self._invalidated and self._acquire_count >= self.confirmation_frames and not recovering:
             self._invalidated = False
+            self._associated = True
             self._event = 'reappeared' if self._gap else 'acquired'
         elif self._gap:
             self._event = 'reappeared'
         if self._gap:
             self._gap_ended_at = stamp
         self._gap = False
-        self._associated = True
         # Unknown is not evidence of movement. An unchanged, uniquely
         # re-associated full-pose target can resume its existing static plan.
-        if self._full_anchor() and self._movement_state == 'consistent':
+        if self._full_anchor() and self._associated and self._movement_state == 'consistent':
             self._gap_ended_at = None
         return self.snapshot()
 

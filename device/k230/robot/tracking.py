@@ -147,6 +147,15 @@ class TrackingTask:
         if item:
             item['frame'] = dict(item['frame'], target_version=job['target_version'])
             item['frame']['tracking_purpose'] = job['purpose']
+            # Keep the actual input with the image; a derived search ROI cannot
+            # reconstruct the original box or which colour candidate seeded it.
+            coarse = job['paired_coarse']
+            item['frame']['paired_coarse'] = {key: coarse[key] for key in (
+                'frame_id', 'capture_timestamp_ms', 'status', 'bbox_px',
+                'center_pixel', 'confirmations', 'ground_contact_proxy_Base_mm',
+                'visual_evidence') if key in coarse}
+            item['frame']['localization_bbox_px'] = (
+                coarse.get('bbox_px') if job['purpose'] == 'moving' else None)
             if reason:
                 item['frame']['discard_reason'] = reason
             self._release_evidence(job['target_version'], job['purpose'])

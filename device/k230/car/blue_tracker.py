@@ -17,12 +17,12 @@ class BlueTracker:
     def __init__(self, config, projection):
         self.config, self.projection = config, projection
         self.previous = None
-        self.visual_previous = None
         self.confirmations = 0
+        self.association_confirmations = 0
 
     def reset(self):
         self.previous, self.confirmations = None, 0
-        self.visual_previous = None
+        self.association_confirmations = 0
 
     def _match(self, candidate, old):
         width, height = self.config['image_size_px']
@@ -34,7 +34,18 @@ class BlueTracker:
             return dx*dx+dy*dy
         return None
 
-    def _evidence(self, cues, candidates, timestamp_ms):
+    def _contains(self, outer, inner):
+        x,y,w,h = outer['bbox_px'];a,b,c,d = inner['bbox_px']
+        return x<a and y<b and x+w>a+c and y+h>b+d
+
+    def _independent(self, candidates):
+        # Native thresholding can split one cube into an enclosing measurable
+        # region and an interior patch. Retain the actual outer measurement;
+        # invalid cues and overlapping/separate objects cannot suppress it.
+        return [cue for cue in candidates if not any(
+            other is not cue and self._contains(other,cue) for other in candidates)]
+
+    def _select(self, cues, candidates, timestamp_ms):
         """Seeing blue and measuring a tabletop target are separate capabilities.
 
         A unique unassociated candidate is retained to reveal a possible jump;
@@ -43,20 +54,28 @@ class BlueTracker:
         """
         evidence = {'visible': bool(cues), 'associated': False, 'ambiguous': False,
             'candidate_count': len(cues), 'timestamp_ms': timestamp_ms,
-            'distance_valid': False, 'edge_directions': [], 'reason': 'no_blue_evidence'}
-        old = self.visual_previous
-        if old is not None and not 0 <= age_ms(timestamp_ms, old['timestamp_ms']) <= self.config['max_age_ms']:
-            self.visual_previous = old = None
+            'distance_valid': False, 'edge_directions': [], 'reason': 'no_blue_evidence',
+            'confirmations': 0, 'association_confirmations': 0, 'navigation_confirmed': False}
+        old = self.previous
         if not cues:
-            return evidence
-        matched = [cue for cue in cues if old is not None and self._match(cue, old) is not None]
+            return None, evidence
+        independent = self._independent(candidates)
+        # Keep all raw candidates for diagnostics, but not duplicate inner
+        # measurable patches in the association/selection pool.
+        active = [cue for cue in cues if not cue['distance_valid'] or
+                  any(cue is candidate for candidate in independent)]
+        matched = [cue for cue in active if old is not None and self._match(cue, old) is not None]
+        measured_matches = [cue for cue in matched if cue['distance_valid']]
+        if len(measured_matches) == 1:
+            matched = [cue for cue in matched if cue['distance_valid'] or
+                       not self._contains(measured_matches[0],cue)]
         # At acquisition, original tabletop checks can distinguish a unique
         # cube candidate from unrelated weak blue patches. Do not choose the
         # largest of multiple equally plausible targets.
-        pool = matched if matched else (candidates if old is None and candidates else cues)
+        pool = matched if matched else (independent if old is None and independent else active)
         if len(pool) != 1:
             evidence.update(ambiguous=True, reason='ambiguous_blue_candidates')
-            return evidence
+            return None, evidence
         selected = pool[0]
         associated = old is None or bool(matched)
         for key in ('bbox_px', 'center_pixel', 'pixels', 'edge_directions'):
@@ -68,9 +87,7 @@ class BlueTracker:
             reason=selected['measurement_reason'] or (None if associated else 'unassociated_blue'))
         if selected['distance_valid']:
             evidence['ground_contact_proxy_Base_mm'] = list(selected['ground_contact_proxy_Base_mm'])
-        if associated:
-            self.visual_previous = selected
-        return evidence
+        return selected, evidence
 
     def detect_frame(self, image, timestamp_ms):
         c = self.config; width, height = c['image_size_px']
@@ -118,30 +135,27 @@ class BlueTracker:
                 rejected.append({'bbox_px': bbox, 'reason': reason})
                 continue
             candidates.append(cue)
-        evidence = self._evidence(cues, candidates, timestamp_ms)
-        if self.previous is not None and not 0 <= age_ms(timestamp_ms, self.previous['timestamp_ms']) <= c['max_age_ms']:
+        if self.previous is not None and not 0 < age_ms(timestamp_ms, self.previous['timestamp_ms']) <= c['max_age_ms']:
             self.previous, self.confirmations = None, 0
-        matched = []
-        if self.previous is not None:
-            old = self.previous
-            for candidate in candidates:
-                distance = self._match(candidate, old)
-                if distance is not None:
-                    matched.append((distance, candidate))
-            if not matched:
-                self.previous, self.confirmations = None, 0
-                return {'status': 'lost', 'timestamp_ms': timestamp_ms,
-                        'candidates': candidates, 'rejected': rejected, 'visual_evidence': evidence}
-            matched.sort(key=lambda value: value[0]); selected = matched[0][1]
-        elif candidates:
-            selected = max(candidates, key=lambda value: value['pixels'])
-        else:
+            self.association_confirmations = 0
+        had_measurement = self.confirmations > 0
+        selected, evidence = self._select(cues, candidates, timestamp_ms)
+        if selected is None or not evidence['associated']:
             self.previous, self.confirmations = None, 0
-            return {'status': 'no_target', 'timestamp_ms': timestamp_ms,
-                    'candidates': [], 'rejected': rejected, 'visual_evidence': evidence}
+            self.association_confirmations = 0
+            return {'status': 'lost' if had_measurement else 'no_target', 'timestamp_ms': timestamp_ms,
+                    'candidates': candidates, 'rejected': rejected, 'visual_evidence': evidence}
         self.previous = selected
+        self.association_confirmations += 1
+        evidence['association_confirmations'] = self.association_confirmations
+        if not selected['distance_valid']:
+            self.confirmations = 0
+            return {'status': 'lost' if had_measurement else 'no_target', 'timestamp_ms': timestamp_ms,
+                    'candidates': candidates, 'rejected': rejected, 'visual_evidence': evidence}
         self.confirmations += 1
-        return dict(selected, status='tracking' if self.confirmations >= c['confirmation_frames'] else 'confirming',
+        confirmed = self.confirmations >= c['confirmation_frames']
+        evidence.update(confirmations=self.confirmations, navigation_confirmed=confirmed)
+        return dict(selected, status='tracking' if confirmed else 'confirming',
                     confirmations=self.confirmations, candidates=candidates, rejected=rejected,
                     visual_evidence=evidence,
                     image_midline_error_px=selected['center_pixel'][0] - width / 2,

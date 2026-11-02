@@ -46,6 +46,10 @@ class DriveController:
         self._search_direction = None
         self._searching = False
         self._search_reverse_done = False
+        self._search_inspecting = False
+        self._search_view_pending = False
+        self._search_turn_active = False
+        self._search_arc_active = False
         self._adjust_due = False
         self._adjust_count = 0
         self.corrections = 0
@@ -66,20 +70,25 @@ class DriveController:
         self._coarse_reference = None
         self._parking_reference = self._parking_ready_ms = None
         self._fine_request = None
+        self._search_inspecting = False
         self._adjust_due = bool(change_view)
         self._moving_started = False
         self.phase = 'settling'
 
     def request_search(self, direction=None):
+        if self._searching:
+            return
         self._searching = direction != 'top'
         self._search_direction = direction or self._search_direction or 'left'
         self._search_reverse_done = False
+        self._search_inspecting = self._search_view_pending = self._search_turn_active = False
+        self._search_arc_active = False
         self.anchor = self.parking = self._paired_point = None
         self._coarse_reference = None
         self.cancel_fine()
 
     def _changed_target(self, version):
-        initial_search = self.version is None and self._searching
+        searching = self._searching
         self.version = version
         self.anchor = self.paired_coarse = self.parking = self._paired_point = None
         self._parking_reference = self._parking_ready_ms = None
@@ -87,8 +96,39 @@ class DriveController:
         self._coarse_reference = self._moving_retry_frame = None
         self._adjust_due = False
         self._moving_started = False
-        self._searching = initial_search
+        self._searching = searching
+        self._search_inspecting = False
         self.phase = 'observe'
+
+    def _end_search(self):
+        self._searching = self._search_inspecting = False
+        self._search_view_pending = self._search_turn_active = False
+        self._search_arc_active = False
+
+    def _canonical_coarse(self, coarse):
+        """Evidence and control coordinates must name the same blue candidate."""
+        if not isinstance(coarse, dict) or not isinstance(coarse.get('visual_evidence'), dict):
+            return coarse
+        evidence = dict(coarse['visual_evidence'])
+        result = dict(coarse, visual_evidence=evidence)
+        keys = ('bbox_px', 'center_pixel', 'pixels', 'ground_contact_proxy_Base_mm',
+                'image_midline_error_px', 'confirmations')
+        same = all(coarse.get(key) == evidence.get(key) for key in
+                   ('bbox_px', 'center_pixel', 'ground_contact_proxy_Base_mm'))
+        for key in keys:
+            result.pop(key, None)
+            if key in evidence:
+                result[key] = evidence[key]
+        if evidence.get('timestamp_ms') != coarse.get('capture_timestamp_ms'):
+            evidence['associated'] = evidence['navigation_confirmed'] = False
+        navigation = evidence.get('navigation_confirmed')
+        if navigation is True:
+            result['status'] = 'tracking'
+        elif navigation is False and coarse.get('status') in ('tracking', 'confirming'):
+            result['status'] = 'confirming'
+        elif navigation is None and not same and coarse.get('status') in ('tracking', 'confirming'):
+            result['status'] = 'confirming'
+        return result
 
     def _observe_motor(self, state, now):
         sent = state.get('_k230_sent_ms', now)
@@ -143,7 +183,8 @@ class DriveController:
             return None
         evidence = coarse.get('visual_evidence') or {}
         if (evidence.get('ambiguous') or evidence.get('associated') is False or
-                evidence.get('distance_valid') is False):
+                evidence.get('distance_valid') is False or
+                evidence.get('navigation_confirmed') is False):
             return None
         try:
             plan = coarse_drive_plan(coarse, self.projection, self.config, now, self._speeds())
@@ -216,6 +257,7 @@ class DriveController:
 
     def _bind_anchor(self, observation, paired):
         distance_anchor(observation)
+        paired = self._canonical_coarse(paired)
         self.anchor, self.paired_coarse = observation, paired
         self._paired_point = None
         if (isinstance(paired, dict) and paired.get('frame_id') == observation.get('frame_id') and
@@ -312,6 +354,7 @@ class DriveController:
                 self._moving_retry_frame = decision.get('coarse_frame_id')
             return None
         if verdict['accepted']:
+            self._end_search()
             self.parking = {'status': 'parked', 'verification': verdict,
                             'verification_observation': observation}
             self._parking_reference = dict(request['motor'])
@@ -320,6 +363,7 @@ class DriveController:
             return None
         self.parking = None
         if verdict['status'] == 'not_parked':
+            self._end_search()
             self._bind_anchor(observation, paired)
             plan = self._near_plan(coarse_plan, now)
             if (plan['status'] == 'follow' and
@@ -337,7 +381,14 @@ class DriveController:
         # An unavailable measurement never becomes parking authority. A
         # visible target can be observed from a genuinely different view.
         self.phase = 'observing'
-        self._adjust_due = True
+        if self._searching:
+            # The candidate never became a located target. Inspect again only
+            # after a real search turn, not via ordinary target corrections.
+            self._search_inspecting = False
+            self._search_view_pending = True
+            self._adjust_due = False
+        else:
+            self._adjust_due = True
         return None
 
     def _arc(self, angle):
@@ -356,6 +407,7 @@ class DriveController:
 
     def update(self, coarse, motor_state, now_ms, precise=None, target_version=0,
                fine_pending=False, target_event=None, arm_active=False):
+        coarse = self._canonical_coarse(coarse)
         event = target_event or {}
         decision = {'phase': self.phase, 'status': 'running', 'command': None,
                     'request_fine': None, 'allow_arm': False, 'parking': None,
@@ -375,7 +427,7 @@ class DriveController:
         target_valid = event.get('target_valid', True)
         measured_coarse_plan = self._coarse_plan(coarse, now_ms)
         coarse_plan = measured_coarse_plan if visible else None
-        if coarse_plan is not None and target_valid:
+        if coarse_plan is not None and target_valid and not self._searching:
             self._remember_coarse(coarse)
         elif (running and self._active_action == 'follow' and target_valid and
                 not self._searching):
@@ -408,6 +460,7 @@ class DriveController:
                     self._moving_started = True
                 elif name == 'STOP':
                     self._active_action = None
+                    self._search_arc_active = self._search_turn_active = False
             decision.update(phase=self.phase, corrections=self.corrections,
                             fine_requests=self.fine_requests,
                             arc_timeouts=self.arc_timeouts, last_arc_end=self.last_arc_end)
@@ -427,6 +480,10 @@ class DriveController:
             if self._active_action == 'arc':
                 self.last_arc_end = {'at_ms': now_ms, 'command': self._arc_command,
                     'target_version': self.version, 'phase': self.phase, 'state': dict(state)}
+                if self._searching and self._search_turn_active and reason == 8:
+                    self._search_view_pending = False
+                self._search_turn_active = False
+                self._search_arc_active = False
             if reason in (2, 4):
                 self._motion_hold = 'existing_motor_stop_%d' % reason
             elif self._active_action == 'arc':
@@ -436,7 +493,6 @@ class DriveController:
                     self.arc_timeouts += 1
                     self.restart_observation()
                     self.paired_coarse = None
-                    self._searching = False
                 elif reason != 8:
                     self._motion_hold = 'arc_stopped_%d' % reason
             self._active_action = None
@@ -456,27 +512,6 @@ class DriveController:
                 coarse_plan['coarse_Base_X_mm'] <= self.near['capture_Base_X_mm']):
             self.phase = 'settling'
             return finish('STOP', 'target_changed_near')
-        if self._searching:
-            evidence = (coarse or {}).get('visual_evidence') or {}
-            if coarse_plan or (visible and evidence.get('reason') != 'clipped_blob'):
-                self._searching = False
-                self.phase = 'observe'
-                if running:
-                    return finish('STOP', 'reacquired')
-            else:
-                self.phase = 'searching'
-                if running:
-                    return finish('HB')
-                if self.stopped_at_ms is None:
-                    return finish(status='settling')
-                if self._search_direction == 'bottom' and not self._search_reverse_done:
-                    self._search_reverse_done = True
-                    distance = self.options.get('reobserve_reverse_mm', 10)
-                    return finish('ARC,%d,%d' % (-distance, -distance), 'searching')
-                angle = self.options.get('search_angle_deg', 10)
-                if self._search_direction == 'right':
-                    angle = -angle
-                return finish(self._arc(angle), 'searching')
         # A version change is processed above before accepting a completed job.
         if precise is not None and target_valid:
             command = self._accept(precise, state, now_ms, coarse_plan, decision)
@@ -486,8 +521,6 @@ class DriveController:
             decision.update(allow_arm=visible, parking=self.parking)
             self.phase = 'parked'
             return finish(status='parked' if visible else 'waiting_for_target')
-        if self._active_action == 'arc' and running:
-            return finish('HB')
         if self._fine_request is not None and self._fine_request['purpose'] == 'static':
             # A stopped verification owns the car until its result arrives.
             # The old moving anchor may still predict a fraction of a mm to
@@ -499,11 +532,58 @@ class DriveController:
             if not fine_pending and not decision['precise_deferred']:
                 self.cancel_fine()
                 if not visible:
+                    self._search_inspecting = False
                     self.phase = 'settling'
                     return finish(status='waiting_for_target')
                 self._request('static', coarse, state, now_ms, decision, False)
             self.phase = 'fine_static'
             return finish(status='localizing_static')
+        if self._searching:
+            evidence = (coarse or {}).get('visual_evidence') or {}
+            if running and not self._search_arc_active:
+                self.phase = 'searching'
+                return finish('STOP', 'starting_search')
+            if coarse_plan is not None and target_valid:
+                self._end_search()
+                self._remember_coarse(coarse)
+                self.phase = 'observe'
+                if running:
+                    return finish('STOP', 'reacquired')
+            else:
+                stable_cue = (visible and target_valid and evidence.get('distance_valid') is False and
+                    evidence.get('reason') != 'clipped_blob' and not self._search_view_pending and
+                    evidence.get('association_confirmations', 0) >=
+                        self.config['tracking'].get('confirmation_frames', 3))
+                if self._search_inspecting or stable_cue:
+                    if visible and target_valid:
+                        self._search_inspecting = True
+                        self.phase = 'search_candidate'
+                        if running:
+                            return finish('STOP', 'checking_search_candidate')
+                        if self.stopped_at_ms is None:
+                            return finish(status='settling')
+                        self._request('static', coarse, state, now_ms, decision, fine_pending)
+                        return finish(status='checking_search_candidate')
+                    self._search_inspecting = False
+                self.phase = 'searching'
+                if running:
+                    return finish('HB')
+                if self.stopped_at_ms is None:
+                    return finish(status='settling')
+                if self._search_direction == 'bottom' and not self._search_reverse_done:
+                    self._search_reverse_done = True
+                    self._search_turn_active = False
+                    self._search_arc_active = True
+                    distance = self.options.get('reobserve_reverse_mm', 10)
+                    return finish('ARC,%d,%d' % (-distance, -distance), 'searching')
+                angle = self.options.get('search_angle_deg', 10)
+                if self._search_direction == 'right':
+                    angle = -angle
+                self._search_turn_active = True
+                self._search_arc_active = True
+                return finish(self._arc(angle), 'searching')
+        if self._active_action == 'arc' and running:
+            return finish('HB')
         if not target_valid:
             self.phase = 'observing'
             if coarse_plan is None or coarse_plan['coarse_Base_X_mm'] <= self.near['capture_Base_X_mm']:
@@ -549,6 +629,9 @@ class DriveController:
             name = 'SPEED' if running else 'FOLLOW'
             return finish('%s,%d,%d' % (name, plan['left_mm_s'], plan['right_mm_s']))
         if coarse_plan is None:
+            if visible and evidence.get('distance_valid') is True:
+                self.phase = 'observing'
+                return finish(status='confirming_target')
             if visible and evidence.get('reason') != 'clipped_blob':
                 if running:
                     self.phase = 'settling'
