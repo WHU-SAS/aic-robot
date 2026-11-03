@@ -1,8 +1,8 @@
 """Shared, bounded physical-side localization for car parking and arm picking.
 
 Input is an owned, full-size BGR image decoded from the existing JPEG95 path.
-The coarse box only limits proposal search; it is never a physical face. All
-four edges, the 2px pose limit and calibrated-table tests retain pick semantics.
+The coarse box only limits proposal search; it is never a physical face. The
+original four-edge2px path stays; static recovery may use explicit cube3px.
 Yields are scheduling opportunities, not a promise of board timing or threads.
 """
 import math
@@ -744,7 +744,7 @@ def _contour_side_seed(seed, edge_index, vertices, contour=None):
     return max(proposals, key=lambda item: item[:2])[2] if proposals else None
 
 
-def localize_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
+def _original_localize_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
                    max_candidates=3, roi_padding_px=24, stations_per_step=8,
                    side_search_height_ratio=1.6, include_range=False):
     """Yield bounded work, then one ``complete`` shared precise observation.
@@ -1044,6 +1044,100 @@ def localize_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
         'usable_sides': len(faces), 'rejected': rejected, 'top_fallback': False,
         'sampling_backend': 'native_remap' if _BATCH_EDGES else 'portable'}
     yield {'stage': 'complete', 'observation': observation}
+
+
+def localize_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
+                   max_candidates=3, roi_padding_px=24, stations_per_step=8,
+                   side_search_height_ratio=1.6, include_range=False):
+    """Retain verified results; select one current-image static recovery route.
+
+    Moving range estimates keep their original bounded path and handoff time.
+    Profiles retain the old face2px policy. Five measured nonplanar corners use
+    their own approved cube3px policy. No second capture or guessed coordinate.
+    """
+    started = _now()
+    for step in _original_localize_steps(bgr, frame, bbox_px, intrinsics,
+            extrinsics, table_plane, max_candidates, roi_padding_px,
+            stations_per_step, side_search_height_ratio, include_range):
+        if step['stage'] == 'complete':
+            original = step['observation']
+        else:
+            yield step
+    if (include_range or original['status'] == 'localized' or
+            original.get('search', {}).get('roi_px') is None):
+        yield {'stage': 'complete', 'observation': original}
+        return
+    try:
+        from .cube_corners import prepare, corner_steps
+        from .cube_observation import build_result
+        from .profile_recovery import recover_steps
+    except ImportError:
+        from cube_corners import prepare, corner_steps
+        from cube_observation import build_result
+        from profile_recovery import recover_steps
+    try:
+        prepared = prepare(bgr, bbox_px, roi_padding_px, side_search_height_ratio)
+    except ValueError as exc:
+        original['search']['recovery_rejected'] = str(exc)
+        original['processing_ms'] = _elapsed(started)
+        yield {'stage': 'complete', 'observation': original}
+        return
+    selector = prepared['selector']
+    route = selector['route_hint']
+    yield {'stage': 'recovery_selected', 'route': route, 'selector': selector}
+    if route == 'profile':
+        yield {'stage': 'profile_recovery_start'}
+        for step in recover_steps(bgr, frame, bbox_px, intrinsics, extrinsics,
+                table_plane, roi_padding_px, side_search_height_ratio, prepared):
+            if step['stage'] == 'complete':
+                recovered = step['observation']
+            else:
+                yield step
+    else:
+        K = [list(row) for row in intrinsics['camera_matrix']]
+        K[0] = [v*1280/intrinsics['image_width'] for v in K[0]]
+        K[1] = [v*960/intrinsics['image_height'] for v in K[1]]
+        rejected, measured, raw = [], 0, None
+        steps = corner_steps(bgr, bbox_px, intrinsics, extrinsics, table_plane,
+                             roi_padding_px, side_search_height_ratio, prepared)
+        for step in steps:
+            if step['stage'] == 'candidate':
+                measured += 1
+                try:
+                    raw = build_result(step['measurement'], K,
+                        intrinsics['distortion_coefficients'],
+                        extrinsics['T_Base_from_Camera_mm'], table_plane)
+                except (ValueError, ZeroDivisionError) as exc:
+                    rejected.append({'candidate': step['candidate'], 'reason': str(exc)})
+                    yield dict(rejected[-1], stage='candidate_rejected')
+                else:
+                    # The second independent foot measurement is lazy; do not
+                    # execute it after a valid first five-corner result.
+                    steps.close()
+                    break
+            elif step['stage'] == 'complete':
+                rejected.extend(step['rejections'])
+            else:
+                yield step
+        if raw is None:
+            raw = {'status': 'no_complete_face', 'reason':
+                   rejected[-1]['reason'] if rejected else 'No measured five-corner cube'}
+        recovered = localize_precise(None, frame, intrinsics, extrinsics, table_plane,
+                                    localizer=lambda *args: raw)
+        recovered['search'] = {'roi_px': prepared['roi_px'],
+            'measured_seed_count': measured, 'candidate_limit': 2,
+            'usable_sides': 0, 'rejected': rejected, 'top_fallback': False}
+    recovered['search']['recovery_route'] = route
+    recovered['search']['route_selector'] = selector
+    if recovered['status'] == 'localized':
+        recovered['search']['primary_search'] = original['search']
+        recovered['search']['primary_processing_ms'] = original['processing_ms']
+        final = recovered
+    else:
+        original['search']['static_recovery'] = recovered.get('search', {})
+        final = original
+    final['processing_ms'] = _elapsed(started)
+    yield {'stage': 'complete', 'observation': final}
 
 
 def localize(im, K, D, T, table_plane, bbox_px=None, **options):

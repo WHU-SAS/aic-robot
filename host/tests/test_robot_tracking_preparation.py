@@ -1,4 +1,5 @@
 """Pure boot preparation and fresh per-command control state, without hardware."""
+import builtins
 import sys
 from types import SimpleNamespace
 import unittest
@@ -16,7 +17,7 @@ from host.tests.test_robot_tracking_bundle import board_app
 
 class TrackingPreparationTests(unittest.TestCase):
     def modules(self, trace):
-        return {
+        modules = {
             'app':SimpleNamespace(run_ready=Mock(side_effect=lambda *args,**kwargs:
                 trace.append('ready2')),begin_from_observation_steps=Mock(),
                 PickPlanUnavailable=ValueError),
@@ -30,6 +31,10 @@ class TrackingPreparationTests(unittest.TestCase):
             'cooperative_static_session':SimpleNamespace(CooperativeStaticPickSession=Mock()),
             'robot_tracking':SimpleNamespace(TrackingTask=Mock(),ReobserveRequired=ValueError),
             'kinematics':SimpleNamespace(Geometry=Mock())}
+        for name in ('edge_profiles', 'separator_profiles', 'profile_recovery',
+                     'cube_pose', 'cube_corners', 'cube_observation'):
+            modules[name]=SimpleNamespace()
+        return modules
 
     def test_prepare_keeps_only_static_geometry_and_uninstantiated_factories(self):
         app=board_app()
@@ -65,7 +70,15 @@ class TrackingPreparationTests(unittest.TestCase):
             return object()
         modules['ground_projection'].GroundProjection.side_effect=build_projection
         modules['kinematics'].Geometry.side_effect=build_geometry
-        with patch.dict(sys.modules,modules),patch.object(app.time,'ticks_ms',clock.now,create=True):
+        image_modules=('edge_profiles','separator_profiles','profile_recovery',
+                       'cube_pose','cube_corners','cube_observation')
+        imported=[]
+        original_import=builtins.__import__
+        def import_module(name,*args,**kwargs):
+            if name in image_modules:imported.append((name,clock.now()))
+            return original_import(name,*args,**kwargs)
+        with patch.dict(sys.modules,modules),patch.object(app.time,'ticks_ms',clock.now,create=True),\
+                patch.object(builtins,'__import__',side_effect=import_module):
             steps=app.prepare_tracking_steps(config)
             events=[]
             while True:
@@ -75,9 +88,16 @@ class TrackingPreparationTests(unittest.TestCase):
                     break
                 clock.advance(160)  # A separate synthetic audio read between groups.
         self.assertEqual([event['stage'] for event in events[:-1]],
-            ['vision_loaded','coarse_loaded','fine_loaded','control_loaded'])
+            ['vision_loaded','coarse_loaded','fine_loaded']+
+            ['image_math_loaded']*6+['control_loaded'])
+        self.assertEqual([e['module'] for e in events if e.get('stage')=='image_math_loaded'],
+                         list(image_modules))
+        # Each module import belongs to a different existing audio-read turn,
+        # rather than importing allsix and merely yielding their names later.
+        self.assertEqual(imported,[(name,480+160*j)
+                                   for j,name in enumerate(image_modules)])
         self.assertEqual(events[-1]['prepared']['prepare_ms'],7)
-        self.assertEqual(events[-1]['prepared']['prepare_elapsed_ms'],647)
+        self.assertEqual(events[-1]['prepared']['prepare_elapsed_ms'],1607)
         self.assertEqual(trace,[])
         modules['motor_link'].MotorLink.assert_not_called()
         modules['camera'].CameraSession.assert_not_called()

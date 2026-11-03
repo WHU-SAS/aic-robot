@@ -44,6 +44,9 @@ def build_bundle(pick_config=None):
     files['camera.py']=(ROOT/'device/k230/vision/camera.py').read_bytes()
     files['vision_runtime.py']=(ROOT/'device/k230/vision/runtime.py').read_bytes()
     files['physical_side.py']=(ROOT/'device/k230/vision/physical_side.py').read_bytes()
+    for name in ('edge_profiles', 'separator_profiles', 'profile_recovery',
+                 'cube_pose', 'cube_corners', 'cube_observation'):
+        files[name+'.py']=(ROOT/('device/k230/vision/'+name+'.py')).read_bytes()
     files['side_range.py']=(ROOT/'device/k230/vision/side_range.py').read_bytes()
     files['evidence.py']=(ROOT/'device/k230/vision/evidence.py').read_bytes()
     files['wake_word.py']=(ROOT/'device/k230/audio/wake_word.py').read_bytes()
@@ -129,7 +132,7 @@ def verify(link,remote,manifest,config):
     # Imports/pose/IK and saved registration checks only: no camera/UART init.
     source="""import os,sys,json,binascii,uhashlib
 sys.path.insert(0,%r)
-for name in ['app','pose','numeric','kinematics','cube_orientation','wrist_plan','vision','physical_side','side_range','evidence','reflection_faces','face_selection','side_faces','table_pose','top_boundaries','camera','vision_runtime','wake_word','control','voice_commands']:
+for name in ['app','pose','numeric','kinematics','cube_orientation','wrist_plan','vision','physical_side','edge_profiles','separator_profiles','profile_recovery','cube_pose','cube_corners','cube_observation','side_range','evidence','reflection_faces','face_selection','side_faces','table_pose','top_boundaries','camera','vision_runtime','wake_word','control','voice_commands']:
  if name in sys.modules:del sys.modules[name]
 with open(%r+'/manifest.json') as f:m=json.load(f)
 for name,item in m['files'].items():

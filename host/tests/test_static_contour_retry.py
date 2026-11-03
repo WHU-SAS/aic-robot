@@ -76,7 +76,8 @@ class StaticContourRetryTests(unittest.TestCase):
             self.assertEqual(result['capture_timestamp_ms'],frame['capture_timestamp_ms'])
             self.assertEqual(result['search']['measured_seed_count'],2)
             self.assertEqual(result['search']['candidate_limit'],3)
-            self.assertEqual(result['search']['rejected'][0]['reason'],'Insufficient edge contrast')
+            self.assertEqual(result['search']['rejected'][0]['reason'],
+                             'No coherent measured internal edge')
             self.assertEqual([e['edge_index'] for e in events if
                 e['stage']=='edge_complete' and e['candidate']==1],[0,1,2,3])
             self.assertFalse(any(e['stage']=='edge_reused' and e['candidate']==1 for e in events))
@@ -124,7 +125,11 @@ class StaticContourRetryTests(unittest.TestCase):
 
     def test_existing_attempt_limit_is_not_extended_by_retry(self):
         image,frame,config = self.near()
-        result = self.run_image(image,frame,config,max_candidates=1)[-1]['observation']
+        # This limit belongs to the original face proposals. The separate,
+        # approved cube recovery has its own budget and may recover the image.
+        result = list(sides._original_localize_steps(image,frame,None,
+            config['intrinsics'],config['extrinsics'],config['table_plane'],
+            max_candidates=1))[-1]['observation']
         self.assertEqual(result['status'],'no_complete_face')
         self.assertEqual(result['search']['measured_seed_count'],1)
         self.assertEqual(result['search']['candidate_limit'],1)

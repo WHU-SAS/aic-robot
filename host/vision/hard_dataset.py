@@ -109,7 +109,7 @@ def summarize(observation):
     if not isinstance(raw, dict):
         raw = {}
     poses = raw.get('poses') or []
-    pose = poses[0] if poses else {}
+    pose = poses[0] if poses else raw.get('cube_pose', {})
     quality = observation.get('quality') or {}
     face_kind = pose.get('table_geometry', {}).get('face_kind')
     if face_kind is None:
@@ -118,11 +118,11 @@ def summarize(observation):
         elif raw.get('top_boundary_verified'):
             face_kind = 'top'
     status = observation.get('status', raw.get('status', 'unknown'))
-    if status == 'complete_face_candidate':
+    if status in ('complete_face_candidate', 'complete_cube_candidate'):
         status = 'localized'
     return dict(status=status, center_Base_mm=observation.get('cube_center_Base_mm', raw.get('cube_center_Base_mm')),
                 reason=observation.get('reason', raw.get('reason')),
-                reprojection_rms_px=quality.get('reprojection_rms_px', pose.get('face_reprojection_rms_px')),
+                reprojection_rms_px=quality.get('reprojection_rms_px', pose.get('face_reprojection_rms_px', pose.get('corner_reprojection_rms_px'))),
                 side_selection=quality.get('side_selection', raw.get('side_selection')),
                 face_kind=face_kind,
                 vision_path=quality.get('vision_path', raw.get('vision_path')))

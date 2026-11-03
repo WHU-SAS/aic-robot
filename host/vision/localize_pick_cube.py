@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Use the existing K230 OpenCV face recognition and 20mm IPPE cube pose."""
+"""Replay the shared measured-face or measured-corner20mm cube localizer."""
 
 import sys as _sys
 from pathlib import Path as _Path
@@ -32,14 +32,21 @@ def localize(image,output,vision_config=None):
         'clock_domain':None,'timestamp_source':'unavailable','image_size_px':[1280,960]}
  observation=localize_precise(im,frame,intr,ext,cfg.get('table_plane_Base_mm') if cfg.get('table_pose_constraints_enabled') else None)
  v=observation.pop('payload',{'status':'no_complete_face','reason':observation.get('reason')})
- if v['status']!='complete_face_candidate' or not v.get('poses'):
-  (output/'vision_candidates.json').write_text(json.dumps(v,ensure_ascii=False,indent=2)+'\n');raise RuntimeError('未识别到完整可靠的蓝色20mm方块面：'+str(v.get('reason',v['status'])))
- T=np.array(ext['T_Base_from_Camera_mm']);cent=np.array(v['poses'][0]['cube_center_Camera_mm']);base=T[:3,:3]@cent+T[:3,3]
- for index,face in enumerate(v.get('side_faces') or [v]):
-  cv2.polylines(im,[np.rint(face['face_quad_px']).astype(np.int32)],True,((0,255,0) if index==0 else (255,255,0)),3)
- cv2.drawMarker(im,tuple(np.rint(v['poses'][0]['cube_center_pixel']).astype(int)),(0,255,255),cv2.MARKER_CROSS,20,2);cv2.imwrite(str(output/'camera_detected.jpg'),im)
+ cube=v.get('status')=='complete_cube_candidate'
+ if observation['status']!='localized' or (not cube and (v['status']!='complete_face_candidate' or not v.get('poses'))):
+  (output/'vision_candidates.json').write_text(json.dumps(v,ensure_ascii=False,indent=2)+'\n');raise RuntimeError('未识别到可靠的蓝色20mm方块：'+str(v.get('reason',v['status'])))
+ pose=v['cube_pose'] if cube else v['poses'][0]
+ T=np.array(ext['T_Base_from_Camera_mm']);cent=np.array(pose['cube_center_Camera_mm']);base=T[:3,:3]@cent+T[:3,3]
+ if cube:
+  # These are the five observed points, not an invented measured quadrilateral.
+  for point in pose['image_points_px']:cv2.circle(im,tuple(np.rint(point).astype(int)),4,(0,255,0),2)
+ else:
+  for index,face in enumerate(v.get('side_faces') or [v]):
+   cv2.polylines(im,[np.rint(face['face_quad_px']).astype(np.int32)],True,((0,255,0) if index==0 else (255,255,0)),3)
+ cv2.drawMarker(im,tuple(np.rint(pose['cube_center_pixel']).astype(int)),(0,255,255),cv2.MARKER_CROSS,20,2);cv2.imwrite(str(output/'camera_detected.jpg'),im)
  table_z=table_height_at(cfg,base[:2])
- result={'status':'localized','method':'shared PC/K230 measured sides; larger side or mean of similar-area side centers; verified top fallback','cube_center_Base_mm':base.tolist(),'cube_center_Camera_mm':cent.tolist(),'table_z_Base_mm':table_z,'cube_center_z_above_assumed_table_mm':float(base[2]-table_z),'vision':v,'intrinsics':str(ip),'extrinsics':str(ep),'motion_performed':False,'xy_compensation_applied':False,'observation':observation}
+ method='shared PC/K230 five measured corners; independent cube3px policy' if cube else 'shared PC/K230 measured sides; larger side or mean of similar-area side centers; verified top fallback'
+ result={'status':'localized','method':method,'cube_center_Base_mm':base.tolist(),'cube_center_Camera_mm':cent.tolist(),'table_z_Base_mm':table_z,'cube_center_z_above_assumed_table_mm':float(base[2]-table_z),'vision':v,'intrinsics':str(ip),'extrinsics':str(ep),'motion_performed':False,'xy_compensation_applied':False,'observation':observation}
  if cfg.get('table_plane_Base_mm') is not None:result['table_plane_Base_mm']=cfg['table_plane_Base_mm']
  (output/'vision_record.json').write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n');return result
 

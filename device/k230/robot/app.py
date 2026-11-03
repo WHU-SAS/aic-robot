@@ -102,6 +102,15 @@ def prepare_tracking_steps(config):
     duration = elapsed(time.ticks_ms(), step_started)
     work_ms += duration
     yield {'stage':'fine_loaded','ms':duration}
+    # Reuse the existing audio/camera warmup turns. New recovery modules must
+    # not be compiled for the first time after the final parking photograph.
+    for name in ('edge_profiles', 'separator_profiles', 'profile_recovery',
+                 'cube_pose', 'cube_corners', 'cube_observation'):
+        step_started = time.ticks_ms()
+        __import__(name)
+        duration = elapsed(time.ticks_ms(), step_started)
+        work_ms += duration
+        yield {'stage':'image_math_loaded','module':name,'ms':duration}
     step_started = time.ticks_ms()
     from robot_tracking import TrackingTask, ReobserveRequired
     duration = elapsed(time.ticks_ms(), step_started)

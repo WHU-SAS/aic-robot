@@ -223,10 +223,12 @@ def _same_calibration(config,source):
 
 
 def _handoff_target(observation):
-    """Check capability and units; the task owns stopped/fresh/window attestation.
+    """Check evidence capability and units; the task owns parking/freshness.
 
     A long static solve retains its capture time. This consumer does not renew
     it or impose a second generic capture-age limit after parking acceptance.
+    Five-corner evidence has its own3px policy, never an enlarged face limit.
+    Geometry/reprojection/table verification belongs to the shared runtime.
     """
     expected={'schema':'aic.vision_observation.v1','mode':'precise','status':'localized',
               'coordinate_frame':'Base','units':'mm','reference_point':'cube_geometric_center'}
@@ -245,11 +247,57 @@ def _handoff_target(observation):
             any(type(v) not in (int,float) or not math.isfinite(v) for v in center)):
         raise ValueError('Pick handoff requires finite raw cube XYZ')
     quality=observation.get('quality') or {}
+    if not isinstance(quality,dict):raise ValueError('Pick handoff quality must be a result object')
     rms=quality.get('reprojection_rms_px')
-    if type(rms) not in (int,float) or not math.isfinite(rms) or not 0<=rms<=2:
-        raise ValueError('Pick handoff does not meet the existing 2px face criterion')
     raw=observation.get('payload') or {}
     if not isinstance(raw,dict):raise ValueError('Pick handoff payload must be a result object')
+    evidence='nonplanar_cube_five_corners'
+    cube_marked=(raw.get('status')=='complete_cube_candidate' or 'cube_pose' in raw or
+                 raw.get('evidence_type')==evidence or quality.get('evidence_type')==evidence or
+                 quality.get('boundary_method')=='six_measured_edges_five_corners' or
+                 quality.get('vision_path')=='shared_nonplanar_cube_corners')
+    if cube_marked:
+        pose=raw.get('cube_pose')
+        def vector(value,count):
+            return (isinstance(value,(list,tuple)) and len(value)==count and
+                    all(type(v) in (int,float) and math.isfinite(v) for v in value))
+        def matrix(value,rows,columns):
+            return (isinstance(value,(list,tuple)) and len(value)==rows and
+                    all(vector(row,columns) for row in value))
+        if (raw.get('status')!='complete_cube_candidate' or raw.get('evidence_type')!=evidence or
+                quality.get('evidence_type')!=evidence or not isinstance(pose,dict) or
+                type(rms) not in (int,float) or not math.isfinite(rms) or not 0<=rms<=3 or
+                type(quality.get('reprojection_limit_px')) not in (int,float) or
+                quality['reprojection_limit_px']!=3 or
+                quality.get('boundary_method')!='six_measured_edges_five_corners' or
+                quality.get('vision_path')!='shared_nonplanar_cube_corners'):
+            raise ValueError('Pick handoff requires matching five-corner cube evidence')
+        corner_rms=pose.get('corner_reprojection_rms_px')
+        rotation=pose.get('R_Object_to_Camera')
+        if (type(corner_rms) not in (int,float) or not math.isfinite(corner_rms) or
+                not 0<=corner_rms<=3 or abs(corner_rms-rms)>1e-6 or
+                not matrix(rotation,3,3) or not vector(pose.get('t_Object_to_Camera_mm'),3) or
+                not vector(pose.get('object_center_mm'),3) or list(pose['object_center_mm'])!=[0,10,10] or
+                type(pose.get('edge_length_mm')) not in (int,float) or pose['edge_length_mm']!=20 or
+                not matrix(pose.get('object_points_mm'),5,3) or
+                not matrix(pose.get('image_points_px'),5,2) or
+                not vector(pose.get('cube_center_Camera_mm'),3) or
+                not matrix(pose.get('cube_projected_corners_px'),8,2) or
+                pose.get('cube_projection_source')!='pose_transform' or
+                not vector(raw.get('cube_center_Base_mm'),3) or
+                any(abs(a-b)>1e-6 for a,b in zip(center,raw['cube_center_Base_mm'])) or
+                any(key in raw or key in pose for key in
+                    ('face_reprojection_rms_px','face_quad_px','physical_edges','side_faces','poses'))):
+            raise ValueError('Pick handoff requires a complete finite five-corner cube pose')
+        columns=list(zip(*rotation))
+        determinant=(rotation[0][0]*(rotation[1][1]*rotation[2][2]-rotation[1][2]*rotation[2][1])-
+                     rotation[0][1]*(rotation[1][0]*rotation[2][2]-rotation[1][2]*rotation[2][0])+
+                     rotation[0][2]*(rotation[1][0]*rotation[2][1]-rotation[1][1]*rotation[2][0]))
+        if (abs(determinant-1)>1e-3 or any(abs(sum(a*b for a,b in zip(columns[i],columns[j]))-
+                (1 if i==j else 0))>1e-3 for i in range(3) for j in range(3))):
+            raise ValueError('Pick handoff requires a proper cube rotation')
+    elif type(rms) not in (int,float) or not math.isfinite(rms) or not 0<=rms<=2:
+        raise ValueError('Pick handoff does not meet the existing 2px face criterion')
     found=dict(raw);found['cube_center_Base_mm']=list(center);found['observation']=observation
     return found
 

@@ -96,6 +96,9 @@ class TrackingBundleTests(unittest.TestCase):
             'cooperative_static_session':SimpleNamespace(CooperativeStaticPickSession=Mock()),
             'robot_tracking':SimpleNamespace(TrackingTask=Mock(return_value=task),ReobserveRequired=ValueError),
             'kinematics':SimpleNamespace(Geometry=Mock())}
+        for name in ('edge_profiles','separator_profiles','profile_recovery',
+                     'cube_pose','cube_corners','cube_observation'):
+            modules[name]=SimpleNamespace()
         with patch.dict(sys.modules,modules),patch.object(app.time,'ticks_ms',lambda:0,create=True),\
              patch.object(app.time,'sleep_ms',Mock(),create=True),patch('builtins.open',mock_open()):
             if interrupted:

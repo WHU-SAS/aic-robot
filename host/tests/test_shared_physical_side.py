@@ -133,7 +133,10 @@ class SharedPhysicalSideTests(unittest.TestCase):
                 self.assertLess(ranged['X_interval_mm'][1]-ranged['X_interval_mm'][0],1.)
             else:
                 self.assertNotIn('range_candidate',result)
-        self.assertEqual(counts,[1,1])
+        # Stopped recovery selects an image route and still rejects this
+        # geometry; moving range retains its original single face solve.
+        self.assertIn(counts[0],(1,2))  # A selected profile may add one static face.
+        self.assertEqual(counts[1],1)   # Moving range never adds static recovery.
 
     def test_background_gradient_flank_does_not_hide_the_real_front_crease(self):
         folder=ROOT/'data/car/one_shot_parking/failed70_retry/evidence'

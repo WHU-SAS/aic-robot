@@ -34,10 +34,10 @@ def _envelope(mode,frame):
 
 
 def localize_precise(image,frame,intrinsics,extrinsics,table_plane=None,localizer=None):
-    """One existing physical-face solve; raw Base cube center, no grasp offset.
+    """Shared measured-face or explicit five-corner result; raw Base centre.
 
     Missing capture time remains None (e.g. saved-image replay), never replaced
-    with processing time. payload retains the legacy successful face result.
+    with processing time. payload retains its own face2px or cube3px evidence.
     """
     result=_envelope('precise',frame)
     if result['image_size_px']!=[1280,960]:raise ValueError('Precise mode requires calibrated 1280x960 input')
@@ -50,20 +50,30 @@ def localize_precise(image,frame,intrinsics,extrinsics,table_plane=None,localize
     started=_now()
     try:
         raw=localizer(image,K,intrinsics['distortion_coefficients'],extrinsics['T_Base_from_Camera_mm'],table_plane)
-        center=raw.get('cube_center_Base_mm');poses=raw.get('poses')
-        if (raw.get('status')!='complete_face_candidate' or not poses or
-            not isinstance(center,(list,tuple)) or len(center)!=3 or
-            not all(isinstance(v,(int,float)) and math.isfinite(v) for v in center)):
-            raise ValueError(raw.get('reason','No valid precise cube center'))
-        rms=poses[0].get('face_reprojection_rms_px')
-        if not isinstance(rms,(int,float)) or not math.isfinite(rms) or not 0<=rms<=2:
-            raise ValueError('Precise face does not meet existing 2px reprojection limit')
+        if raw.get('status')=='complete_cube_candidate':
+            try:from .cube_observation import validate_result,EVIDENCE_TYPE,RMS_LIMIT_PX
+            except ImportError:from cube_observation import validate_result,EVIDENCE_TYPE,RMS_LIMIT_PX
+            raw,rms=validate_result(raw,K,intrinsics['distortion_coefficients'],
+                                    extrinsics['T_Base_from_Camera_mm'],table_plane)
+            center=raw['cube_center_Base_mm']
+            quality={'evidence_type':EVIDENCE_TYPE,'reprojection_rms_px':rms,
+                'reprojection_limit_px':RMS_LIMIT_PX,'vision_path':raw.get('vision_path'),
+                'boundary_method':raw.get('boundary_method')}
+        else:
+            center=raw.get('cube_center_Base_mm');poses=raw.get('poses')
+            if (raw.get('status')!='complete_face_candidate' or not poses or
+                not isinstance(center,(list,tuple)) or len(center)!=3 or
+                not all(isinstance(v,(int,float)) and math.isfinite(v) for v in center)):
+                raise ValueError(raw.get('reason','No valid precise cube center'))
+            rms=poses[0].get('face_reprojection_rms_px')
+            if not isinstance(rms,(int,float)) or not math.isfinite(rms) or not 0<=rms<=2:
+                raise ValueError('Precise face does not meet existing 2px reprojection limit')
+            quality={'reprojection_rms_px':rms,'side_selection':raw.get('side_selection'),
+                'vision_path':raw.get('vision_path'),'boundary_method':raw.get('boundary_method')}
         result.update(status='localized',cube_center_Base_mm=list(center),
             coordinate_frame='Base',units='mm',reference_point='cube_geometric_center',
             xy_compensation_applied=False,payload=raw,
-            quality={'reprojection_rms_px':poses[0].get('face_reprojection_rms_px'),
-                'side_selection':raw.get('side_selection'),'vision_path':raw.get('vision_path'),
-                'boundary_method':raw.get('boundary_method')})
+            quality=quality)
     except ValueError as exc:
         result.update(status='no_complete_face',reason=str(exc))
     result['processing_ms']=_elapsed(started)
