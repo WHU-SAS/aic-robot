@@ -11,12 +11,19 @@ from tools.deploy.k230_robot import build_bundle as robot_bundle
 
 
 class FineObservationPauseTests(unittest.TestCase):
-    def fixture(self, purpose, capability='full', move_during_fine=True):
+    def fixture(self, purpose, capability='full', move_during_fine=True, overhead_fraction=0):
         f=fixtures.RobotTrackingTests()
         # Exercise the promoted one-frame tracking configuration, rather than
         # the legacy standalone fixture's deliberately retained three frames.
         config=robot_bundle(tracking=True)[0]['car']
-        with patch.object(fixtures,'build_bundle',return_value=(config,None,None,None)):
+        task_factory=fixtures.TrackingTask
+        def configured_task(*args,**kwargs):
+            # The base fixture reloads tracking_task.json during setUp. Select
+            # this comparison policy after that reload, before the real Task.
+            args[4]['tracking_task']['fine_observation_overhead_fraction']=overhead_fraction
+            return task_factory(*args,**kwargs)
+        with patch.object(fixtures,'build_bundle',return_value=(config,None,None,None)), \
+                patch.object(fixtures,'TrackingTask',side_effect=configured_task):
             f.setUp()
         self.assertEqual(f.config['tracking']['confirmation_frames'],1)
         if purpose=='moving':

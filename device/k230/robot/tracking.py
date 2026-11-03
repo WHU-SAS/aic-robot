@@ -54,6 +54,8 @@ class TrackingTask:
         self.last_parking = None
         self._parking_version = None
         self._last_capture = self._frame_motor = None
+        self._memory_odom_capture = None
+        self._fine_observation_reserve_ms = 0
         self._fresh_before_arm = False
         self._force_observe = False
         self._arm_motor_reference = None
@@ -68,6 +70,9 @@ class TrackingTask:
             planning_steps=0, plans_cancelled=0, max_planning_step_ms=0,
             target_changes=0, obsolete_frames_released=0, status_queries=0,
             commands_coalesced=0, first_motion_request=None)
+        self.metrics['fine_observation_jobs'] = []
+        self.metrics['fine_observation_totals'] = dict(fine_compute_ms=0,
+            observation_ms=0,observation_count=0,observation_overruns=0)
 
     def _record(self, event, details):
         # Keep transitions in RAM during motion. They join the existing final
@@ -209,6 +214,7 @@ class TrackingTask:
         self.evidence[:] = retained
 
     def _cancel_job(self, reason):
+        job = self.job
         try:
             if self.job is not None:
                 if reason in ('execution_fault', 'task_closed'):
@@ -217,8 +223,137 @@ class TrackingTask:
                 if cancel:cancel()
                 self.metrics['fine_cancelled'] += 1
         finally:
+            if job is not None:
+                job['_end_reason'] = reason
+                if not job.get('_observation_active'):
+                    self._finish_fine_accounting(job, reason)
             self.job = self.complete = None
             self.drive.cancel_fine()
+
+    def _finish_fine_accounting(self, job, reason):
+        if job.get('_accounted'):
+            return
+        if job['_observation_cost_ms']:
+            self._charge_fine_observation(job,0,complete=True)
+        job['_accounted'] = True
+        summary = dict(
+            number=job['number'], purpose=job['purpose'], reason=reason,
+            fine_compute_ms=job['fine_compute_ms'],
+            observation_ms=job['observation_ms'],
+            observation_count=job['observation_count'],
+            observation_max_ms=job['observation_max_ms'],
+            observation_reserve_ms=job['observation_reserve_ms'],
+            observation_overruns=job['observation_overruns'],
+            observation_fraction=job['observation_fraction'],
+            observation_actual_fraction=(job['observation_ms']/job['fine_compute_ms']
+                if job['fine_compute_ms'] else None))
+        self.metrics['fine_observation_jobs'].append(summary)
+        self.metrics['fine_observation_jobs'][:] = self.metrics['fine_observation_jobs'][-64:]
+        for key in self.metrics['fine_observation_totals']:
+            self.metrics['fine_observation_totals'][key] += summary[key]
+
+    def _charge_fine_observation(self, job, elapsed, complete=False):
+        job['observation_ms'] += elapsed
+        job['_observation_cost_ms'] += elapsed
+        if complete:
+            cost = job['_observation_cost_ms']
+            job['observation_max_ms'] = max(job['observation_max_ms'], cost)
+            if cost > job['observation_reserve_ms']:
+                job['observation_overruns'] += 1
+            job['observation_reserve_ms'] = max(job['observation_reserve_ms'], cost)
+            self._fine_observation_reserve_ms = max(self._fine_observation_reserve_ms,cost)
+            job['_observation_cost_ms'] = 0
+
+    def _light_fine_observation(self, job):
+        """Spend only earned fine-compute credit, after an owned-image yield.
+
+        This is a soft budget: a native capture/track call can exceed reserve.
+        No extra UART, driving decision, arm work or archive is performed here.
+        """
+        if (job.get('_light_pending') is not None or
+                job['observation_fraction'] <= 0 or
+                job['observation_ms']+job['observation_reserve_ms'] >
+                job['observation_fraction']*job['fine_compute_ms']):
+            return
+        reserve = job['observation_reserve_ms']
+        if (job['purpose']=='moving' and self.state.get('run') and
+                self._motion_sent_at is not None and
+                age_ms(self.clock(),self._motion_sent_at)+reserve >= self.motion_refresh or
+                job['purpose']=='static' and
+                age_ms(self.clock(),self._last_motor_reply)+reserve >=
+                    self.stationary_status_period):
+            # Optional camera work must not push an already due/near-due
+            # ORIGINAL feedback cycle behind another native call.
+            return True
+        started = self.clock()
+        job['observation_count'] += 1
+        try:
+            image, frame = self.capture()
+            stamp = frame['capture_timestamp_ms']
+            if self._last_capture is not None:
+                self.metrics['max_observation_gap_ms'] = max(
+                    self.metrics['max_observation_gap_ms'], age_ms(stamp,self._last_capture))
+            self._last_capture = stamp
+            self.metrics['observations'] += 1
+            job['_light_pending'] = self.track(image,frame)
+        finally:
+            self._charge_fine_observation(job, age_ms(self.clock(),started))
+
+    def _resolve_fine_observation(self):
+        job = self.job
+        coarse = job.get('_light_pending') if job is not None else None
+        if coarse is None:
+            return
+        started = self.clock()
+        stamp, previous = coarse['capture_timestamp_ms'], self.memory._last_stamp
+        if (age_ms(self.clock(),stamp) > self.config.get('tracking',{}).get('max_age_ms',500) or
+                previous is not None and (age_ms(stamp,previous) <= 0 or
+                    coarse.get('frame_id') == self.memory._last_frame)):
+            # The real feedback may arrive after a long native fine call.
+            # Expiry/duplicate input is unknown, never a new disappearance.
+            job['_light_pending'] = None
+            self._charge_fine_observation(job,age_ms(self.clock(),started),complete=True)
+            return
+        rows = self.drive.odometry.rows
+        # An old HB is not an encoder reading at this exposure. Wait for the
+        # next ORIGINAL heartbeat/status to bracket it; never query for a light
+        # frame. If the solve finishes first, its normal fresh check takes over.
+        if (previous is None or not rows or age_ms(previous,rows[0][0]) < 0 or
+                age_ms(rows[-1][0],stamp) < 0):
+            self._charge_fine_observation(job,age_ms(self.clock(),started))
+            return
+        job['_observation_active'] = True
+        try:
+            self.coarse = coarse
+            self.target = self.memory.update(coarse,
+                self.drive.odometry.since(previous,stamp), motion_state=self.state)
+            self._memory_odom_capture = stamp
+            self.drive._memory_odom_capture = stamp
+            job['_light_pending'] = None
+            if self.target.get('confirmed_moved'):
+                self.metrics['target_changes'] += 1
+            classified_at = self.clock()
+            bottom_lost = (job['purpose']=='static' and
+                (self.drive._bottom_reverse_budget or {}).get('view_recovered') and
+                age_ms(classified_at,stamp) <= self.config.get('tracking',{}).get('max_age_ms',500) and
+                not self.drive._bottom_full_view(coarse,self.target,classified_at))
+            if self.memory.version != job['target_version'] or bottom_lost:
+                continued = (job['purpose']=='moving' and
+                    self._continue_visible_tracking('fine_observation_changed'))
+                reason = 'bottom_view_lost' if bottom_lost else 'fine_observation_changed'
+                self._cancel_job(reason)
+                self.last_parking = None
+                if not continued:
+                    self.drive.restart_observation(discard_reference=True)
+                self._force_observe = True
+                self._record('tracking_fine_observation_changed',dict(
+                    frame_id=coarse['frame_id'],purpose=job['purpose'],
+                    continued_follow=continued,reason=reason))
+        finally:
+            self._charge_fine_observation(job, age_ms(self.clock(),started), complete=True)
+            job['_observation_active'] = False
+            if self.job is not job:
+                self._finish_fine_accounting(job,job.get('_end_reason','cancelled'))
 
     def _wheel_delta(self, previous, current):
         if previous is None:
@@ -318,10 +453,15 @@ class TrackingTask:
         arm_state = self.arm.snapshot() if self.arm is not None else None
         if arm_state is not None and self.arm_context is not None:
             arm_state = self.arm_context(arm_state)
-        deltas = self._wheel_delta(self._frame_motor, self.state)
+        deltas = (self.drive.odometry.since(self._memory_odom_capture,now)
+            if self._memory_odom_capture is not None else
+            self._wheel_delta(self._frame_motor,self.state))
         self._check_chassis_reference()
         self.target = self.memory.update(self.coarse, deltas, arm_state,
                                          motion_state=self.state)
+        if self._memory_odom_capture is not None:
+            self._memory_odom_capture = now
+            self.drive._memory_odom_capture = now
         if self._parking_version != self.memory.version:
             self.last_parking = None
         if self.planning is not None and (
@@ -392,25 +532,47 @@ class TrackingTask:
             'target_version': self.memory.version, 'paired_coarse': dict(self.coarse),
             'localization_bbox_px':bbox,
             'request_id': self.decision.get('fine_request_id'),
-            'number': self.metrics['fine_started']}
+            'number': self.metrics['fine_started'],
+            'fine_compute_ms':0,'observation_ms':0,'observation_count':0,
+            'observation_max_ms':0,'observation_overruns':0,
+            'observation_fraction':max(0.,self.config.get('tracking_task',{}).get(
+                'fine_observation_overhead_fraction',0)),
+            'observation_reserve_ms':max(self._fine_observation_reserve_ms,0,
+                self.config.get('tracking_task',{}).get('fine_observation_reserve_ms',60)),
+            '_observation_cost_ms':0,'_light_pending':None}
         self._record('tracking_fine_started', dict(purpose=purpose,
             frame_id=frame['frame_id'], target_version=self.memory.version,
             capture_timestamp_ms=frame['capture_timestamp_ms']))
+        job, started = self.job, self.clock()
+        error = None
         try:
             session.start(image, frame, bbox)
         except Exception as exc:
-            self._fault('fine_start',exc)
+            error = exc
+        finally:
+            job['fine_compute_ms'] += age_ms(self.clock(),started)
+        if error is not None:
+            self._fault('fine_start',error)
 
     def _advance_job(self):
         if self.job is None:
             return
         job = self.job
+        started, error = self.clock(), None
         try:
             job['session'].advance()
         except Exception as exc:
-            self._fault('fine_compute',exc)
+            error = exc
+        finally:
+            job['fine_compute_ms'] += age_ms(self.clock(),started)
+        if error is not None:
+            self._fault('fine_compute',error)
             return
         if not job['session'].phase:
+            # A pending light frame never substitutes for the final fresh
+            # coarse+STATUS handoff. Unbracketed feedback remains unknown.
+            job['_light_pending'] = None
+            self._finish_fine_accounting(job,'completed')
             observation = job['session'].latest
             if observation.get('status') == 'localized' or observation.get('range_candidate'):
                 association = self._match_fine(job['paired_coarse'], observation)
@@ -438,6 +600,8 @@ class TrackingTask:
                     job['session'].latest.get('capture_timestamp_ms', job['session'].latest_ready_ms))))
             self._save_job()
             self.job = None
+        else:
+            return self._light_fine_observation(job)
 
     def _match_fine(self, coarse, observation):
         return associate_fine_candidate(observation, coarse)
@@ -540,7 +704,8 @@ class TrackingTask:
                     return
                 self._advance_plan()
             elif self.job is not None:
-                self._advance_job()
+                if self._advance_job():
+                    return
                 if self.complete is not None:
                     return
             else:
@@ -708,6 +873,7 @@ class TrackingTask:
                 self._fault('motor_status', exc)
         if self.fault is None:
             self._step_arm()
+            self._resolve_fine_observation()
             self._advance_background()
         self.metrics['max_step_ms'] = max(self.metrics['max_step_ms'], age_ms(self.clock(), started))
         return self.snapshot()

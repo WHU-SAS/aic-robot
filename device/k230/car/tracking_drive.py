@@ -37,6 +37,7 @@ class DriveController:
         self._moving_retry_frame = None
         self._bearing_only = False
         self._motor = self._previous_motor = None
+        self._memory_odom_capture = None
         self._stable_counts = self._stable_at = self.stopped_at_ms = None
         self._active_action = None
         self._arc_command = None
@@ -223,6 +224,8 @@ class DriveController:
                 abs(count_delta(reference[k], state[k]))*self.config['mm_per_count'] <= .1
                 for k in ('encoder_a', 'encoder_b'))
         stamps = []
+        if self._memory_odom_capture is not None:
+            stamps.append(self._memory_odom_capture)
         if self.anchor:
             stamps.append(self.anchor['capture_timestamp_ms'])
         if request:

@@ -1090,6 +1090,7 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertTrue(any(version>0 for stamp,observation,version in self.handoffs))
 
     def test_pending_moving_fine_pauses_coarse_and_keeps_real_heartbeat_feedback(self):
+        self.config['tracking_task']['fine_observation_overhead_fraction']=0
         self.x=650
         self.coarse_cost_ms=35
         self.motor.request_cost_ms=23
@@ -1125,6 +1126,7 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertEqual(result['status'],'succeeded')
 
     def test_pending_static_fine_has_no_capture_but_keeps_status_and_fresh_handoff(self):
+        self.config['tracking_task']['fine_observation_overhead_fraction']=0
         self.fine_slices=80
         while self.task.job is None:self.tick()
         fine=self.task.job['session']
