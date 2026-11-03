@@ -18,8 +18,19 @@ def localize(*args,**kwargs):
     return solve(*args,**kwargs)
 
 
+def preload_localization_steps():
+    """Load one pure image module per existing microphone warmup turn."""
+    for name in ('vision','physical_side','edge_profiles','separator_profiles',
+                 'profile_recovery','cube_pose','cube_corners','cube_observation',
+                 'ridge_profiles','cube_outline'):
+        __import__(name)
+        yield name
+
+
 def preload_localization():
-    import vision
+    """Synchronous compatibility wrapper; startup uses the yielding version."""
+    for unused in preload_localization_steps():
+        pass
 
 
 class PickPlanUnavailable(ValueError):
@@ -227,7 +238,7 @@ def _handoff_target(observation):
 
     A long static solve retains its capture time. This consumer does not renew
     it or impose a second generic capture-age limit after parking acceptance.
-    Five-corner evidence has its own3px policy, never an enlarged face limit.
+    Five/six-corner evidence uses distinct3px policies, never an enlarged face limit.
     Geometry/reprojection/table verification belongs to the shared runtime.
     """
     expected={'schema':'aic.vision_observation.v1','mode':'precise','status':'localized',
@@ -251,12 +262,23 @@ def _handoff_target(observation):
     rms=quality.get('reprojection_rms_px')
     raw=observation.get('payload') or {}
     if not isinstance(raw,dict):raise ValueError('Pick handoff payload must be a result object')
-    evidence='nonplanar_cube_five_corners'
+    contracts={
+        'nonplanar_cube_five_corners':(5,'six_measured_edges_five_corners',
+                                       'shared_nonplanar_cube_corners'),
+        'nonplanar_cube_six_corners':(6,'six_measured_outline_edges_six_corners',
+                                      'shared_nonplanar_cube_outline'),
+        'nonplanar_cube_face_back_top':(6,'seven_measured_edges_front_and_back_top_corners',
+                                        'shared_nonplanar_cube_face_back_top')}
     cube_marked=(raw.get('status')=='complete_cube_candidate' or 'cube_pose' in raw or
-                 raw.get('evidence_type')==evidence or quality.get('evidence_type')==evidence or
-                 quality.get('boundary_method')=='six_measured_edges_five_corners' or
-                 quality.get('vision_path')=='shared_nonplanar_cube_corners')
+        any(record.get('evidence_type') in tuple(contracts) or
+            record.get('boundary_method') in tuple(v[1] for v in contracts.values()) or
+            record.get('vision_path') in tuple(v[2] for v in contracts.values())
+            for record in (raw,quality)))
     if cube_marked:
+        evidence=raw.get('evidence_type')
+        if type(evidence) is not str or evidence not in contracts:
+            raise ValueError('Pick handoff requires a known cube evidence policy')
+        count,boundary,path=contracts[evidence]
         pose=raw.get('cube_pose')
         def vector(value,count):
             return (isinstance(value,(list,tuple)) and len(value)==count and
@@ -269,9 +291,17 @@ def _handoff_target(observation):
                 type(rms) not in (int,float) or not math.isfinite(rms) or not 0<=rms<=3 or
                 type(quality.get('reprojection_limit_px')) not in (int,float) or
                 quality['reprojection_limit_px']!=3 or
-                quality.get('boundary_method')!='six_measured_edges_five_corners' or
-                quality.get('vision_path')!='shared_nonplanar_cube_corners'):
-            raise ValueError('Pick handoff requires matching five-corner cube evidence')
+                quality.get('boundary_method')!=boundary or quality.get('vision_path')!=path):
+            raise ValueError('Pick handoff requires matching cube-corner evidence')
+        # Preserve raw-label-optional old five-corner callers. The new six-corner
+        # capability requires the complete raw labels as well as outer quality.
+        for key,expected_value in (('boundary_method',boundary),('vision_path',path)):
+            if raw.get(key,expected_value if count==5 else None)!=expected_value:
+                raise ValueError('Pick handoff cube raw marker differs from its quality')
+        for record in (raw,pose,quality):
+            if 'corner_count' in record and (type(record['corner_count']) is not int or
+                    record['corner_count']!=count):
+                raise ValueError('Pick handoff cube count differs from its evidence')
         corner_rms=pose.get('corner_reprojection_rms_px')
         rotation=pose.get('R_Object_to_Camera')
         if (type(corner_rms) not in (int,float) or not math.isfinite(corner_rms) or
@@ -279,8 +309,8 @@ def _handoff_target(observation):
                 not matrix(rotation,3,3) or not vector(pose.get('t_Object_to_Camera_mm'),3) or
                 not vector(pose.get('object_center_mm'),3) or list(pose['object_center_mm'])!=[0,10,10] or
                 type(pose.get('edge_length_mm')) not in (int,float) or pose['edge_length_mm']!=20 or
-                not matrix(pose.get('object_points_mm'),5,3) or
-                not matrix(pose.get('image_points_px'),5,2) or
+                not matrix(pose.get('object_points_mm'),count,3) or
+                not matrix(pose.get('image_points_px'),count,2) or
                 not vector(pose.get('cube_center_Camera_mm'),3) or
                 not matrix(pose.get('cube_projected_corners_px'),8,2) or
                 pose.get('cube_projection_source')!='pose_transform' or
@@ -288,7 +318,7 @@ def _handoff_target(observation):
                 any(abs(a-b)>1e-6 for a,b in zip(center,raw['cube_center_Base_mm'])) or
                 any(key in raw or key in pose for key in
                     ('face_reprojection_rms_px','face_quad_px','physical_edges','side_faces','poses'))):
-            raise ValueError('Pick handoff requires a complete finite five-corner cube pose')
+            raise ValueError('Pick handoff requires a complete finite cube-corner pose')
         columns=list(zip(*rotation))
         determinant=(rotation[0][0]*(rotation[1][1]*rotation[2][2]-rotation[1][2]*rotation[2][1])-
                      rotation[0][1]*(rotation[1][0]*rotation[2][2]-rotation[1][2]*rotation[2][0])+
@@ -532,20 +562,25 @@ def make_wake_response(config):
 
 
 def run_forever(root):
-    # Preserve standalone boot preparation. Tracking instead preloads this
-    # pipeline during its microphone warmup, before announcing voice_ready.
-    preload_localization()
     config=load(root)
     log('startup_waiting_for_wake',{'fixed_jaw_offset_mm':-config['pick']['cube_offset_toward_moving_finger_mm']})
+    preparation=preload_localization_steps()
+    def prepare_next():
+        try:next(preparation)
+        except StopIteration:return True
+        return False
+    on_warmup=prepare_next
     warmup_chunks=32
     while True:
         response,respond=make_wake_response(config)
-        try:action=wait_for_wake(config['voice'],warmup_chunks=warmup_chunks,on_command=respond)
+        try:action=wait_for_wake(config['voice'],warmup_chunks=warmup_chunks,
+                                 on_command=respond,on_warmup=on_warmup)
         except Exception as exc:
             import sys
             sys.print_exception(exc);log('voice_failed',str(exc))
             raise
         warmup_chunks=0
+        on_warmup=None
         try:
             if response['error'] is not None:raise response['error']
             if action=='pick':

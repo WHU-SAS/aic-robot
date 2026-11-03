@@ -67,7 +67,9 @@ def _used_poses(observation):
         if not isinstance(raw, dict):
             return 'full_pose', []
         if (raw.get('status')=='complete_cube_candidate' and
-                raw.get('evidence_type')=='nonplanar_cube_five_corners'):
+                raw.get('evidence_type') in
+                ('nonplanar_cube_five_corners','nonplanar_cube_six_corners',
+                 'nonplanar_cube_face_back_top')):
             pose=raw.get('cube_pose')
             return 'full_cube_corner_pose', [(0,pose)] if isinstance(pose,dict) else []
         if 'side_faces' in raw:

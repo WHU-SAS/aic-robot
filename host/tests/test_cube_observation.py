@@ -24,6 +24,11 @@ FRAME = {'frame_id': 91, 'capture_timestamp_ms': 1234,
 PLANE = {'normal': [0., 0., 1.], 'offset_mm': 0.}
 OBJECT = [[-10., 0., 20.], [-10., 20., 20.], [10., 20., 20.],
           [10., 0., 0.], [-10., 0., 0.]]
+FACE_BACK_OBJECT = [[-10., 0., 20.], [10., 0., 20.], [10., 0., 0.],
+                    [-10., 0., 0.], [-10., 20., 20.], [10., 20., 20.]]
+FACE_BACK_TYPE = 'nonplanar_cube_face_back_top'
+FACE_BACK_METHOD = 'seven_measured_edges_front_and_back_top_corners'
+FACE_BACK_PATH = 'shared_nonplanar_cube_face_back_top'
 
 
 def projected(R, t, points):
@@ -41,7 +46,7 @@ def projected(R, t, points):
     return result
 
 
-def fixture(sign=1):
+def fixture(sign=1, six=False, face_back_top=False):
     up = unit([0., -.98, -.2])
     table_R = transpose([[1., 0., 0.], [0., up[2], -up[1]], up])
     yaw = rotation([0., 0., 1.], .28)
@@ -53,22 +58,34 @@ def fixture(sign=1):
               enumerate(matvec(base_R, t))]
     T = [row+[base_t[i]] for i, row in enumerate(base_R)]
     T.append([0., 0., 0., 1.])
-    objects = [[sign*p[0], p[1], p[2]] for p in OBJECT]
+    objects = list(OBJECT)
+    if six:objects.insert(3, [10., 20., 0.])
+    if face_back_top:objects = list(FACE_BACK_OBJECT)
+    objects = [[sign*p[0], p[1], p[2]] for p in objects]
     pixels = projected(R, t, objects)
     edges = [{'name': name, 'quality': {'sampled_stations': 64,
               'support': 60, 'rms_px': .35}}
              for name in ('front_left', 'top_depth', 'back_top',
                           'back_right', 'front_right', 'front_bottom')]
     raw = {'status': 'complete_cube_candidate',
-           'evidence_type': 'nonplanar_cube_five_corners',
-           'boundary_method': 'six_measured_edges_five_corners',
-           'vision_path': 'shared_nonplanar_cube_corners',
-           'observed_edges': edges, 'half_corner_errors_px': [.2]*10,
+           'evidence_type': ('nonplanar_cube_six_corners' if six else
+                             'nonplanar_cube_five_corners'),
+           'boundary_method': ('six_measured_outline_edges_six_corners' if six else
+                               'six_measured_edges_five_corners'),
+           'vision_path': ('shared_nonplanar_cube_outline' if six else
+                           'shared_nonplanar_cube_corners'),
+           'observed_edges': edges, 'half_corner_errors_px': [.2]*(12 if six else 10),
            'cube_pose': {'R_Object_to_Camera': R,
                't_Object_to_Camera_mm': t,
                'object_points_mm': objects, 'image_points_px': pixels,
                'object_center_mm': [0., 10., 10.], 'edge_length_mm': 20,
                'corner_reprojection_rms_px': 0.}}
+    if face_back_top:
+        raw.update(evidence_type=FACE_BACK_TYPE, boundary_method=FACE_BACK_METHOD,
+                   vision_path=FACE_BACK_PATH, corner_labels=['A', 'B', 'C', 'D', 'E', 'F'])
+        raw['observed_edges'].append({'name': 'back_top_right',
+            'quality': {'sampled_stations': 64, 'support': 60, 'rms_px': .35}})
+        raw['half_corner_errors_px'] = [.2]*12
     return raw, {'T_Base_from_Camera_mm': T}, origin_Base, yaw
 
 
@@ -227,6 +244,215 @@ class CubeObservationTests(unittest.TestCase):
         coarse['frame_id'] += 1
         self.assertEqual(associate_fine_candidate(fine, coarse)['reason'],
                          'source_frame_mismatch')
+
+    def test_six_real_correspondences_keep_their_explicit_outline_policy_and_all_eight_projections(self):
+        for sign in (1, -1):
+            raw, extrinsics, unused, unused = fixture(sign, six=True)
+            raw['cube_pose']['image_points_px'] = [[x+2.5, y] for x, y in
+                raw['cube_pose']['image_points_px']]
+            result = self.observe(raw, extrinsics)
+            with self.subTest(sign=sign):
+                self.assertEqual(result['status'], 'localized', result)
+                self.assertEqual(result['quality']['evidence_type'], 'nonplanar_cube_six_corners')
+                self.assertEqual(result['quality']['boundary_method'],
+                                 'six_measured_outline_edges_six_corners')
+                self.assertEqual(result['quality']['vision_path'], 'shared_nonplanar_cube_outline')
+                self.assertAlmostEqual(result['quality']['reprojection_rms_px'], 2.5, places=8)
+                self.assertEqual(result['quality']['reprojection_limit_px'], 3.)
+                pose = result['payload']['cube_pose']
+                self.assertEqual(len(pose['cube_projected_corners_px']), 8)
+                self.assertLess(pose['table_geometry']['object_up_deviation_deg'], 1e-5)
+                self.assertEqual(result['capture_timestamp_ms'], FRAME['capture_timestamp_ms'])
+
+    def test_six_measurements_build_only_with_an_explicit_type_and_do_not_impersonate_five(self):
+        for sign in (1, -1):
+            raw, extrinsics, unused, unused = fixture(sign, six=True)
+            measurement = {'evidence_type': raw['evidence_type'],
+                'object_points_mm': raw['cube_pose']['object_points_mm'],
+                'image_points_px': raw['cube_pose']['image_points_px'],
+                'observed_edges': raw['observed_edges'],
+                'half_corner_errors_px': raw['half_corner_errors_px']}
+            before = copy.deepcopy(measurement)
+            built = cube.build_result(measurement, K, D,
+                extrinsics['T_Base_from_Camera_mm'], PLANE)
+            self.assertEqual(built['evidence_type'], 'nonplanar_cube_six_corners')
+            self.assertEqual(built['boundary_method'], 'six_measured_outline_edges_six_corners')
+            self.assertLess(built['cube_pose']['corner_reprojection_rms_px'], 1e-6)
+            self.assertEqual(measurement, before)
+            del measurement['evidence_type']
+            with self.assertRaises(ValueError):
+                cube.build_result(measurement, K, D, extrinsics['T_Base_from_Camera_mm'], PLANE)
+
+    def test_cube_policies_reject_cross_typed_count_method_path_and_interleaved_measurements(self):
+        for six in (False, True):
+            for changed in ('count', 'method', 'path', 'half_count', 'rms', 'order'):
+                raw, extrinsics, unused, unused = fixture(six=six)
+                pose = raw['cube_pose']
+                if changed == 'count':
+                    if six:
+                        pose['object_points_mm'].pop(3);pose['image_points_px'].pop(3)
+                    else:
+                        pose['object_points_mm'].insert(3, [10., 20., 0.])
+                        pose['image_points_px'].insert(3, [700., 500.])
+                elif changed == 'method':raw['boundary_method'] = 'four_measured_edges'
+                elif changed == 'path':raw['vision_path'] = 'shared_nonplanar_cube_corners' if six else 'shared_nonplanar_cube_outline'
+                elif changed == 'half_count':raw['half_corner_errors_px'] = [.2]*(10 if six else 12)
+                elif changed == 'rms':pose['image_points_px'] = [[x+3.1, y] for x, y in pose['image_points_px']]
+                else:
+                    pose['object_points_mm'][0], pose['object_points_mm'][1] = pose['object_points_mm'][1], pose['object_points_mm'][0]
+                    pose['image_points_px'][0], pose['image_points_px'][1] = pose['image_points_px'][1], pose['image_points_px'][0]
+                with self.subTest(six=six, changed=changed):
+                    self.assert_rejected_without_coordinates(self.observe(raw, extrinsics))
+        # The independent odd/even pair may be summarized once per corner.
+        raw, extrinsics, unused, unused = fixture(six=True)
+        raw['half_corner_errors_px'] = [.2]*6
+        self.assertEqual(self.observe(raw, extrinsics)['status'], 'localized')
+
+    def test_six_corner_table_check_requires_object_up_not_only_a_horizontal_front_normal(self):
+        raw, extrinsics, unused, unused = fixture(six=True)
+        pose = raw['cube_pose']
+        original = pose['R_Object_to_Camera']
+        center = [value+pose['t_Object_to_Camera_mm'][i] for i, value in
+                  enumerate(matvec(original, [0., 10., 10.]))]
+        for angle in (19., 21., 180.):
+            tilted = matmul(original, rotation([0., 1., 0.], math.radians(angle)))
+            pose['R_Object_to_Camera'] = tilted
+            pose['t_Object_to_Camera_mm'] = [center[i]-value for i, value in
+                enumerate(matvec(tilted, [0., 10., 10.]))]
+            pose['image_points_px'] = projected(tilted, pose['t_Object_to_Camera_mm'],
+                                                pose['object_points_mm'])
+            result = self.observe(raw, extrinsics)
+            with self.subTest(angle=angle):
+                if angle == 19.:
+                    self.assertEqual(result['status'], 'localized', result)
+                    self.assertAlmostEqual(result['payload']['table_geometry']['object_up_deviation_deg'], 19.)
+                else:self.assert_rejected_without_coordinates(result)
+
+    def test_six_corner_association_uses_the_complete_cube_hull_in_the_same_frame(self):
+        raw, extrinsics, unused, unused = fixture(six=True)
+        fine = self.observe(raw, extrinsics)
+        self.assertEqual(fine['status'], 'localized', fine)
+        pose = fine['payload']['cube_pose']
+        corners = pose['cube_projected_corners_px']
+        xs, ys = [p[0] for p in corners], [p[1] for p in corners]
+        bbox = [min(xs), min(ys), max(xs)-min(xs), max(ys)-min(ys)]
+        cue = {'bbox_px': bbox, 'center_pixel': pose['cube_center_pixel'],
+            'timestamp_ms': 1234, 'frame_id': FRAME['frame_id'],
+            'visible': True, 'associated': True, 'ambiguous': False,
+            'candidate_count': 1, 'distance_valid': False}
+        coarse = dict(FRAME, timestamp_ms=1234, visual_evidence=cue,
+            visual_candidates=[copy.deepcopy(cue)], bbox_px=bbox,
+            center_pixel=cue['center_pixel'])
+        fine['payload']['poses'] = [{'cube_projected_corners_px': [[0., 0.]]*8}]
+        result = associate_fine_candidate(fine, coarse)
+        self.assertEqual(result['status'], 'matched', result)
+        self.assertEqual(result['geometry_capability'], 'full_cube_corner_pose')
+        coarse['capture_timestamp_ms'] += 1
+        self.assertEqual(associate_fine_candidate(fine, coarse)['reason'], 'source_frame_mismatch')
+
+    def test_face_and_back_top_are_explicit_seven_edge_geometry_with_all_eight_projections(self):
+        for sign in (1, -1):
+            raw, extrinsics, origin, yaw = fixture(sign, face_back_top=True)
+            raw['cube_pose']['image_points_px'] = [[x+2.5, y] for x, y in
+                raw['cube_pose']['image_points_px']]
+            before = copy.deepcopy(raw)
+            result = self.observe(raw, extrinsics)
+            with self.subTest(sign=sign):
+                self.assertEqual(result['status'], 'localized', result)
+                self.assertEqual(result['quality']['evidence_type'], FACE_BACK_TYPE)
+                self.assertEqual(result['quality']['boundary_method'], FACE_BACK_METHOD)
+                self.assertEqual(result['quality']['vision_path'], FACE_BACK_PATH)
+                self.assertEqual(result['quality']['reprojection_limit_px'], 3.)
+                self.assertAlmostEqual(result['quality']['reprojection_rms_px'], 2.5, places=8)
+                self.assertEqual(result['capture_timestamp_ms'], FRAME['capture_timestamp_ms'])
+                self.assertNotIn('poses', result['payload'])
+                self.assertNotIn('face_quad_px', result['payload'])
+                self.assertEqual(len(result['payload']['observed_edges']), 7)
+                pose = result['payload']['cube_pose']
+                self.assertEqual(pose['corner_count'], 6)
+                self.assertEqual(len(pose['cube_projected_corners_px']), 8)
+                expected = [a+b for a, b in zip(origin, matvec(yaw, [0., 10., 10.]))]
+                for actual, true in zip(result['cube_center_Base_mm'], expected):
+                    self.assertAlmostEqual(actual, true, places=8)
+                self.assertLess(pose['table_geometry']['object_up_deviation_deg'], 1e-5)
+                self.assertEqual(raw, before)
+
+    def test_face_back_top_build_requires_explicit_type_without_guessing_from_six_points(self):
+        for sign in (1, -1):
+            raw, extrinsics, unused, unused = fixture(sign, face_back_top=True)
+            measurement = {'evidence_type': FACE_BACK_TYPE,
+                'object_points_mm': raw['cube_pose']['object_points_mm'],
+                'image_points_px': raw['cube_pose']['image_points_px'],
+                'observed_edges': raw['observed_edges'],
+                'half_corner_errors_px': raw['half_corner_errors_px'],
+                'corner_labels': raw['corner_labels']}
+            before = copy.deepcopy(measurement)
+            built = cube.build_result(measurement, K, D,
+                extrinsics['T_Base_from_Camera_mm'], PLANE)
+            with self.subTest(sign=sign):
+                self.assertEqual(built['evidence_type'], FACE_BACK_TYPE)
+                self.assertEqual(built['boundary_method'], FACE_BACK_METHOD)
+                self.assertEqual(built['vision_path'], FACE_BACK_PATH)
+                self.assertLess(built['cube_pose']['corner_reprojection_rms_px'], 1e-6)
+                self.assertEqual(measurement, before)
+                del measurement['evidence_type']
+                with self.assertRaises(ValueError):
+                    cube.build_result(measurement, K, D, extrinsics['T_Base_from_Camera_mm'], PLANE)
+
+    def test_face_back_top_rejects_cross_type_six_sources_and_partial_half_evidence(self):
+        for changed in ('type', 'method', 'path', 'model', 'six_sources', 'eight_sources',
+                        'unsupported_seventh', 'six_halves', 'bad_half', 'actual_rms'):
+            raw, extrinsics, unused, unused = fixture(face_back_top=True)
+            if changed == 'type':raw['evidence_type'] = 'nonplanar_cube_six_corners'
+            elif changed == 'method':raw['boundary_method'] = 'six_measured_outline_edges_six_corners'
+            elif changed == 'path':raw['vision_path'] = 'shared_nonplanar_cube_outline'
+            elif changed == 'model':
+                other, unused, unused, unused = fixture(six=True)
+                raw['cube_pose']['object_points_mm'] = other['cube_pose']['object_points_mm']
+                raw['cube_pose']['image_points_px'] = other['cube_pose']['image_points_px']
+            elif changed == 'six_sources':raw['observed_edges'].pop()
+            elif changed == 'eight_sources':raw['observed_edges'].append(copy.deepcopy(raw['observed_edges'][0]))
+            elif changed == 'unsupported_seventh':raw['observed_edges'][-1]['quality']['support'] = 44
+            elif changed == 'six_halves':raw['half_corner_errors_px'] = [.2]*6
+            elif changed == 'bad_half':raw['half_corner_errors_px'][-1] = 3.01
+            else:raw['cube_pose']['image_points_px'] = [[x+3.01, y] for x, y in raw['cube_pose']['image_points_px']]
+            with self.subTest(changed=changed):
+                self.assert_rejected_without_coordinates(self.observe(raw, extrinsics))
+        # Seven sources cannot be relabelled as the old six-source capability.
+        raw, extrinsics, unused, unused = fixture(six=True)
+        raw['observed_edges'].append(copy.deepcopy(raw['observed_edges'][0]))
+        self.assert_rejected_without_coordinates(self.observe(raw, extrinsics))
+
+    def test_face_back_top_requires_upright_table_geometry_and_exact_same_frame_association(self):
+        raw, extrinsics, unused, unused = fixture(face_back_top=True)
+        fine = self.observe(raw, extrinsics)
+        self.assertEqual(fine['status'], 'localized', fine)
+        pose = fine['payload']['cube_pose']
+        corners = pose['cube_projected_corners_px']
+        xs, ys = [p[0] for p in corners], [p[1] for p in corners]
+        bbox = [min(xs), min(ys), max(xs)-min(xs), max(ys)-min(ys)]
+        cue = {'bbox_px': bbox, 'center_pixel': pose['cube_center_pixel'],
+            'timestamp_ms': 1234, 'frame_id': FRAME['frame_id'],
+            'visible': True, 'associated': True, 'ambiguous': False,
+            'candidate_count': 1, 'distance_valid': False}
+        coarse = dict(FRAME, timestamp_ms=1234, visual_evidence=cue,
+            visual_candidates=[copy.deepcopy(cue)], bbox_px=bbox,
+            center_pixel=cue['center_pixel'])
+        matched = associate_fine_candidate(fine, coarse)
+        self.assertEqual(matched['status'], 'matched', matched)
+        self.assertEqual(matched['geometry_capability'], 'full_cube_corner_pose')
+        coarse['frame_id'] += 1
+        self.assertEqual(associate_fine_candidate(fine, coarse)['reason'], 'source_frame_mismatch')
+        original = raw['cube_pose']['R_Object_to_Camera']
+        center = [value+raw['cube_pose']['t_Object_to_Camera_mm'][i] for i, value in
+                  enumerate(matvec(original, [0., 10., 10.]))]
+        tilted = matmul(original, rotation([0., 1., 0.], math.radians(21.)))
+        raw['cube_pose']['R_Object_to_Camera'] = tilted
+        raw['cube_pose']['t_Object_to_Camera_mm'] = [center[i]-value for i, value in
+            enumerate(matvec(tilted, [0., 10., 10.]))]
+        raw['cube_pose']['image_points_px'] = projected(tilted,
+            raw['cube_pose']['t_Object_to_Camera_mm'], raw['cube_pose']['object_points_mm'])
+        self.assert_rejected_without_coordinates(self.observe(raw, extrinsics))
 
 
 if __name__ == '__main__':

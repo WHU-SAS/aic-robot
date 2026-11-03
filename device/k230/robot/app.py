@@ -105,7 +105,8 @@ def prepare_tracking_steps(config):
     # Reuse the existing audio/camera warmup turns. New recovery modules must
     # not be compiled for the first time after the final parking photograph.
     for name in ('edge_profiles', 'separator_profiles', 'profile_recovery',
-                 'cube_pose', 'cube_corners', 'cube_observation'):
+                 'cube_pose', 'cube_corners', 'cube_observation', 'ridge_profiles',
+                 'cube_outline'):
         step_started = time.ticks_ms()
         __import__(name)
         duration = elapsed(time.ticks_ms(), step_started)

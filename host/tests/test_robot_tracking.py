@@ -536,6 +536,35 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertTrue(stops[0]['details']['status'])
         hover=next(row for row in result['timeline'] if row['event']=='tracking_first_hover')
         self.assertGreater(hover['details']['photo_to_hover_ms'],0)
+        self.assertEqual(hover['details']['dispatch_seq'],1)
+        dispatch=self.arms[0].snapshot()['last_goal_dispatch']
+        self.assertLessEqual(hover['details']['goal_sent_at_ms'],dispatch['sent_at_ms'])
+
+    def test_failed_first_transport_does_not_claim_a_dispatched_arm_attempt(self):
+        while not self.arms:self.tick()
+        self.assertEqual(self.arms[0].snapshot()['pending_stage'],'hover')
+        def failed(*args):raise OSError('UART short write')
+        self.arms[0].io.send_goals=failed
+        self.task._fresh_before_arm=False
+        self.task.target=dict(self.task.target,needs_precise=False,associated=True,
+                              visible=True,movement_state='consistent')
+        self.task._step_arm()
+        self.assertEqual(self.arms[0].snapshot()['status'],'fault')
+        self.assertEqual(self.task.metrics['arm_attempts'],0)
+        self.assertFalse(any(row['event']=='tracking_first_hover'
+                             for row in self.task.timeline))
+
+    def test_unknown_capture_time_stays_unknown_in_first_hover_metric(self):
+        while not self.arms:self.tick()
+        self.task.last_parking['verification_observation']['capture_timestamp_ms']=None
+        self.task._fresh_before_arm=False
+        self.task.target=dict(self.task.target,needs_precise=False,associated=True,
+                              visible=True,movement_state='consistent')
+        self.task._step_arm()
+        row=next(row for row in self.task.timeline if row['event']=='tracking_first_hover')
+        self.assertIsNone(row['details']['photo_to_hover_ms'])
+        self.assertEqual(row['details']['goal_sent_at_ms'],
+                         self.arms[0].snapshot()['last_goal_dispatch']['sent_at_ms'])
 
     def test_failed_moving_fine_and_one_missing_coarse_frame_do_not_split_approach(self):
         self.x=650

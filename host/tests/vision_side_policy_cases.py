@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 from host.project_paths import ROOT
 from device.k230.pick.side_faces import detect_sides,select_sides,prefer_sides,shared_edge
+from device.k230.vision import physical_side
 sys.path.insert(0,str(ROOT/'device/k230/pick'))
 from vision import basic_face,localize
 
@@ -152,7 +153,10 @@ class SidePolicyCases(unittest.TestCase):
         for index,path in enumerate(paths):
             im=cv2.imread(str(path));details={}
             fast_sides(im,K,D,cv2.cvtColor(im,cv2.COLOR_BGR2HSV),diagnostics=details)
-            result=localize(im,K,D,ext['T_Base_from_Camera_mm'],cfg['localization']['table_plane_Base_mm'])
+            # This is the original four-edge recovery/side-selection unit,
+            # not a requirement that the public fast pipeline return a face.
+            with patch.object(physical_side,'localize_steps',wraps=physical_side._original_localize_steps):
+                result=localize(im,K,D,ext['T_Base_from_Camera_mm'],cfg['localization']['table_plane_Base_mm'])
             self.assertLessEqual(result['poses'][0]['face_reprojection_rms_px'],2.)
             if index==0:
                 # The old independent peak choices still fail the original
@@ -262,13 +266,14 @@ class TablePoseCases(unittest.TestCase):
             self.assertLess(best['table_geometry']['normal_deviation_deg'],10.)
             np.testing.assert_allclose(best['cube_center_Camera_mm'],truth,atol=3.)
 
-    def test_full_image_table_constraints_preserve_rotated_two_side_policy(self):
+    def test_original_full_image_table_constraints_preserve_rotated_two_side_policy(self):
         for yaw,exposure in ((.7,1.),(.85,.45),(.95,1.)):
             im,K,D,truth=SidePolicyCases().scene(yaw,exposure)
             R=cv2.Rodrigues(np.array([.4,yaw,.02]))[0]
             up=-R[:,1];T=np.eye(4);T[:3,:3]=np.array([R[:,0],R[:,2],up])
             table={'normal':[0.,0.,1.],'offset_mm':float(up@np.array([-10.,-10.,250.])-20.)}
-            result=localize(im,K.tolist(),D.tolist(),T.tolist(),table)
+            with patch.object(physical_side,'localize_steps',wraps=physical_side._original_localize_steps):
+                result=localize(im,K.tolist(),D.tolist(),T.tolist(),table)
             self.assertIn(result['side_selection'],('mean_of_similar_area_sides','larger_verified_side'))
             np.testing.assert_allclose(result['cube_center_Base_mm'],T[:3,:3]@truth,atol=3.)
             self.assertTrue(result['poses'][0]['table_geometry']['accepted'])

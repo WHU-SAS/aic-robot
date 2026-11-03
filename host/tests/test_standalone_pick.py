@@ -16,6 +16,21 @@ from unittest.mock import Mock,patch,mock_open
 from host.project_paths import ROOT
 from tools.deploy import k230_pick as deploy
 
+LOCALIZATION_MODULES=('vision','physical_side','edge_profiles','separator_profiles',
+    'profile_recovery','cube_pose','cube_corners','cube_observation','ridge_profiles','cube_outline')
+
+
+def finish_warmup(case,callback):
+    # A voice stub must really consume the preparation callback, rather than
+    # pretending a wake was accepted while localization is still unprepared.
+    if callback is None:return
+    for unused in range(len(LOCALIZATION_MODULES)+1):
+        done=callback()
+        if done is True:return
+        case.assertIs(done,False)
+    case.fail('Startup module preparation did not finish one step per callback')
+
+
 BOARD=ROOT/'device/k230/pick'
 sys.path.insert(0,str(BOARD))
 from numeric import rotation,matvec,dot,norm
@@ -110,29 +125,37 @@ class BoardMathTests(unittest.TestCase):
 
 
 class VoiceDispatchTests(unittest.TestCase):
-    def app(self):
+    def app(self,real_preload=False):
         spec=importlib.util.spec_from_file_location('test_board_app',BOARD/'app.py');module=importlib.util.module_from_spec(spec)
         mocks={'time':SimpleNamespace(ticks_ms=lambda:0,ticks_diff=lambda a,b:a-b),'camera':SimpleNamespace(CameraSession=None),'vision':SimpleNamespace(localize=None),
                'control':SimpleNamespace(run_pick_stage_direct=None,run_ready_direct=None),
                'vision_runtime':__import__('device.k230.vision.runtime',fromlist=['localize_precise'])}
         with patch.dict(sys.modules,mocks):spec.loader.exec_module(module)
-        # These tests own orchestration/voice fixtures, not native OpenCV.
-        # Real lazy-preload behavior has separate boot lifecycle coverage.
-        module.preload_localization=Mock()
+        # Orchestration fixtures advance preparation without importing native
+        # CV; dedicated startup tests below exercise the real import generator.
+        if not real_preload:
+            module.preload_localization_steps=lambda:iter(LOCALIZATION_MODULES)
         return module
 
-    def test_standalone_preloads_localization_before_entering_voice_wait(self):
+    def test_standalone_prepares_one_module_per_audio_warmup_callback(self):
         app=self.app();trace=[]
         config={'pick':{'cube_offset_toward_moving_finger_mm':0},'voice':{}}
+        def steps():
+            for name in LOCALIZATION_MODULES:
+                trace.append(name);yield name
         def wait(*args,**kwargs):
-            trace.append('voice_wait');raise KeyboardInterrupt()
+            trace.append('voice_wait')
+            self.assertEqual(trace,['voice_wait'])
+            finish_warmup(self,kwargs['on_warmup'])
+            raise KeyboardInterrupt()
         with patch.object(app,'load',return_value=config),patch.object(app,'log'),\
-             patch.object(app,'preload_localization',side_effect=lambda:trace.append('preload')) as preload,\
+             patch.object(app,'preload_localization_steps',side_effect=steps),\
+             patch.object(app,'preload_localization',side_effect=AssertionError('no blocking preload')) as preload,\
              patch.object(app,'wait_for_wake',side_effect=wait),patch.object(app,'run_once') as pick,\
              patch.object(app,'run_ready') as ready:
             with self.assertRaises(KeyboardInterrupt):app.run_forever('/fake')
-        preload.assert_called_once_with();pick.assert_not_called();ready.assert_not_called()
-        self.assertEqual(trace,['preload','voice_wait'])
+        preload.assert_not_called();pick.assert_not_called();ready.assert_not_called()
+        self.assertEqual(trace,['voice_wait']+list(LOCALIZATION_MODULES))
     def test_log_serializes_once_and_reuses_identical_stdout_and_sd_text(self):
         app=self.app();details={'phase':'悬停','goals':[2048]*6}
         record={'event':'planned','ticks_ms':0,'details':details}
@@ -180,7 +203,9 @@ class VoiceDispatchTests(unittest.TestCase):
 
     def test_startup_waits_for_wake_before_one_pick(self):
         app=self.app();calls=[]
-        def wait(cfg,warmup_chunks,on_command):
+        def wait(cfg,warmup_chunks,on_command,on_warmup=None):
+            self.assertIsNotNone(on_warmup) if not calls else self.assertIsNone(on_warmup)
+            finish_warmup(self,on_warmup)
             self.assertEqual(cfg,{'wake_word':'思达思达'})
             self.assertEqual(warmup_chunks,32 if not calls else 0)
             calls.append('wait')
@@ -195,7 +220,9 @@ class VoiceDispatchTests(unittest.TestCase):
         self.assertEqual(calls,['wait',('ready',2,True),('pick',True),'wait'])
     def test_failure_does_not_automatically_retry_pick(self):
         app=self.app();calls=[]
-        def wait(cfg,warmup_chunks,on_command):
+        def wait(cfg,warmup_chunks,on_command,on_warmup=None):
+            self.assertIsNotNone(on_warmup) if not calls else self.assertIsNone(on_warmup)
+            finish_warmup(self,on_warmup)
             self.assertEqual(cfg,{'wake_word':'思达思达'})
             self.assertEqual(warmup_chunks,32 if not calls else 0)
             calls.append('wait')
@@ -337,7 +364,9 @@ class VoiceDispatchTests(unittest.TestCase):
 
     def test_failed_immediate_response_never_captures_or_retries_and_listens_again(self):
         app=self.app();config,_,_=deploy.build_bundle();waits=[]
-        def wait(voice,warmup_chunks,on_command):
+        def wait(voice,warmup_chunks,on_command,on_warmup=None):
+            self.assertIsNotNone(on_warmup) if not waits else self.assertIsNone(on_warmup)
+            finish_warmup(self,on_warmup)
             waits.append(warmup_chunks)
             if len(waits)>1:raise KeyboardInterrupt()
             on_command('pick');return 'pick'
@@ -349,6 +378,136 @@ class VoiceDispatchTests(unittest.TestCase):
         ready.assert_called_once_with(config,pose=2,immediate=True)
         capture.assert_not_called();self.assertEqual(waits,[32,0])
         logs.assert_any_call('pick_failed_no_extra_motion','UART not ready')
+
+
+class StandalonePreloadTests(unittest.TestCase):
+    app=VoiceDispatchTests.app
+
+    def test_steps_import_exactly_one_named_module_per_advance_and_construct_inertly(self):
+        app=self.app(real_preload=True);imports=[];original=__import__
+        def import_one(name,*args,**kwargs):
+            if name in LOCALIZATION_MODULES:
+                imports.append(name);return SimpleNamespace()
+            return original(name,*args,**kwargs)
+        with patch('builtins.__import__',side_effect=import_one):
+            steps=app.preload_localization_steps()
+            self.assertEqual(imports,[])
+            for index,name in enumerate(LOCALIZATION_MODULES):
+                self.assertEqual(next(steps),name)
+                self.assertEqual(imports,list(LOCALIZATION_MODULES[:index+1]))
+            with self.assertRaises(StopIteration):next(steps)
+        self.assertEqual(imports,list(LOCALIZATION_MODULES))
+
+    def test_synchronous_preload_wrapper_drains_the_same_order_without_native_cv(self):
+        app=self.app(real_preload=True);imports=[];original=__import__
+        def import_one(name,*args,**kwargs):
+            if name in LOCALIZATION_MODULES:
+                imports.append(name);return SimpleNamespace()
+            return original(name,*args,**kwargs)
+        with patch('builtins.__import__',side_effect=import_one):
+            self.assertIsNone(app.preload_localization())
+        self.assertEqual(imports,list(LOCALIZATION_MODULES))
+
+    def startup_replay(self,fail_module=None):
+        app=self.app(real_preload=True);trace=[];logs=[];reads={};clock={'ms':0,'round':0}
+        original=__import__
+        config={'pick':{'cube_offset_toward_moving_finger_mm':0},
+            'voice':{'enrollment_file':'/fake/keyword.json','detection_sensitivity':'sensitive',
+                     'wake_word':'思达思达'}}
+        class Engine:
+            def __init__(self,number):self.number=number
+            def add_keyword(self,record):trace.append(('keyword',self.number))
+            def reset(self):trace.append(('reset',self.number,reads.get(self.number,0)))
+            def push(self,pcm):
+                trace.append(('push',self.number,reads[self.number]))
+                if self.number>1:raise KeyboardInterrupt()
+                return [('sida',-.7,-2.,0,10)]
+            def deinit(self):trace.append(('engine_closed',self.number))
+        def engine(sensitivity):
+            clock['round']+=1
+            trace.append(('engine_opened',clock['round']))
+            return Engine(clock['round'])
+        class Audio:
+            def __init__(self):self.number=clock['round']
+            def open(self,**kwargs):return Stream(self.number)
+            def terminate(self):trace.append(('audio_closed',self.number))
+        class Stream:
+            def __init__(self,number):self.number=number
+            def volume(self,**kwargs):pass
+            def read(self):
+                reads[self.number]=reads.get(self.number,0)+1
+                trace.append(('read',self.number,reads[self.number]))
+                clock['ms']+=160
+                return bytes(5120)
+            def stop_stream(self):trace.append(('stream_stopped',self.number))
+            def close(self):trace.append(('stream_closed',self.number))
+        def import_one(name,*args,**kwargs):
+            if name in LOCALIZATION_MODULES:
+                trace.append(('import',name,clock['round'],reads.get(clock['round'],0)))
+                clock['ms']+=17
+                if name==fail_module:raise ImportError('Failed startup import: '+name)
+                return SimpleNamespace()
+            return original(name,*args,**kwargs)
+        def log(event,details=None,**kwargs):
+            logs.append((event,details));trace.append(('log',event))
+        def ready(config,pose=1,immediate=False):
+            trace.append(('ready_packet',pose,immediate));return {'goal_sent_ticks_ms':clock['ms']}
+        with patch.dict(sys.modules,{'wake_word':SimpleNamespace(engine=engine,CHUNK=2560),
+                'media':SimpleNamespace(),'media.pyaudio':SimpleNamespace(PyAudio=Audio,paInt16=0)}), \
+             patch.object(app.os,'exitpoint',lambda:None,create=True), \
+             patch.object(app.time,'ticks_ms',side_effect=lambda:clock['ms']), \
+             patch.object(app,'load',return_value=config),patch.object(app,'log',side_effect=log), \
+             patch.object(app,'run_ready',side_effect=ready), \
+             patch.object(app,'run_once',side_effect=lambda *args,**kwargs:trace.append(('pick',))), \
+             patch.object(app,'preload_localization',side_effect=AssertionError('no synchronous boot import')), \
+             patch.object(sys,'print_exception',lambda error:None,create=True), \
+             patch('builtins.open',mock_open(read_data='{"kw_id":"sida","mic_volume":100}')), \
+             patch('builtins.__import__',side_effect=import_one):
+            expected=ImportError if fail_module else KeyboardInterrupt
+            with self.assertRaises(expected) as raised:app.run_forever('/fake')
+        if fail_module:self.assertIn(fail_module,str(raised.exception))
+        return trace,logs,reads
+
+    def test_real_audio_reads_then_imports_one_module_preserves32_and_resumes_without_preparation(self):
+        trace,logs,reads=self.startup_replay()
+        imports=[event for event in trace if event[0]=='import']
+        self.assertEqual(imports,[('import',name,1,index+1)
+            for index,name in enumerate(LOCALIZATION_MODULES)])
+        for index,event in enumerate(imports):
+            at=trace.index(event)
+            self.assertEqual(trace[at-1],('read',1,index+1))
+        self.assertEqual(reads,{1:33,2:1})
+        ready=[details for event,details in logs if event=='voice_ready']
+        self.assertEqual(len(ready),2)
+        self.assertEqual(ready[0]['configured_warmup_chunks'],32)
+        self.assertEqual(ready[0]['warmup_chunks'],32)
+        self.assertEqual(ready[0]['discarded_audio_bytes'],32*5120)
+        self.assertEqual(ready[0]['startup_prepare_ms'],10*17)
+        self.assertEqual(ready[1]['configured_warmup_chunks'],0)
+        self.assertEqual(ready[1]['warmup_chunks'],0)
+        self.assertEqual(ready[1]['discarded_audio_bytes'],0)
+        self.assertEqual(ready[1]['startup_prepare_ms'],0)
+        self.assertIn(('reset',1,32),trace)
+        self.assertIn(('reset',2,0),trace)
+        self.assertIn(('push',2,1),trace)
+        self.assertEqual(trace.count(('pick',)),1)
+        sent=trace.index(('ready_packet',2,True))
+        self.assertLess(trace.index(('push',1,33)),sent)
+        self.assertLess(sent,trace.index(('stream_stopped',1)))
+        self.assertLess(trace.index(('engine_closed',1)),trace.index(('pick',)))
+        self.assertEqual(trace[-4:],[('stream_stopped',2),('stream_closed',2),
+                                    ('audio_closed',2),('engine_closed',2)])
+
+    def test_import_failure_closes_real_listener_audio_before_voice_failed_and_no_motion(self):
+        trace,logs,reads=self.startup_replay(fail_module='cube_pose')
+        self.assertEqual([event[1] for event in trace if event[0]=='import'],
+                         list(LOCALIZATION_MODULES[:6]))
+        self.assertEqual(reads,{1:6})
+        self.assertNotIn('voice_ready',[event for event,details in logs])
+        self.assertEqual([event for event,details in logs if event=='voice_failed'],['voice_failed'])
+        cleanup=[('stream_stopped',1),('stream_closed',1),('audio_closed',1),('engine_closed',1)]
+        self.assertEqual(trace[-5:],cleanup+[('log','voice_failed')])
+        self.assertFalse(any(event[0] in ('pick','ready_packet','push','reset') for event in trace))
 
 
 class ReadyCommandTests(unittest.TestCase):
@@ -422,8 +581,14 @@ class ReadyCommandTests(unittest.TestCase):
 
     def test_ready_command_bypasses_camera_and_returns_to_listening(self):
         app=self.app();cfg={'pick':{'cube_offset_toward_moving_finger_mm':-45},'voice':{}}
+        waits=[]
+        def wait(voice,warmup_chunks,on_command,on_warmup=None):
+            self.assertIsNotNone(on_warmup) if not waits else self.assertIsNone(on_warmup)
+            finish_warmup(self,on_warmup);waits.append(warmup_chunks)
+            if len(waits)>1:raise KeyboardInterrupt()
+            return 'ready'
         with patch.object(app,'load',return_value=cfg),patch.object(app,'log'),\
-             patch.object(app,'wait_for_wake',side_effect=['ready',KeyboardInterrupt()]) as listen,\
+             patch.object(app,'wait_for_wake',side_effect=wait) as listen,\
              patch.object(app,'run_once') as pick,patch.object(app,'run_ready') as ready:
             with self.assertRaises(KeyboardInterrupt):app.run_forever('/fake')
             ready.assert_called_once_with(cfg);pick.assert_not_called();self.assertEqual(listen.call_count,2)

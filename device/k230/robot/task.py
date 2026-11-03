@@ -10,6 +10,12 @@ try:
 except ImportError:
     from device.k230.car.observations import for_approach
 
+_CUBE_POLICIES={
+    'nonplanar_cube_five_corners':(5,'six_measured_edges_five_corners','shared_nonplanar_cube_corners'),
+    'nonplanar_cube_six_corners':(6,'six_measured_outline_edges_six_corners','shared_nonplanar_cube_outline'),
+    'nonplanar_cube_face_back_top':(6,'seven_measured_edges_front_and_back_top_corners',
+                                  'shared_nonplanar_cube_face_back_top')}
+
 
 def _cube_payload_valid(observation, payload, quality):
     """Consume the shared runtime's explicit cube capability, never a face.
@@ -18,7 +24,10 @@ def _cube_payload_valid(observation, payload, quality):
     capability, finite pose and reported quality must agree before the exact
     accepted parking frame can cross the car-to-arm boundary.
     """
-    evidence = 'nonplanar_cube_five_corners'
+    evidence = payload.get('evidence_type')
+    policy = _CUBE_POLICIES.get(evidence) if isinstance(evidence,str) else None
+    if policy is None:return False
+    count, method, path = policy
     pose = payload.get('cube_pose')
     rms = quality.get('reprojection_rms_px')
     def vector(value, count):
@@ -33,8 +42,8 @@ def _cube_payload_valid(observation, payload, quality):
             type(rms) not in (int, float) or not math.isfinite(rms) or not 0 <= rms <= 3 or
             type(quality.get('reprojection_limit_px')) not in (int, float) or
             quality['reprojection_limit_px'] != 3 or
-            quality.get('boundary_method') != 'six_measured_edges_five_corners' or
-            quality.get('vision_path') != 'shared_nonplanar_cube_corners'):
+            any(item.get('boundary_method') != method or item.get('vision_path') != path
+                for item in (payload,quality))):
         return False
     corner_rms = pose.get('corner_reprojection_rms_px')
     R = pose.get('R_Object_to_Camera')
@@ -44,8 +53,9 @@ def _cube_payload_valid(observation, payload, quality):
             not vector(pose.get('object_center_mm'), 3) or
             list(pose['object_center_mm']) != [0, 10, 10] or
             type(pose.get('edge_length_mm')) not in (int, float) or pose['edge_length_mm'] != 20 or
-            not matrix(pose.get('object_points_mm'), 5, 3) or
-            not matrix(pose.get('image_points_px'), 5, 2) or
+            not matrix(pose.get('object_points_mm'), count, 3) or
+            not matrix(pose.get('image_points_px'), count, 2) or
+            ('corner_count' in pose and pose['corner_count'] != count) or
             not vector(pose.get('cube_center_Camera_mm'), 3) or
             not matrix(pose.get('cube_projected_corners_px'), 8, 2) or
             pose.get('cube_projection_source') != 'pose_transform' or
@@ -53,6 +63,15 @@ def _cube_payload_valid(observation, payload, quality):
             any(key in payload or key in pose for key in
                 ('face_reprojection_rms_px', 'face_quad_px', 'physical_edges', 'side_faces', 'poses'))):
         return False
+    if evidence == 'nonplanar_cube_face_back_top':
+        # This new capability has seven actual source lines, unlike the old
+        # six-point outline. Reuse the shared contract, without another solve.
+        try:
+            try:from ..vision.cube_observation import validate_measurement_evidence
+            except ImportError:from cube_observation import validate_measurement_evidence
+            validate_measurement_evidence(payload)
+        except ValueError:
+            return False
     columns = list(zip(*R))
     determinant = (R[0][0]*(R[1][1]*R[2][2]-R[1][2]*R[2][1]) -
                    R[0][1]*(R[1][0]*R[2][2]-R[1][2]*R[2][0]) +
@@ -72,10 +91,9 @@ def handoff_observation(parking):
     quality = quality if isinstance(quality, dict) else {}
     payload_valid = False
     if isinstance(payload, dict):
-        evidence = 'nonplanar_cube_five_corners'
         cube_marked = (payload.get('status') == 'complete_cube_candidate' or
-            'cube_pose' in payload or payload.get('evidence_type') == evidence or
-            quality.get('evidence_type') == evidence)
+            'cube_pose' in payload or payload.get('evidence_type') in _CUBE_POLICIES or
+            quality.get('evidence_type') in _CUBE_POLICIES)
         payload_valid = (_cube_payload_valid(checked, payload, quality) if cube_marked else
             payload.get('status') == 'complete_face_candidate' and bool(payload.get('poses')))
     if (checked.get('status') != 'localized' or len(point) != 3 or

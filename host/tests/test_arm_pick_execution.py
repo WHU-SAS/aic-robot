@@ -151,6 +151,117 @@ class PickExecutionTests(unittest.TestCase):
         self.assertFalse(state['can_reobserve'])
         self.assertEqual(self.io.events, [])
 
+    def test_goal_dispatch_is_absent_until_transport_successfully_returns(self):
+        execution = self.make()
+        self.assertIsNone(execution.snapshot()['last_goal_dispatch'])
+        self.assertEqual(self.io.events, [])
+        self.io.fail_send = True
+        state = self.step()
+        self.assertEqual(state['status'], 'fault')
+        self.assertIsNone(state['last_goal_dispatch'])
+        self.assertEqual(len(self.goals()), 1)  # Attempted write is not sent evidence.
+        self.assertFalse(any(name == 'stage_goal_sent' for name, _ in self.emitted))
+        before = list(self.io.events)
+        self.step(500)
+        self.assertEqual(self.io.events, before)
+        self.assertIsNone(execution.snapshot()['last_goal_dispatch'])
+
+    def test_goal_dispatch_uses_successful_return_time_and_does_not_change_on_poll(self):
+        self.make()
+        send = self.io.send_goals
+        def slow_send(goals, axes):
+            send(goals, axes)
+            self.clock.advance(7)
+        self.io.send_goals = slow_send
+        state = self.step()
+        expected = {'seq': 1, 'name': 'hover', 'axes': ALL_IDS,
+                    'goals': PLAN['hover'], 'sent_at_ms': 7}
+        self.assertEqual(state['last_goal_dispatch'], expected)
+        self.assertEqual(self.goals(), [('goals', 0, PLAN['hover'], ALL_IDS)])
+        self.assertEqual(self.reads(), [])
+        self.step(50)  # Gate feedback is not a new goal dispatch.
+        self.assertEqual(self.execution.snapshot()['last_goal_dispatch'], expected)
+
+    def test_descend_split_dispatches_have_independent_successful_sequences(self):
+        self.make()
+        self.step()
+        self.step(50)
+        state = self.step()
+        wrist = {'seq': 2, 'name': 'descend', 'axes': [4],
+                 'goals': PLAN['descend'], 'sent_at_ms': 50}
+        self.assertEqual(state['last_goal_dispatch'], wrist)
+        self.assertEqual(self.step(199)['last_goal_dispatch'], wrist)
+        state = self.step(1)
+        self.assertEqual(state['last_goal_dispatch'], {
+            'seq': 3, 'name': 'descend', 'axes': [1, 2, 3, 5, 6],
+            'goals': PLAN['descend'], 'sent_at_ms': 250})
+        self.assertEqual([row[3] for row in self.goals()], [ALL_IDS, [4], [1, 2, 3, 5, 6]])
+        self.assertEqual(self.goals()[2][1] - self.goals()[1][1], 200)
+
+    def test_failed_followup_dispatch_keeps_the_last_successful_packet(self):
+        self.make()
+        self.step()
+        self.step(50)
+        wrist = self.step()['last_goal_dispatch']
+        self.io.fail_send = True
+        state = self.step(200)
+        self.assertEqual(state['status'], 'fault')
+        self.assertEqual(state['last_goal_dispatch'], wrist)
+        self.assertEqual(wrist['seq'], 2)
+        self.assertEqual(wrist['axes'], [4])
+        self.assertEqual(len(self.goals()), 3)
+        self.assertEqual(sum(name == 'stage_goal_sent' for name, _ in self.emitted), 2)
+
+    def test_successfully_sent_packet_remains_recorded_if_event_emission_fails(self):
+        self.make()
+        def broken_emit(name, details):
+            if name == 'stage_goal_sent':
+                self.assertEqual(self.execution.snapshot()['last_goal_dispatch']['seq'], 1)
+                raise RuntimeError('synthetic log failure after packet was sent')
+        self.execution.emit = broken_emit
+        state = self.step()
+        self.assertEqual(state['status'], 'fault')
+        self.assertEqual(state['last_goal_dispatch'], {
+            'seq': 1, 'name': 'hover', 'axes': ALL_IDS,
+            'goals': PLAN['hover'], 'sent_at_ms': 0})
+        self.assertEqual(self.goals(), [('goals', 0, PLAN['hover'], ALL_IDS)])
+        self.assertEqual(self.reads(), [])
+        self.assertEqual(self.ready(), [])
+        before = list(self.io.events)
+        self.step(500)
+        self.assertEqual(self.io.events, before)
+
+    def test_goal_dispatch_snapshot_is_detached_from_internal_record_and_plan(self):
+        self.make()
+        first = self.step()['last_goal_dispatch']
+        expected = copy.deepcopy(first)
+        first['seq'] = 999
+        first['axes'][0] = 99
+        first['goals'][0] = 0
+        self.assertEqual(self.execution.snapshot()['last_goal_dispatch'], expected)
+        self.assertEqual(self.execution.plan['hover'], PLAN['hover'])
+        self.execution.invalidate_target('new target')
+        state = self.step()
+        self.assertEqual(state['status'], 'recovering')
+        self.assertEqual(state['last_goal_dispatch'], expected)  # Ready2 has its own evidence.
+        self.execution.close()
+        self.assertEqual(self.execution.snapshot()['last_goal_dispatch'], expected)
+
+    def test_close_lift_dispatch_sequences_do_not_count_samples_or_success_events(self):
+        self.make()
+        self.begin_lift()
+        sent = self.execution.snapshot()['last_goal_dispatch']
+        self.assertEqual(sent['seq'], 5)
+        self.assertEqual(sent['name'], 'lift')
+        self.assertEqual(sent['axes'], ALL_IDS)
+        self.assertEqual(sent['goals'], PLAN['lift'])
+        self.step(50)
+        self.observe(200)
+        state = self.execution.snapshot()
+        self.assertEqual(state['status'], 'succeeded')
+        self.assertEqual(state['last_goal_dispatch'], sent)
+        self.assertEqual(len(self.goals()), 5)
+
     def test_hover_gate_uses_same_round_six_axes_and_inclusive_30(self):
         self.make()
         self.step()

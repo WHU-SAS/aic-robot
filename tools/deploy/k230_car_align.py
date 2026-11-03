@@ -66,7 +66,8 @@ def build_bundle(approach_mode=False, automatic=False, continuous=False, near_pa
             files[name + '.py'] = (ROOT / ('device/k230/pick/' + name + '.py')).read_bytes()
         for name in ('physical_side', 'physical_side_session', 'side_range', 'evidence',
                      'edge_profiles', 'separator_profiles', 'profile_recovery',
-                     'cube_pose', 'cube_corners', 'cube_observation'):
+                     'cube_pose', 'cube_corners', 'cube_observation', 'ridge_profiles',
+                     'cube_outline'):
             files[name + '.py'] = (ROOT / ('device/k230/vision/' + name + '.py')).read_bytes()
     files['camera.py'] = (ROOT / 'device/k230/vision/camera.py').read_bytes()
     files['vision_runtime.py'] = (ROOT / 'device/k230/vision/runtime.py').read_bytes()

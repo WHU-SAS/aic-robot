@@ -56,6 +56,7 @@ class PickExecution:
         self.pending_stage = 'hover'
         self.last_positions = [None] * 6
         self.last_sample = None
+        self._last_goal_dispatch = None
         self.feedback_status = 'unknown'
         self.error = None
         self.grip_confirmation = None
@@ -168,6 +169,15 @@ class PickExecution:
                 'method': 'axis6_stable_goal_delta', 'position_reference': 'last_stable_sample',
                 'phase': self.phase, 'sample_time_ms': self._last_poll_ms}
 
+    def _record_goal_dispatch(self, name, axes, sent_at_ms):
+        """Retain successful transport return, not a servo ACK or arrival."""
+        previous = self._last_goal_dispatch
+        self._last_goal_dispatch = {
+            'seq': 1 if previous is None else previous['seq'] + 1,
+            'name': name, 'axes': list(axes), 'goals': list(self.plan[name]),
+            'sent_at_ms': sent_at_ms,
+        }
+
     def _start_stage(self, name):
         self.pending_stage = None
         self.phase = name
@@ -176,11 +186,13 @@ class PickExecution:
         if name == 'descend':
             self.io.send_goals(self.plan[name], [4])
             self._lead_started_ms = self.clock_ms()
+            self._record_goal_dispatch(name, [4], self._lead_started_ms)
             self.phase = 'descend_lead'
             self._event('stage_goal_sent', {'name': name, 'axes': [4],
                         'goals': list(self.plan[name])})
         else:
             self.io.send_goals(self.plan[name], [1, 2, 3, 4, 5, 6])
+            self._record_goal_dispatch(name, [1, 2, 3, 4, 5, 6], self.clock_ms())
             if name == 'close':
                 self._close_window = []
             if name == 'lift':
@@ -313,6 +325,7 @@ class PickExecution:
                 lead_ms = self.ticks_diff(now, self._lead_started_ms)
                 if lead_ms >= self.policy['descend_axis4_lead_ms']:
                     self.io.send_goals(self.plan['descend'], [1, 2, 3, 5, 6])
+                    self._record_goal_dispatch('descend', [1, 2, 3, 5, 6], self.clock_ms())
                     self.phase = 'descend'
                     self._last_poll_ms = None
                     self._event('stage_goal_sent', {'name': 'descend', 'axes': [1, 2, 3, 5, 6],
@@ -358,6 +371,7 @@ class PickExecution:
                 'grasp_confirmed': self.grasp_confirmed, 'success_ready': self._success_ready,
                 'grip_confirmation': dict(self.grip_confirmation) if self.grip_confirmation else None,
                 'last_positions': list(self.last_positions), 'last_sample': self.last_sample,
+                'last_goal_dispatch': _diagnostic_copy(self._last_goal_dispatch),
                 'feedback_status': self.feedback_status, 'error': self.error,
                 'recovery_reason': self.recovery_reason,
                 'recovery_goal_sent_ms': self.recovery_goal_sent_ms,

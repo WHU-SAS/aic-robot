@@ -23,6 +23,19 @@ def plane_basis(plane):
 _CORNER_EVIDENCE='nonplanar_cube_five_corners'
 _CORNER_BOUNDARY='six_measured_edges_five_corners'
 _CORNER_PATH='shared_nonplanar_cube_corners'
+_OUTLINE_EVIDENCE='nonplanar_cube_six_corners'
+_OUTLINE_BOUNDARY='six_measured_outline_edges_six_corners'
+_OUTLINE_PATH='shared_nonplanar_cube_outline'
+_CORNER_CONTRACTS={
+    _CORNER_EVIDENCE:(5,_CORNER_BOUNDARY,_CORNER_PATH,
+        'verified_nonplanar_cube_axes_fourfold_mean'),
+    _OUTLINE_EVIDENCE:(6,_OUTLINE_BOUNDARY,_OUTLINE_PATH,
+        'verified_nonplanar_cube_outline_axes_fourfold_mean'),
+    'nonplanar_cube_face_back_top':(6,'seven_measured_edges_front_and_back_top_corners',
+        'shared_nonplanar_cube_face_back_top',
+        'verified_nonplanar_cube_face_back_top_axes_fourfold_mean')}
+_CORNER_BOUNDARIES=tuple(value[1] for value in _CORNER_CONTRACTS.values())
+_CORNER_PATHS=tuple(value[2] for value in _CORNER_CONTRACTS.values())
 
 
 def _finite(value):
@@ -44,11 +57,12 @@ def _corner_marked(found):
     if not isinstance(found,dict):return False
     observation=found.get('observation')
     quality=observation.get('quality') if isinstance(observation,dict) else None
-    return (found.get('status')=='complete_cube_candidate' or
-        found.get('evidence_type')==_CORNER_EVIDENCE or 'cube_pose' in found or
-        isinstance(quality,dict) and (quality.get('evidence_type')==_CORNER_EVIDENCE or
-            quality.get('boundary_method')==_CORNER_BOUNDARY or
-            quality.get('vision_path')==_CORNER_PATH))
+    return (found.get('status')=='complete_cube_candidate' or 'cube_pose' in found or
+        any(isinstance(record,dict) and (
+            record.get('evidence_type') in _CORNER_CONTRACTS or
+            record.get('boundary_method') in _CORNER_BOUNDARIES or
+            record.get('vision_path') in _CORNER_PATHS)
+            for record in (found,quality)))
 
 
 def _corner_axes(found,R,n):
@@ -61,14 +75,25 @@ def _corner_axes(found,R,n):
     observation=found.get('observation')
     quality=observation.get('quality') if isinstance(observation,dict) else None
     pose=found.get('cube_pose')
+    contract=_CORNER_CONTRACTS.get(found.get('evidence_type'))
+    if contract is None:raise ValueError('Unknown nonplanar cube evidence')
+    count,boundary,path,method=contract
     if (found.get('status')!='complete_cube_candidate' or
-            found.get('evidence_type')!=_CORNER_EVIDENCE or
             not isinstance(pose,dict) or not isinstance(quality,dict) or
             observation.get('status')!='localized' or
-            quality.get('evidence_type')!=_CORNER_EVIDENCE or
-            quality.get('boundary_method')!=_CORNER_BOUNDARY or
-            quality.get('vision_path')!=_CORNER_PATH):
+            quality.get('evidence_type')!=found['evidence_type'] or
+            quality.get('boundary_method')!=boundary or
+            quality.get('vision_path')!=path):
         raise ValueError('Invalid nonplanar cube evidence')
+    # Old five-corner callers allowed these raw labels to be absent. If
+    # supplied they must agree; the new six-corner contracts require both.
+    for key,expected in (('boundary_method',boundary),('vision_path',path)):
+        if found.get(key,expected if count==5 else None)!=expected:
+            raise ValueError('Nonplanar cube raw marker differs from its quality')
+    for record in (found,pose,quality):
+        if 'corner_count' in record and (type(record['corner_count']) is not int or
+                record['corner_count']!=count):
+            raise ValueError('Nonplanar cube corner count differs from its evidence')
     rms=pose.get('corner_reprojection_rms_px')
     reported=quality.get('reprojection_rms_px');limit=quality.get('reprojection_limit_px')
     if (not _finite(rms) or not 0<=rms<=3 or not _finite(reported) or
@@ -81,8 +106,8 @@ def _corner_axes(found,R,n):
             not _point(pose.get('object_center_mm'),3) or
             not _point(pose.get('cube_center_Camera_mm'),3) or
             not _point(found.get('cube_center_Base_mm'),3) or
-            not _array(pose.get('object_points_mm'),5,3) or
-            not _array(pose.get('image_points_px'),5,2) or
+            not _array(pose.get('object_points_mm'),count,3) or
+            not _array(pose.get('image_points_px'),count,2) or
             not _array(pose.get('cube_projected_corners_px'),8,2) or
             pose.get('cube_projection_source')!='pose_transform'):
         raise ValueError('Invalid nonplanar cube geometry shape')
@@ -119,7 +144,7 @@ def _corner_estimate(found,R,x,y,n):
         raise ValueError('Ambiguous nonplanar cube orientation')
     angle=math.atan2(s,c)/4
     axis=[math.cos(angle)*u+math.sin(angle)*v for u,v in zip(x,y)]
-    return {'status':'estimated','method':'verified_nonplanar_cube_axes_fourfold_mean',
+    return {'status':'estimated','method':_CORNER_CONTRACTS[found['evidence_type']][3],
         'yaw_table_deg':math.degrees(angle),'period_deg':90,'axis_count':len(samples),
         'axes_Base':[axis,cross(n,axis)],'table_normal_Base':n,
         'axis_residual_deg':[abs((v-angle+math.pi/4)%(math.pi/2)-math.pi/4)*180/math.pi for v in samples]}

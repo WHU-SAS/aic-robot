@@ -23,6 +23,7 @@ class PickExecutionTransportTests(unittest.TestCase):
         self.writes = []
         self.positions = list(PLAN['hover'])
         self.short_write = False
+        self.write_error = None
         owner = self
 
         class Pins:
@@ -40,7 +41,9 @@ class PickExecutionTransportTests(unittest.TestCase):
                 owner.events.append(('open', args, kwargs))
             def write(self, packet):
                 owner.writes.append((owner.clock.now(), packet))
-                return 0 if owner.short_write else len(packet)
+                if owner.write_error is not None:
+                    raise owner.write_error
+                return len(packet) - 1 if owner.short_write else len(packet)
             def deinit(self):
                 owner.events.append(('deinit',))
 
@@ -85,6 +88,126 @@ class PickExecutionTransportTests(unittest.TestCase):
         engine.close()
         engine.close()
         self.assertEqual(self.events.count(('deinit',)), 1)
+
+    def assert_dispatch(self, engine, name, axes, seq):
+        dispatch = engine.snapshot()['last_goal_dispatch']
+        self.assertIsNotNone(dispatch)
+        self.assertEqual(dispatch['seq'], seq)
+        self.assertEqual(dispatch['name'], name)
+        self.assertEqual(dispatch['axes'], axes)
+        # The physical subset packet still records the complete stage goal.
+        self.assertEqual(dispatch['goals'], PLAN[name])
+        written_at, packet = self.writes[-1]
+        self.assertEqual(self.ids(packet), axes)
+        self.assertEqual(packet, self.ns['sync_frame'](
+            PLAN[name], self.control['profiles'], axes))
+        # Adapter success includes its original2ms TX drain, not just write().
+        self.assertEqual(dispatch['sent_at_ms'], written_at + 2)
+        self.assertEqual(dispatch['sent_at_ms'], self.clock.now())
+        return copy.deepcopy(dispatch)
+
+    def test_successful_real_packets_record_all_full_and_split_stage_dispatches(self):
+        engine = self.harness()
+        self.assertIsNone(engine.snapshot()['last_goal_dispatch'])
+        self.assertEqual(self.writes, [])
+        engine.step(7)
+        hover = self.assert_dispatch(engine, 'hover', [1, 2, 3, 4, 5, 6], 1)
+        engine.step(7)  # Six real adapter position reads pass hover.
+        self.assertEqual(engine.snapshot()['last_goal_dispatch'], hover)
+        engine.step(7)
+        lead = self.assert_dispatch(engine, 'descend', [4], 2)
+        self.clock.advance(POLICY['descend_axis4_lead_ms'] - 1)
+        engine.step(7)
+        self.assertEqual(engine.snapshot()['last_goal_dispatch'], lead)
+        self.assertEqual(len(self.writes), 2)
+        self.clock.advance(1)
+        engine.step(7)
+        self.assert_dispatch(engine, 'descend', [1, 2, 3, 5, 6], 3)
+        self.assertEqual(self.writes[2][0] - lead['sent_at_ms'], 200)
+        self.positions = list(PLAN['descend'])
+        engine.step(7)
+        engine.step(7)
+        self.assert_dispatch(engine, 'close', [1, 2, 3, 4, 5, 6], 4)
+        self.positions[5] = PLAN['close'][5] + 45
+        for index in range(POLICY['gripper_stable_samples']):
+            if index:
+                self.clock.advance(POLICY['poll_interval_ms'])
+            engine.step(7)
+        self.assertEqual(engine.snapshot()['pending_stage'], 'lift')
+        engine.step(7)
+        self.assert_dispatch(engine, 'lift', [1, 2, 3, 4, 5, 6], 5)
+        self.assertEqual(len(self.writes), 5)
+        engine.close()
+        # Sequence numbers belong to one execution, not to the UART module.
+        fresh = self.harness()
+        self.assertIsNone(fresh.snapshot()['last_goal_dispatch'])
+        fresh.step(7)
+        self.assert_dispatch(fresh, 'hover', [1, 2, 3, 4, 5, 6], 1)
+        fresh.close()
+
+    def test_first_packet_short_write_or_write_exception_does_not_record_success(self):
+        for fault in ('short', 'exception'):
+            with self.subTest(fault=fault):
+                engine = self.harness()
+                if fault == 'short':
+                    self.short_write = True
+                else:
+                    self.write_error = OSError('fake UART write failure')
+                state = engine.step(7)
+                self.assertEqual(state['status'], 'fault')
+                self.assertIsNone(state['last_goal_dispatch'])
+                self.assertEqual(len(self.writes), 1)
+                self.assertEqual(self.ids(self.writes[0][1]), [1, 2, 3, 4, 5, 6])
+                self.assertEqual(self.clock.now(), 0)  # No successful drain.
+                engine.step(8)
+                self.assertEqual(len(self.writes), 1)
+                self.assertIsNone(engine.snapshot()['last_goal_dispatch'])
+                engine.close()
+
+    def test_failed_descend_half_keeps_last_successful_real_packet_metadata(self):
+        for half in ('axis4', 'remaining'):
+            for fault in ('short', 'exception'):
+                with self.subTest(half=half, fault=fault):
+                    engine = self.harness()
+                    engine.step(7)
+                    engine.step(7)
+                    if half == 'remaining':
+                        engine.step(7)
+                        self.clock.advance(POLICY['descend_axis4_lead_ms'])
+                    previous = copy.deepcopy(engine.snapshot()['last_goal_dispatch'])
+                    if fault == 'short':
+                        self.short_write = True
+                    else:
+                        self.write_error = OSError('fake UART write failure')
+                    state = engine.step(7)
+                    self.assertEqual(state['status'], 'fault')
+                    self.assertEqual(state['last_goal_dispatch'], previous)
+                    self.assertEqual(previous['seq'], 2 if half == 'remaining' else 1)
+                    axes = [1, 2, 3, 5, 6] if half == 'remaining' else [4]
+                    self.assertEqual(self.ids(self.writes[-1][1]), axes)
+                    self.assertEqual(self.writes[-1][1], self.ns['sync_frame'](
+                        PLAN['descend'], self.control['profiles'], axes))
+                    count = len(self.writes)
+                    engine.step(8)
+                    self.assertEqual(len(self.writes), count)
+                    self.assertEqual(engine.snapshot()['last_goal_dispatch'], previous)
+                    engine.close()
+
+    def test_ready2_recovery_is_not_a_cooperative_stage_dispatch(self):
+        for sent_hover in (False, True):
+            with self.subTest(sent_hover=sent_hover):
+                engine = self.harness()
+                if sent_hover:
+                    engine.step(7)
+                previous = copy.deepcopy(engine.snapshot()['last_goal_dispatch'])
+                engine.invalidate_target()
+                state = engine.step(8)
+                self.assertEqual(state['status'], 'recovering')
+                self.assertEqual(state['last_goal_dispatch'], previous)
+                self.assertEqual(self.writes[-1][1], self.ns['sync_frame'](
+                    self.ready['goals'], self.ready['profiles']))
+                self.assertEqual(self.ids(self.writes[-1][1]), [1, 2, 3, 4, 5, 6])
+                engine.close()
 
     def test_invalid_late_stage_or_ready_config_fails_before_uart_access(self):
         self.harness()

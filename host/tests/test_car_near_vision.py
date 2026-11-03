@@ -12,6 +12,7 @@ if HAS_VISION:
     import cv2
     import numpy as np
     from device.k230.car import near_vision
+    from device.k230.vision import physical_side
     from device.k230.pick.reflection_faces import measure_edge
     from device.k230.pick.side_faces import select_sides
 
@@ -45,11 +46,57 @@ class NearVisionTests(unittest.TestCase):
         return {'frame_id': 7, 'capture_timestamp_ms': stamp, 'clock_domain': 'k230_ticks_ms',
                 'timestamp_source': 'software_snapshot_call', 'image_size_px': [1280, 960]}
 
-    def solve(self, image, intr, ext, plane, bbox=None, **options):
-        steps = list(near_vision.localize_steps(image, self.frame(), bbox or self.box(image),
+    def solve(self, image, intr, ext, plane, bbox=None, original=False, **options):
+        solver = physical_side._original_localize_steps if original else near_vision.localize_steps
+        steps = list(solver(image, self.frame(), bbox or self.box(image),
                      intr, ext, plane, **options))
         self.assertEqual(steps[-1]['stage'], 'complete')
         return steps, steps[-1]['observation']
+
+    def assert_precise_evidence(self, result):
+        """Public geometry keeps its actual face2px or cube3px contract."""
+        self.assertEqual(result['status'], 'localized', result)
+        payload, quality = result['payload'], result['quality']
+        evidence = quality.get('evidence_type')
+        if evidence in ('nonplanar_cube_five_corners', 'nonplanar_cube_six_corners'):
+            count = 6 if evidence == 'nonplanar_cube_six_corners' else 5
+            self.assertEqual(payload['evidence_type'], evidence)
+            self.assertEqual(payload['status'], 'complete_cube_candidate')
+            self.assertEqual(quality['reprojection_limit_px'], 3.)
+            self.assertLessEqual(quality['reprojection_rms_px'], 3.)
+            self.assertNotIn('poses', payload)
+            pose = payload['cube_pose']
+            points = pose['image_points_px']
+            self.assertEqual(len(points), count)
+            self.assertEqual(len(pose['object_points_mm']), count)
+            self.assertEqual(len(payload['observed_edges']), 6)
+            self.assertEqual(len(payload['half_corner_errors_px']), 2*count)
+            self.assertTrue(all(0 <= v <= 3 for v in payload['half_corner_errors_px']))
+            methods = {
+                5: ('six_measured_edges_five_corners', 'shared_nonplanar_cube_corners'),
+                6: ('six_measured_outline_edges_six_corners', 'shared_nonplanar_cube_outline')}
+            self.assertEqual((payload['boundary_method'], payload['vision_path']), methods[count])
+            edges = [edge['quality'] for edge in payload['observed_edges']]
+            if count == 6:
+                self.assertLessEqual(pose['table_geometry']['object_up_deviation_deg'], 20.)
+        else:
+            self.assertIn(evidence, (None, 'physical_face_with_G_ridge'))
+            self.assertEqual(payload['status'], 'complete_face_candidate')
+            self.assertLessEqual(quality['reprojection_rms_px'], 2.)
+            pose = payload['poses'][0]
+            self.assertLessEqual(pose['face_reprojection_rms_px'], 2.)
+            points, edges = payload['face_quad_px'], payload['physical_edges']
+            self.assertEqual(len(points), 4)
+            self.assertEqual(len(edges), 4)
+        for edge in edges:
+            self.assertEqual(edge['sampled_stations'], 64)
+            self.assertGreaterEqual(edge['support'], 45)
+            self.assertLessEqual(edge['rms_px'], 3.)
+        geometry = pose['table_geometry']
+        self.assertTrue(geometry['accepted'])
+        self.assertLessEqual(geometry['normal_deviation_deg'], 20.)
+        self.assertLessEqual(abs(geometry['height_error_mm']), 8.)
+        return points
 
     def test_mean_center_removes_rigid_projection_but_keeps_selected_side_evidence(self):
         faces=[]
@@ -81,7 +128,7 @@ class NearVisionTests(unittest.TestCase):
         self.assertIs(dominant['poses'][0],faces[0]['poses'][0])
         self.assertEqual(dominant['poses'][0]['cube_projection_source'],'pose_transform')
 
-    def test_real_side_geometry_and_full_pixel_coordinates(self):
+    def test_public_real_geometry_and_full_pixel_coordinates(self):
         for yaw in (.7, .95):
             image, intr, ext, plane = self.scene(yaw)
             steps, result = self.solve(image, intr, ext, plane)
@@ -91,24 +138,18 @@ class NearVisionTests(unittest.TestCase):
             self.assertEqual(result['coordinate_frame'], 'Base')
             self.assertFalse(result['xy_compensation_applied'])
             np.testing.assert_allclose(result['cube_center_Base_mm'], [10., -10., -10.], atol=3.)
-            face = result['payload']
-            self.assertEqual(face['side_selection'], 'mean_of_similar_area_sides' if yaw == .7 else 'larger_verified_side')
-            self.assertEqual(len(face['side_faces']), 2)
-            self.assertLessEqual(face['poses'][0]['face_reprojection_rms_px'], 2.)
-            self.assertTrue(face['poses'][0]['table_geometry']['accepted'])
-            self.assertTrue(all(e['support'] >= 45 and e['sampled_stations'] == 64 for e in face['physical_edges']))
-            self.assertGreater(min(p[0] for p in face['face_quad_px']), 400)
-            self.assertGreater(min(p[1] for p in face['face_quad_px']), 400)
-            self.assertFalse(result['search']['top_fallback'])
-            self.assertLessEqual(result['search']['measured_seed_count'], 3)
-            self.assertGreater(sum(s['stage'] == 'edge_samples' for s in steps), 16)
+            points = self.assert_precise_evidence(result)
+            self.assertGreater(min(p[0] for p in points), 400)
+            self.assertGreater(min(p[1] for p in points), 400)
+            self.assertEqual(sum(s['stage'] == 'complete' for s in steps), 1)
+            self.assertNotIn('original_face_fallback', [s['stage'] for s in steps])
 
     def test_cooperative_edges_match_original_64_station_measurement(self):
         image, unused, unused, unused = self.scene()
         smooth = cv2.GaussianBlur(image, (3, 3), .7)
         # Use a physical edge found by the bounded pipeline, rather than a box.
         image, intr, ext, plane = self.scene()
-        unused, result = self.solve(image, intr, ext, plane)
+        unused, result = self.solve(image, intr, ext, plane, original=True)
         a, b = result['payload']['face_quad_px'][:2]
         expected = measure_edge(smooth, a, b)
         steps = list(near_vision._edge_steps(smooth, a, b))
@@ -127,9 +168,10 @@ class NearVisionTests(unittest.TestCase):
         top_box = list(cv2.boundingRect(max(cs, key=cv2.contourArea)))
         unused, result = self.solve(image, intr, ext, plane, bbox=top_box)
         self.assertEqual(result['status'], 'localized', result)
+        points = self.assert_precise_evidence(result)
         x, y, w, h = result['search']['roi_px']
         self.assertGreater(y+h, top_box[1]+top_box[3]+24)
-        self.assertGreater(max(p[1] for p in result['payload']['face_quad_px']), top_box[1]+top_box[3]+24)
+        self.assertGreater(max(p[1] for p in points), top_box[1]+top_box[3]+24)
         # Expanded ROI is not permission to infer a hidden/missing bottom.
         cut = top_box[1]+top_box[3]+24
         broken = image.copy(); broken[cut:, :] = (150, 55, 5)
@@ -182,7 +224,7 @@ class NearVisionTests(unittest.TestCase):
         intr = json.loads((ROOT/cfg['intrinsics']).read_text())
         ext = json.loads((ROOT/cfg['extrinsics']).read_text())
         image = cv2.imread(str(path))
-        unused, result = self.solve(image, intr, ext, cfg['table_plane_Base_mm'])
+        unused, result = self.solve(image, intr, ext, cfg['table_plane_Base_mm'], original=True)
         self.assertEqual(result['status'], 'localized')
         np.testing.assert_allclose(result['cube_center_Base_mm'], [251.54695, 31.10842, -57.86134], atol=.8)
         self.assertTrue(all(e['support'] >= 45 for e in result['payload']['physical_edges']))
@@ -195,7 +237,7 @@ class NearVisionTests(unittest.TestCase):
         intr = json.loads((ROOT/cfg['intrinsics']).read_text())
         ext = json.loads((ROOT/cfg['extrinsics']).read_text())
         unused, result = self.solve(cv2.imread(str(path)), intr, ext, cfg['table_plane_Base_mm'],
-                                     bbox=[335, 459, 147, 104])
+                                     bbox=[335, 459, 147, 104], original=True)
         self.assertEqual(result['status'], 'localized')
         self.assertEqual(result['search']['roi_px'], [311, 435, 195, 284])
         q = result['payload']['face_quad_px']
@@ -206,14 +248,14 @@ class NearVisionTests(unittest.TestCase):
         # preserve the physical-side solution, not an incidental seed's floats.
         np.testing.assert_allclose(result['cube_center_Base_mm'], [281.26565, 65.79357, -54.71127], atol=1.)
 
-    def test_same_hue_shaded_front_uses_an_observed_separator(self):
+    def test_original_same_hue_shaded_front_uses_an_observed_separator(self):
         folder = ROOT/'data/car/near_parking/stopped_scene_20261030_193117'
         if not (folder/'frame.jpg').exists():
             self.skipTest('Original camera frame is local-only evidence')
         cfg = json.loads((folder/'active_config.json').read_text())
         capture = json.loads((folder/'capture.json').read_text())
         steps, result = self.solve(cv2.imread(str(folder/'frame.jpg')), cfg['intrinsics'],
-            cfg['extrinsics'], cfg['table_plane'], bbox=capture['coarse']['bbox_px'])
+            cfg['extrinsics'], cfg['table_plane'], bbox=capture['coarse']['bbox_px'], original=True)
         self.assertEqual(result['status'], 'localized', result)
         self.assertTrue(any(s['stage'] == 'seam_seed' for s in steps))
         self.assertLessEqual(result['search']['measured_seed_count'], 3)
@@ -230,8 +272,7 @@ class NearVisionTests(unittest.TestCase):
         for roll in (-.08, .08):
             image, intr, ext, plane = self.scene(.7, roll)
             unused, result = self.solve(image, intr, ext, plane)
-            self.assertEqual(result['status'], 'localized', result)
-            self.assertLessEqual(result['quality']['reprojection_rms_px'], 2.)
+            self.assert_precise_evidence(result)
             np.testing.assert_allclose(result['cube_center_Base_mm'], [10., -10., -10.], atol=3.)
 
 

@@ -409,7 +409,7 @@ class FullLocalizationStepsTests(unittest.TestCase):
         transform[:3, 3] = -rotation @ tv
         return image, transform.tolist()
 
-    def test_real_synthetic_faces_match_public_sync_centers_rms_and_side_choice(self):
+    def test_real_synthetic_geometry_matches_public_sync_with_typed_evidence(self):
         for yaw in (.7, .95):
             with self.subTest(yaw=yaw):
                 image, transform = self.synthetic_scene(yaw)
@@ -419,14 +419,40 @@ class FullLocalizationStepsTests(unittest.TestCase):
                 self.assert_one_raw_result(events, actual)
                 np.testing.assert_allclose(actual['cube_center_Camera_mm'], expected['cube_center_Camera_mm'], atol=1e-9)
                 np.testing.assert_allclose(actual['cube_center_Base_mm'], expected['cube_center_Base_mm'], atol=1e-9)
-                np.testing.assert_allclose(actual['face_quad_px'], expected['face_quad_px'], atol=1e-9)
-                self.assertAlmostEqual(actual['poses'][0]['face_reprojection_rms_px'],
-                                       expected['poses'][0]['face_reprojection_rms_px'], places=9)
-                self.assertEqual(actual['side_selection'], expected['side_selection'])
-                self.assertLessEqual(actual['poses'][0]['face_reprojection_rms_px'], 2.)
+                self.assertEqual(actual['status'], expected['status'])
+                if actual['status'] == 'complete_cube_candidate':
+                    evidence = actual['evidence_type']
+                    self.assertIn(evidence, ('nonplanar_cube_five_corners', 'nonplanar_cube_six_corners'))
+                    self.assertEqual(evidence, expected['evidence_type'])
+                    count = 6 if evidence == 'nonplanar_cube_six_corners' else 5
+                    pose = actual['cube_pose']; other = expected['cube_pose']
+                    self.assertEqual(len(pose['image_points_px']), count)
+                    np.testing.assert_allclose(pose['image_points_px'], other['image_points_px'], atol=1e-9)
+                    self.assertAlmostEqual(pose['corner_reprojection_rms_px'],
+                                           other['corner_reprojection_rms_px'], places=9)
+                    self.assertLessEqual(pose['corner_reprojection_rms_px'], 3.)
+                    self.assertEqual(len(actual['observed_edges']), 6)
+                    for edge in actual['observed_edges']:
+                        self.assertEqual(edge['quality']['sampled_stations'], 64)
+                        self.assertGreaterEqual(edge['quality']['support'], 45)
+                        self.assertLessEqual(edge['quality']['rms_px'], 3.)
+                    self.assertEqual(len(actual['half_corner_errors_px']), 2*count)
+                    self.assertTrue(all(0 <= e <= 3 for e in actual['half_corner_errors_px']))
+                    self.assertNotIn('face_quad_px', actual)
+                else:
+                    self.assertEqual(actual['status'], 'complete_face_candidate')
+                    pose = actual['poses'][0]
+                    np.testing.assert_allclose(actual['face_quad_px'], expected['face_quad_px'], atol=1e-9)
+                    self.assertAlmostEqual(pose['face_reprojection_rms_px'],
+                                           expected['poses'][0]['face_reprojection_rms_px'], places=9)
+                    self.assertEqual(actual['side_selection'], expected['side_selection'])
+                    self.assertLessEqual(pose['face_reprojection_rms_px'], 2.)
+                self.assertTrue(pose['table_geometry']['accepted'])
+                self.assertLessEqual(pose['table_geometry']['normal_deviation_deg'], 20.)
+                self.assertLessEqual(abs(pose['table_geometry']['height_error_mm']), 8.)
                 np.testing.assert_allclose(actual['cube_center_Base_mm'], [10., -10., -10.], atol=3.)
 
-    def test_stopped_session_uses_same_frame_hint_through_real_side_solver(self):
+    def test_original_side_session_uses_same_frame_hint_through_real_solver(self):
         from device.k230.vision.cooperative_static_session import CooperativeStaticPickSession
         image, transform = self.synthetic_scene(.7)
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
@@ -450,7 +476,9 @@ class FullLocalizationStepsTests(unittest.TestCase):
         outcomes = []
         for hint in (None, top_hint):
             session = CooperativeStaticPickSession(config, lambda: 100)
-            with patch.object(physical_side, 'localize_steps', wraps=physical_side.localize_steps) as solver:
+            # Isolate the original face solver's hint-selection contract;
+            # real fast cube/G sessions have their own public-path tests.
+            with patch.object(physical_side, 'localize_steps', wraps=physical_side._original_localize_steps) as solver:
                 session.start(SimpleNamespace(compressed=compressed), frame, hint)
                 for _ in range(10000):
                     if session.phase is None:

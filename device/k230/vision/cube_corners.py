@@ -452,3 +452,107 @@ def corner_steps(bgr, bbox_px, intrinsics, extrinsics, table_plane,
         rejected.append({'reason': str(exc)})
         yield {'stage': 'measurement_rejected', 'reason': str(exc)}
     yield {'stage': 'complete', 'candidate_count': emitted, 'rejections': rejected}
+
+
+_FACE_BACK_OBJECT=[[-10.,0.,20.],[10.,0.,20.],[10.,0.,0.],[-10.,0.,0.],
+                   [-10.,20.,20.],[10.,20.,20.]]
+
+
+def _front_back_upper_proposals(p,vertices,bbox):
+    """Current contour only; merged upper segments remain search proposals."""
+    x,y,w,h=bbox;depth=[];back=[]
+    for j,a in enumerate(vertices):
+        for b in(vertices[j-1],vertices[(j+1)%len(vertices)]):
+            dx,dy=b[0]-a[0],b[1]-a[1]
+            if(a[0]<x+.3*w and y+.05*h<a[1]<y+.5*h and dy<0 and
+                    dx>.08*w and p.distance(a,b)>=25):
+                depth.append((p.distance(a,b),a,b))
+        for direction in(-1,1):
+            run=[a]
+            for count in(1,2,3):
+                b=vertices[(j+direction*count)%len(vertices)]
+                if b[0]<=run[-1][0]or max(a[1],b[1])>y+.25*h:break
+                run.append(b);dx,dy=b[0]-a[0],b[1]-a[1]
+                if dx<.5*w or abs(dy)>.3*dx:continue
+                line=p.fit(run)
+                rms=math.sqrt(sum(p.residual(v,line)**2 for v in run)/len(run))
+                if rms<=3:back.append((dx,-rms,a,b,list(run)))
+    if not depth or not back:raise ValueError('No current front/back upper contour proposal pair')
+    unused,a,b=max(depth,key=lambda v:v[0]);left=(a,b)
+    unused,unused,a,b,run=max(back,key=lambda v:v[:2])
+    return left,(a,b),run
+
+
+def front_back_steps(p,im,hsv,prepared,front_edges,front_quad,
+                     intrinsics,extrinsics,table_plane):
+    """Reuse four measured ROI front edges, measure three upper outline edges.
+
+    ``im`` is the same smoothed ROI, ``hsv`` its same-image colours, and
+    ``front_quad`` is in ROI pixels. No pose, full-frame acquisition or repeated
+    front-edge measurement occurs here. E/F are independently observed upper
+    corners; F never comes from extrapolating the front's right edge. This is
+    a separate six-point/seven-source layout, not the exterior-six policy.
+    """
+    try:
+        from . import edge_profiles as profiles,cube_outline,cube_corners as corners
+    except ImportError:
+        import edge_profiles as profiles
+        import cube_outline
+        import cube_corners as corners
+    count=0;rejected=[]
+    try:
+        vertices=prepared.get('vertices')
+        if vertices is None:
+            unused,vertices=_polygon(p,hsv)
+        depth,back,run=_front_back_upper_proposals(p,vertices,prepared['local_bbox'])
+        left=_measure(p,profiles,im,hsv,*depth)
+        yield {'stage':'front_back_edge_complete','edge_name':'left_top_depth'}
+        upper=_measure(p,profiles,im,hsv,*back)
+        yield {'stage':'front_back_edge_complete','edge_name':'back_top'}
+        # The independent colour-body silhouette proposes only this upper
+        # window. Its line still requires the original64station measurement.
+        seed,unused,ownership,proposal=cube_outline._proposal(p,corners,prepared,
+            intrinsics,extrinsics,table_plane,cube_outline.DEFAULT_LAB_THRESHOLDS)
+        a,b=seed[2],seed[3];middle=[(a[k]+b[k])/2 for k in range(2)]
+        right=_measure(p,profiles,im,ownership,a,middle)
+        body_kind=proposal['body_mask_kind']
+        right[1].update(edge_ownership=('same_current_LAB_component_upper_outline'
+            if body_kind=='configured_LAB'else'same_current_HSV_body_upper_outline'),
+            body_mask_kind=body_kind,
+            broad_HSV_outside_nonblue_verified=False)
+        yield {'stage':'front_back_edge_complete','edge_name':'independent_upper_right_silhouette'}
+        points=[list(v)for v in front_quad]+[p.intersect(left[0],upper[0]),p.intersect(upper[0],right[0])]
+        halves=[]
+        for half in(0,1):
+            group=[p.intersect(front_edges[i-1][2][half],front_edges[i][2][half])for i in range(4)]
+            group.extend([p.intersect(left[2][half],upper[2][half]),p.intersect(upper[2][half],right[2][half])])
+            halves.append(group)
+        errors=[p.distance(a,b)for group in halves for a,b in zip(points,group)]
+        if max(errors)>3:raise ValueError('Front/back cube interleaved corners disagree')
+        ox,oy=prepared['roi_px'][:2]
+        full=[[v[0]+ox,v[1]+oy]for v in points]
+        if any(not(3<a<1277 and 3<b<957)for a,b in full):
+            raise ValueError('Front/back cube corners clipped')
+        names=('front_top','front_right','front_bottom','front_outer',
+               'left_top_depth','back_top','independent_upper_right_silhouette')
+        edges=list(front_edges)+[left,upper,right]
+        def restore(line):
+            a,b,c=line
+            return[a,b,c-a*ox-b*oy]
+        observed=[dict(name=name,quality=dict(edge[1]),line_px=restore(edge[0]),
+            half_lines_px=[restore(v)for v in edge[2]])for name,edge in zip(names,edges)]
+        measurement={'evidence_type':'nonplanar_cube_face_back_top',
+            'object_points_mm':[list(v)for v in _FACE_BACK_OBJECT],
+            'image_points_px':full,'corner_labels':['A','B','C','D','E','F'],
+            'observed_edges':observed,'half_corner_errors_px':errors,
+            'topology':'measured_front_face_and_back_top','roi_px':list(prepared['roi_px']),
+            'candidate_window_shared':True,'odd_even_check':'independent_measured_point_line_fits',
+            'upper_proposals':{'left_depth_roi_px':depth,'back_top_roi_px':back,
+                'merged_back_contour_roi_px':run,'right_upper_roi_px':[a,middle],
+                'right_silhouette':proposal,'pose_used':False,'table_offset_used':False}}
+        count=1
+        yield {'stage':'cube_candidate','candidate':0,'measurement':measurement}
+    except(ValueError,ZeroDivisionError)as exc:
+        rejected.append({'reason':str(exc)})
+        yield {'stage':'front_back_rejected','reason':str(exc)}
+    yield {'stage':'front_back_complete','candidate_count':count,'rejections':rejected}

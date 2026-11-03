@@ -20,8 +20,9 @@ class SharedPhysicalSideTests(unittest.TestCase):
     def setUp(self):
         self.fixture = fixtures.NearVisionTests()
 
-    def observation(self, image, intr, ext, plane, **options):
-        steps = list(physical_side.localize_steps(image, self.fixture.frame(), self.fixture.box(image),
+    def observation(self, image, intr, ext, plane, original=False, **options):
+        solver = physical_side._original_localize_steps if original else physical_side.localize_steps
+        steps = list(solver(image, self.fixture.frame(), self.fixture.box(image),
             intr, ext, plane, **options))
         return steps, steps[-1]['observation']
 
@@ -234,14 +235,14 @@ class SharedPhysicalSideTests(unittest.TestCase):
                 self.assertAlmostEqual(best['face_reprojection_rms_px'],
                     pose['face_reprojection_rms_px'], places=5)
 
-    def test_portable_and_native_sampling_preserve_geometry_and_64_stations(self):
+    def test_original_portable_and_native_sampling_preserve_geometry_and_64_stations(self):
         if not physical_side._BATCH_EDGES:
             self.skipTest('Native remap not available')
         for yaw in (.7, .95):
             args = self.fixture.scene(yaw)
             with patch.object(physical_side, '_BATCH_EDGES', False):
-                old_steps, old = self.observation(*args)
-            new_steps, new = self.observation(*args)
+                old_steps, old = self.observation(*args, original=True)
+            new_steps, new = self.observation(*args, original=True)
             self.assertEqual(new['status'], 'localized')
             self.assertEqual(new['payload']['side_selection'], old['payload']['side_selection'])
             np.testing.assert_allclose(new['cube_center_Base_mm'], old['cube_center_Base_mm'], atol=.01)
@@ -251,25 +252,39 @@ class SharedPhysicalSideTests(unittest.TestCase):
                                     for e in face['physical_edges']))
             self.assertEqual(new['capture_timestamp_ms'], 100)
 
-    def test_synchronous_raw_result_and_steps_share_complete_face_payload(self):
+    def test_synchronous_raw_result_and_steps_share_typed_geometry(self):
         image, intr, ext, plane = self.fixture.scene()
         steps, observation = self.observation(image, intr, ext, plane)
         raw = physical_side.localize(image, intr['camera_matrix'], intr['distortion_coefficients'],
             ext['T_Base_from_Camera_mm'], plane)
         np.testing.assert_allclose(raw['cube_center_Base_mm'], observation['cube_center_Base_mm'], atol=.01)
-        self.assertTrue(raw['physical_edges'])
-        self.assertTrue(raw['poses'])
-        self.assertEqual(raw['side_selection'], observation['payload']['side_selection'])
+        points = self.fixture.assert_precise_evidence(observation)
+        payload = observation['payload']
+        self.assertEqual(raw['status'], payload['status'])
+        if raw['status'] == 'complete_cube_candidate':
+            self.assertEqual(raw['evidence_type'], observation['quality']['evidence_type'])
+            pose = raw['cube_pose']
+            np.testing.assert_allclose(pose['image_points_px'], points, atol=1e-9)
+            self.assertEqual(raw['observed_edges'], payload['observed_edges'])
+            self.assertAlmostEqual(pose['corner_reprojection_rms_px'],
+                observation['quality']['reprojection_rms_px'], places=9)
+        else:
+            self.assertTrue(raw['physical_edges'])
+            self.assertTrue(raw['poses'])
+            self.assertEqual(raw['side_selection'], payload['side_selection'])
+            np.testing.assert_allclose(raw['face_quad_px'], points, atol=1e-9)
+            pose = raw['poses'][0]
         from device.k230.pick.pose import project
         camera = raw['cube_center_Camera_mm']
-        np.testing.assert_allclose(camera, raw['poses'][0]['cube_center_Camera_mm'], atol=1e-9)
+        np.testing.assert_allclose(camera, pose['cube_center_Camera_mm'], atol=1e-9)
         np.testing.assert_allclose(project(camera, intr['camera_matrix'], intr['distortion_coefficients']),
-            raw['poses'][0]['cube_center_pixel'], atol=1e-9)
+            pose['cube_center_pixel'], atol=1e-9)
         T = ext['T_Base_from_Camera_mm']
         np.testing.assert_allclose([sum(T[i][j]*camera[j] for j in range(3))+T[i][3] for i in range(3)],
             raw['cube_center_Base_mm'], atol=1e-9)
         self.assertFalse(observation['xy_compensation_applied'])
-        self.assertTrue(any(step['stage'] == 'edge_reused' for step in steps))
+        self.assertEqual(sum(step['stage'] == 'complete' for step in steps), 1)
+        self.assertNotIn('original_face_fallback', [step['stage'] for step in steps])
 
     def test_blank_image_is_not_a_synchronous_face_or_top_fallback(self):
         image, intr, ext, plane = self.fixture.scene(); image[:] = 90
@@ -319,8 +334,8 @@ class SharedPhysicalSideTests(unittest.TestCase):
         args = (image, capture['frame'], capture['coarse']['bbox_px'], cfg['intrinsics'],
                 cfg['extrinsics'], cfg['table_plane'])
         with patch.object(physical_side, '_BATCH_EDGES', False):
-            reference = list(physical_side.localize_steps(*args))[-1]['observation']
-        steps = list(physical_side.localize_steps(*args)); actual = steps[-1]['observation']
+            reference = list(physical_side._original_localize_steps(*args))[-1]['observation']
+        steps = list(physical_side._original_localize_steps(*args)); actual = steps[-1]['observation']
         self.assertEqual(actual['status'], 'localized')
         np.testing.assert_allclose(actual['cube_center_Base_mm'], reference['cube_center_Base_mm'], atol=.01)
         self.assertLessEqual(actual['quality']['reprojection_rms_px'], 2.)

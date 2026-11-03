@@ -150,27 +150,23 @@ class ProfileRecoveryTests(unittest.TestCase):
     def test_twenty_new_captures_localize_with_original_capture_and_quality_gates(self):
         self.check_series('live_static_02','verify',20)
 
-    def test_public_old25_keeps_original_successes_then_uses_explicit_policy_per_result(self):
-        counts={'original':0,'cube':0,'profile':0}
+    def test_public_old25_prefers_fast_geometry_and_retains_explicit_quality_per_result(self):
+        counts={'cube':0,'profile':0}
         for folder,prefix,count in (('live_static_01','static',5),
                                     ('live_static_02','verify',20)):
             config,rows=self.saved_series(folder,prefix,count)
             for record,image in rows:
                 with self.subTest(folder=folder,image=record['image_file']):
-                    original=list(physical_side._original_localize_steps(image,
-                        record['frame'],record['bbox_px'],config['intrinsics'],
-                        config['extrinsics'],config['table_plane']))[-1]['observation']
-                    events=self.localize(config,record,image)
+                    with patch.object(physical_side,'_original_localize_steps',
+                            side_effect=AssertionError('Fast success must precede original face scan')):
+                        events=self.localize(config,record,image)
                     observation=events[-1]['observation']
                     self.assertEqual(observation['status'],'localized',observation)
-                    if original['status']=='localized':
-                        counts['original']+=1
-                        self.assertEqual(observation['cube_center_Base_mm'],
-                                         original['cube_center_Base_mm'])
-                        self.assertEqual(observation['payload'],original['payload'])
-                        self.assertFalse(any(e['stage']=='recovery_selected' for e in events))
-                        self.assert_measured_pose(config,record,events)
-                    elif observation['quality'].get('evidence_type')==\
+                    self.assertEqual(sum(e['stage']=='complete'for e in events),1)
+                    self.assertNotIn('original_face_fallback',[e['stage']for e in events])
+                    routes=[e['route']for e in events if e['stage']=='recovery_selected']
+                    self.assertIn(routes[0],('cube','profile'))
+                    if observation['quality'].get('evidence_type')==\
                             'nonplanar_cube_five_corners':
                         counts['cube']+=1
                         self.assertEqual(observation['quality']['reprojection_limit_px'],3.)
@@ -189,20 +185,20 @@ class ProfileRecoveryTests(unittest.TestCase):
                                      record['frame']['capture_timestamp_ms'])
                     association=associate_fine_candidate(observation,record['paired_coarse'])
                     self.assertEqual(association['status'],'matched',association)
-        # Direct cube acceptance23/25 is not the public cube count: already
-        # accepted original faces return first and retain their old2px result.
         self.assertEqual(sum(counts.values()),25)
-        self.assertGreater(counts['original'],0)
         self.assertGreater(counts['cube'],0)
+        self.assertGreater(counts['profile'],0)
 
-    def test_original_success_never_enters_recovery_or_changes_its_pose(self):
+    def test_original_algorithm_keeps_its_accepted_face_without_fast_path_calls(self):
         config,rows=self.saved_series('live_static_01','static',5)
         record,image=rows[0]
         before=list(physical_side._original_localize_steps(image,record['frame'],record['bbox_px'],
             config['intrinsics'],config['extrinsics'],config['table_plane']))[-1]['observation']
         self.assertEqual(before['status'],'localized')
-        with patch.object(profile_recovery,'recover_steps',side_effect=AssertionError('unneeded recovery')):
-            events=self.localize(config,record,image)
+        with patch.object(profile_recovery,'recover_steps',side_effect=AssertionError('Original algorithm called fast recovery')),\
+             patch.object(physical_side,'_cube_steps',side_effect=AssertionError('Original algorithm called cube path')):
+            events=list(physical_side._original_localize_steps(image,record['frame'],record['bbox_px'],
+                config['intrinsics'],config['extrinsics'],config['table_plane']))
         after=self.assert_measured_pose(config,record,events)
         self.assertEqual(after['cube_center_Base_mm'],before['cube_center_Base_mm'])
         self.assertEqual(after['payload']['face_quad_px'],before['payload']['face_quad_px'])

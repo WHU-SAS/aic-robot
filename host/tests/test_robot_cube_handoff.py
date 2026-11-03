@@ -6,11 +6,12 @@ from unittest.mock import Mock
 
 from device.k230.robot.task import handoff_observation, execute_task
 from device.k230.vision.runtime import localize_precise
-from host.tests.test_cube_observation import fixture, FRAME, INTRINSICS, PLANE
+from host.tests.test_cube_observation import (fixture, FRAME, INTRINSICS, PLANE,
+    FACE_BACK_TYPE, FACE_BACK_METHOD, FACE_BACK_PATH)
 
 
-def parked_cube(rms=2.7):
-    raw, extrinsics, unused, unused = fixture()
+def parked_cube(rms=2.7, six=False, face_back_top=False):
+    raw, extrinsics, unused, unused = fixture(six=six, face_back_top=face_back_top)
     raw['cube_pose']['image_points_px'] = [[x+rms, y] for x, y in
         raw['cube_pose']['image_points_px']]
     observation = localize_precise(None, dict(FRAME, clock_domain='k230_ticks_ms'),
@@ -132,6 +133,77 @@ class RobotCubeHandoffTests(unittest.TestCase):
         self.assertIs(handoff_observation(parked), obs)
         obs['payload']['poses'] = []
         self.rejected_without_grasp(parked)
+
+    def test_explicit_six_corner_handoff_preserves_the_same_outline_frame_without_faces(self):
+        parked = parked_cube(six=True)
+        observation = parked['verification_observation']
+        before = copy.deepcopy(parked)
+        self.assertEqual(observation['quality']['evidence_type'], 'nonplanar_cube_six_corners')
+        self.assertIs(handoff_observation(parked), observation)
+        grasp = Mock(return_value={'grasp_confirmed': True})
+        result = execute_task(lambda: parked, grasp)
+        self.assertTrue(result['arm_started'])
+        grasp.assert_called_once_with(observation)
+        self.assertEqual(parked, before)
+        self.assertNotIn('poses', observation['payload'])
+        self.assertEqual(len(observation['payload']['cube_pose']['image_points_px']), 6)
+
+    def test_five_and_six_corner_handoffs_cannot_borrow_each_others_policy_or_counts(self):
+        for six in (False, True):
+            other = ('nonplanar_cube_five_corners' if six else 'nonplanar_cube_six_corners')
+            for changed in ('quality_type', 'payload_type', 'both_types', 'payload_method',
+                            'payload_path', 'quality_method', 'quality_path', 'point_count'):
+                parked = parked_cube(.5, six=six)
+                obs = parked['verification_observation']
+                if changed in ('quality_type', 'both_types'):obs['quality']['evidence_type'] = other
+                if changed in ('payload_type', 'both_types'):obs['payload']['evidence_type'] = other
+                if changed.endswith('method'):
+                    obs[changed.split('_')[0]]['boundary_method'] = ('six_measured_edges_five_corners'
+                        if six else 'six_measured_outline_edges_six_corners')
+                if changed.endswith('path'):
+                    obs[changed.split('_')[0]]['vision_path'] = ('shared_nonplanar_cube_corners'
+                        if six else 'shared_nonplanar_cube_outline')
+                if changed == 'point_count':
+                    pose = obs['payload']['cube_pose']
+                    if six:
+                        pose['object_points_mm'].pop(3);pose['image_points_px'].pop(3)
+                    else:
+                        pose['object_points_mm'].insert(3, [10., 20., 0.])
+                        pose['image_points_px'].insert(3, [700., 500.])
+                with self.subTest(six=six, changed=changed):self.rejected_without_grasp(parked)
+
+    def test_seven_edge_face_back_top_reuses_exact_runtime_frame_without_face_fallback(self):
+        parked = parked_cube(face_back_top=True)
+        observation = parked['verification_observation']
+        before = copy.deepcopy(parked)
+        self.assertEqual(observation['quality']['evidence_type'], FACE_BACK_TYPE)
+        self.assertEqual(observation['quality']['boundary_method'], FACE_BACK_METHOD)
+        self.assertEqual(observation['quality']['vision_path'], FACE_BACK_PATH)
+        self.assertGreater(observation['quality']['reprojection_rms_px'], 2.)
+        self.assertIs(handoff_observation(parked), observation)
+        grasp = Mock(return_value={'grasp_confirmed': True})
+        result = execute_task(lambda: parked, grasp)
+        grasp.assert_called_once_with(observation)
+        self.assertTrue(result['arm_started'])
+        self.assertFalse(result['physical_grasp_confirmed'])
+        self.assertEqual(len(observation['payload']['observed_edges']), 7)
+        self.assertNotIn('poses', observation['payload'])
+        self.assertEqual(parked, before)
+
+    def test_face_back_top_handoff_rejects_wrong_source_contract_and_cross_type_markers(self):
+        for changed in ('quality_type', 'raw_type', 'method', 'path', 'six_sources',
+                        'bad_seventh', 'six_halves', 'outer_layout'):
+            parked = parked_cube(.5, face_back_top=True)
+            observation = parked['verification_observation']; raw = observation['payload']
+            if changed == 'quality_type':observation['quality']['evidence_type'] = 'nonplanar_cube_six_corners'
+            elif changed == 'raw_type':raw['evidence_type'] = 'nonplanar_cube_six_corners'
+            elif changed == 'method':raw['boundary_method'] = 'six_measured_outline_edges_six_corners'
+            elif changed == 'path':observation['quality']['vision_path'] = 'shared_nonplanar_cube_outline'
+            elif changed == 'six_sources':raw['observed_edges'].pop()
+            elif changed == 'bad_seventh':raw['observed_edges'][-1]['quality']['support'] = 44
+            elif changed == 'six_halves':raw['half_corner_errors_px'] = [.2]*6
+            else:raw['cube_pose']['object_points_mm'] = fixture(six=True)[0]['cube_pose']['object_points_mm']
+            with self.subTest(changed=changed):self.rejected_without_grasp(parked)
 
 
 if __name__ == '__main__':

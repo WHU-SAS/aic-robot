@@ -195,11 +195,16 @@ class RobotColdStartTests(unittest.TestCase):
 
     def test_legacy_voice_default_still_discards32_and_preloads_before_listening(self):
         f=BootFixture();imports=[];ordinary=builtins.__import__
+        image_modules=('vision','physical_side','edge_profiles','separator_profiles',
+            'profile_recovery','cube_pose','cube_corners','cube_observation',
+            'ridge_profiles','cube_outline')
         def record(name,*args,**kwargs):
-            if name=='vision':imports.append((f.ms,'vision_import'))
+            if name in image_modules:imports.append((f.ms,name,f.reads))
             return ordinary(name,*args,**kwargs)
         with ExitStack() as stack:
             stack.enter_context(patch.dict(sys.modules,f.modules))
+            stack.enter_context(patch.dict(sys.modules,{name:SimpleNamespace()
+                                                       for name in image_modules}))
             stack.enter_context(patch.dict(sys.modules,{
                 'camera':SimpleNamespace(CameraSession=None),'vision':SimpleNamespace(localize=None)}))
             arm=load('cold_standalone_voice','device/k230/pick/app.py')
@@ -212,8 +217,9 @@ class RobotColdStartTests(unittest.TestCase):
         ready=next(row for row in f.logs if row[1]=='voice_ready')
         self.assertEqual(ready[2]['warmup_chunks'],32)
         self.assertEqual(ready[2]['startup_prepare_ms'],0)
-        self.assertEqual(len(imports),1)
-        self.assertLess(imports[0][0],ready[0])
+        self.assertEqual([name for at,name,read in imports],list(image_modules))
+        self.assertEqual([read for at,name,read in imports],list(range(1,11)))
+        self.assertTrue(all(at<ready[0] for at,name,read in imports))
 
     def test_warmup_failure_releases_audio_before_media_then_restores_voice(self):
         f=BootFixture(failed_frame=4)

@@ -97,7 +97,8 @@ class TrackingBundleTests(unittest.TestCase):
             'robot_tracking':SimpleNamespace(TrackingTask=Mock(return_value=task),ReobserveRequired=ValueError),
             'kinematics':SimpleNamespace(Geometry=Mock())}
         for name in ('edge_profiles','separator_profiles','profile_recovery',
-                     'cube_pose','cube_corners','cube_observation'):
+                     'cube_pose','cube_corners','cube_observation','ridge_profiles',
+                     'cube_outline'):
             modules[name]=SimpleNamespace()
         with patch.dict(sys.modules,modules),patch.object(app.time,'ticks_ms',lambda:0,create=True),\
              patch.object(app.time,'sleep_ms',Mock(),create=True),patch('builtins.open',mock_open()):

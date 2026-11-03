@@ -744,17 +744,8 @@ def _contour_side_seed(seed, edge_index, vertices, contour=None):
     return max(proposals, key=lambda item: item[:2])[2] if proposals else None
 
 
-def _original_localize_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
-                   max_candidates=3, roi_padding_px=24, stations_per_step=8,
-                   side_search_height_ratio=1.6, include_range=False):
-    """Yield bounded work, then one ``complete`` shared precise observation.
-
-    Caller may advance several steps within each control-cycle budget, keeping
-    the owned BGR image unchanged until completion/cancellation. Coordinates and
-    timestamps belong to the ORIGINAL captured frame, not to completion time.
-    ``max_candidates`` limits search rather than weakening face acceptance.
-    No top fallback, global recovery, camera ownership, UART or SD operations.
-    """
+def _validate_options(bgr, max_candidates, roi_padding_px, stations_per_step,
+                      side_search_height_ratio):
     if bgr.shape != (960, 1280, 3):
         raise ValueError('Expected full 1280x960 JPEG95-decoded BGR')
     if type(max_candidates) is not int or not 1 <= max_candidates <= 8:
@@ -766,6 +757,19 @@ def _original_localize_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_
     if (not isinstance(side_search_height_ratio, (int, float)) or
             not math.isfinite(side_search_height_ratio) or side_search_height_ratio < 1):
         raise ValueError('Choose a side search height relative to coarse width')
+
+
+def _original_localize_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
+                   max_candidates=3, roi_padding_px=24, stations_per_step=8,
+                   side_search_height_ratio=1.6, include_range=False,
+                   preselect_outline=False):
+    """Original bounded face estimator, retained for moving range and comparison.
+
+    Coordinates and timestamps belong to the original captured frame, not to
+    completion time. No camera ownership, UART or SD operations.
+    """
+    _validate_options(bgr, max_candidates, roi_padding_px, stations_per_step,
+                      side_search_height_ratio)
     frame = dict(frame)
     started = _now()
     raw = {'status': 'no_complete_face', 'reason': 'No verified physical side in bounded ROI'}
@@ -941,6 +945,31 @@ def _original_localize_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_
                         yield {'stage': step['stage'], 'candidate': index,
                                'edge_index': edge_index, 'stations': step.get('stations')}
                     failed_edge = None
+                outline_repair, outline_checked = None, False
+                if (preselect_outline and outline_profile and
+                        edges[1][1]['support'] != 64 and
+                        outline_profile['b'][1]-outline_profile['a'][1] >
+                        2*abs(outline_profile['b'][0]-outline_profile['a'][0])):
+                    # Reuse this edge's SAME64 profiles before the first pose.
+                    # A smaller inlier set can trivially have a smaller RMS;
+                    # require station coverage not to decrease as well.
+                    data = outline_profile
+                    outline_checked = True
+                    allowed = _blue_grid(hsv, data['a'], data['b'], data['normal'],
+                                         data['radius'], inside_only=True)
+                    try:
+                        outline_repair = _coherent_internal_edge(data['a'], data['b'],
+                            data['normal'], data['radius'], data['rows'], allowed,
+                            hsv, smooth, outline=True)
+                    except (ValueError, ZeroDivisionError):
+                        pass  # Keep the original measured line and pose path.
+                    if (outline_repair is not None and
+                            outline_repair[1]['support'] >= edges[1][1]['support'] and
+                            outline_repair[1]['rms_px'] < edges[1][1]['rms_px']):
+                        before = dict(edges[1][1])
+                        edges[1] = outline_repair
+                        yield {'stage': 'outline_profile_preselected', 'candidate': index,
+                               'original_quality': before, 'quality': dict(edges[1][1])}
                 for recovered_outline in (False, True):
                     if recovered_outline:
                         # A failed square pose may expose a right-edge profile
@@ -951,11 +980,16 @@ def _original_localize_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_
                                 outline_profile['b'][1]-outline_profile['a'][1] <=
                                 2*abs(outline_profile['b'][0]-outline_profile['a'][0])):
                             break
-                        data = outline_profile
-                        allowed = _blue_grid(hsv, data['a'], data['b'], data['normal'],
-                                             data['radius'], inside_only=True)
-                        repaired = _coherent_internal_edge(data['a'], data['b'], data['normal'],
-                            data['radius'], data['rows'], allowed, hsv, smooth, outline=True)
+                        if outline_checked:
+                            repaired = outline_repair
+                            if repaired is None:
+                                break
+                        else:
+                            data = outline_profile
+                            allowed = _blue_grid(hsv, data['a'], data['b'], data['normal'],
+                                                 data['radius'], inside_only=True)
+                            repaired = _coherent_internal_edge(data['a'], data['b'], data['normal'],
+                                data['radius'], data['rows'], allowed, hsv, smooth, outline=True)
                         if repaired[1]['rms_px'] >= edges[1][1]['rms_px']:
                             break
                         edges[1] = repaired
@@ -1046,98 +1080,133 @@ def _original_localize_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_
     yield {'stage': 'complete', 'observation': observation}
 
 
+
+def _cube_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
+                prepared, roi_padding_px, side_search_height_ratio, outline=False):
+    try:
+        from .cube_corners import corner_steps
+        from .cube_observation import build_result
+    except ImportError:
+        from cube_corners import corner_steps
+        from cube_observation import build_result
+    K = [list(row) for row in intrinsics['camera_matrix']]
+    K[0] = [v*1280/intrinsics['image_width'] for v in K[0]]
+    K[1] = [v*960/intrinsics['image_height'] for v in K[1]]
+    rejected, measured, raw = [], 0, None
+    if outline:
+        try:
+            from .cube_outline import measure_steps
+        except ImportError:
+            from cube_outline import measure_steps
+        steps = measure_steps(bgr, bbox_px, intrinsics, extrinsics, table_plane,
+                              prepared=prepared)
+    else:
+        steps = corner_steps(bgr, bbox_px, intrinsics, extrinsics, table_plane,
+                             roi_padding_px, side_search_height_ratio, prepared)
+    for step in steps:
+        if step['stage'] in ('candidate', 'cube_candidate'):
+            measured += 1
+            try:
+                raw = build_result(step['measurement'], K,
+                    intrinsics['distortion_coefficients'],
+                    extrinsics['T_Base_from_Camera_mm'], table_plane)
+            except (ValueError, ZeroDivisionError) as exc:
+                rejected.append({'candidate': step['candidate'], 'reason': str(exc)})
+                yield dict(rejected[-1], stage='candidate_rejected')
+            else:
+                steps.close()  # Do not measure a second foot after success.
+                break
+        elif step['stage'] in ('complete', 'cube_outline_complete'):
+            rejected.extend(step['rejections'])
+        else:
+            yield step
+    if raw is None:
+        raw = {'status': 'no_complete_face', 'reason':
+               rejected[-1]['reason'] if rejected else 'No measured cube corners'}
+    observation = localize_precise(None, frame, intrinsics, extrinsics, table_plane,
+                                  localizer=lambda *args: raw)
+    observation['search'] = {'roi_px': prepared['roi_px'],
+        'measured_seed_count': measured, 'candidate_limit': 1 if outline else 2,
+        'usable_sides': 0, 'rejected': rejected, 'top_fallback': False}
+    yield {'stage': 'complete', 'observation': observation}
+
+
 def localize_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
                    max_candidates=3, roi_padding_px=24, stations_per_step=8,
                    side_search_height_ratio=1.6, include_range=False):
-    """Retain verified results; select one current-image static recovery route.
+    """Fast same-image static geometry; unchanged original moving-range path.
 
-    Moving range estimates keep their original bounded path and handoff time.
-    Profiles retain the old face2px policy. Five measured nonplanar corners use
-    their own approved cube3px policy. No second capture or guessed coordinate.
+    Static views first use observable cube corners or a measured physical side.
+    A rejected cube can reuse the ROI for the side's step/ridge measurement.
+    Only then is one original face proposal tried. No second capture, guessed
+    coordinate, motion operation or archive encoding is performed here.
     """
-    started = _now()
-    for step in _original_localize_steps(bgr, frame, bbox_px, intrinsics,
-            extrinsics, table_plane, max_candidates, roi_padding_px,
-            stations_per_step, side_search_height_ratio, include_range):
-        if step['stage'] == 'complete':
-            original = step['observation']
-        else:
+    if include_range:
+        for step in _original_localize_steps(bgr, frame, bbox_px, intrinsics,
+                extrinsics, table_plane, max_candidates, roi_padding_px,
+                stations_per_step, side_search_height_ratio, True):
             yield step
-    if (include_range or original['status'] == 'localized' or
-            original.get('search', {}).get('roi_px') is None):
-        yield {'stage': 'complete', 'observation': original}
         return
+    _validate_options(bgr, max_candidates, roi_padding_px, stations_per_step,
+                      side_search_height_ratio)
+    started = _now()
+    # Keep frame and calibration validation even when fast geometry succeeds.
+    localize_precise(None, frame, intrinsics, extrinsics, table_plane,
+                     localizer=lambda *args: {'status': 'no_complete_face'})
     try:
-        from .cube_corners import prepare, corner_steps
-        from .cube_observation import build_result
+        from .cube_corners import prepare
         from .profile_recovery import recover_steps
     except ImportError:
-        from cube_corners import prepare, corner_steps
-        from cube_observation import build_result
+        from cube_corners import prepare
         from profile_recovery import recover_steps
+    history = []
     try:
         prepared = prepare(bgr, bbox_px, roi_padding_px, side_search_height_ratio)
     except ValueError as exc:
-        original['search']['recovery_rejected'] = str(exc)
-        original['processing_ms'] = _elapsed(started)
-        yield {'stage': 'complete', 'observation': original}
-        return
-    selector = prepared['selector']
-    route = selector['route_hint']
-    yield {'stage': 'recovery_selected', 'route': route, 'selector': selector}
-    if route == 'profile':
-        yield {'stage': 'profile_recovery_start'}
-        for step in recover_steps(bgr, frame, bbox_px, intrinsics, extrinsics,
-                table_plane, roi_padding_px, side_search_height_ratio, prepared):
-            if step['stage'] == 'complete':
-                recovered = step['observation']
-            else:
-                yield step
+        history.append({'route': 'component', 'status': 'rejected', 'reason': str(exc)})
     else:
-        K = [list(row) for row in intrinsics['camera_matrix']]
-        K[0] = [v*1280/intrinsics['image_width'] for v in K[0]]
-        K[1] = [v*960/intrinsics['image_height'] for v in K[1]]
-        rejected, measured, raw = [], 0, None
-        steps = corner_steps(bgr, bbox_px, intrinsics, extrinsics, table_plane,
-                             roi_padding_px, side_search_height_ratio, prepared)
-        for step in steps:
-            if step['stage'] == 'candidate':
-                measured += 1
-                try:
-                    raw = build_result(step['measurement'], K,
-                        intrinsics['distortion_coefficients'],
-                        extrinsics['T_Base_from_Camera_mm'], table_plane)
-                except (ValueError, ZeroDivisionError) as exc:
-                    rejected.append({'candidate': step['candidate'], 'reason': str(exc)})
-                    yield dict(rejected[-1], stage='candidate_rejected')
+        selector = prepared['selector']
+        routes = (('cube', 'profile', 'outline') if selector['route_hint'] == 'cube'
+                  else ('profile', 'outline'))
+        for route in routes:
+            route_started = _now()
+            yield {'stage': 'recovery_selected', 'route': route, 'selector': selector}
+            if route in ('cube', 'outline'):
+                steps = _cube_steps(bgr, frame, prepared['bbox_px'], intrinsics,
+                    extrinsics, table_plane, prepared, roi_padding_px,
+                    side_search_height_ratio, outline=route == 'outline')
+            else:
+                yield {'stage': 'profile_recovery_start'}
+                steps = recover_steps(bgr, frame, prepared['bbox_px'], intrinsics,
+                    extrinsics, table_plane, roi_padding_px,
+                    side_search_height_ratio, prepared, refine_cube=True)
+            for step in steps:
+                if step['stage'] == 'complete':
+                    observation = step['observation']
                 else:
-                    # The second independent foot measurement is lazy; do not
-                    # execute it after a valid first five-corner result.
-                    steps.close()
-                    break
-            elif step['stage'] == 'complete':
-                rejected.extend(step['rejections'])
-            else:
-                yield step
-        if raw is None:
-            raw = {'status': 'no_complete_face', 'reason':
-                   rejected[-1]['reason'] if rejected else 'No measured five-corner cube'}
-        recovered = localize_precise(None, frame, intrinsics, extrinsics, table_plane,
-                                    localizer=lambda *args: raw)
-        recovered['search'] = {'roi_px': prepared['roi_px'],
-            'measured_seed_count': measured, 'candidate_limit': 2,
-            'usable_sides': 0, 'rejected': rejected, 'top_fallback': False}
-    recovered['search']['recovery_route'] = route
-    recovered['search']['route_selector'] = selector
-    if recovered['status'] == 'localized':
-        recovered['search']['primary_search'] = original['search']
-        recovered['search']['primary_processing_ms'] = original['processing_ms']
-        final = recovered
-    else:
-        original['search']['static_recovery'] = recovered.get('search', {})
-        final = original
-    final['processing_ms'] = _elapsed(started)
-    yield {'stage': 'complete', 'observation': final}
+                    yield step
+            history.append({'route': route, 'status': observation['status'],
+                'reason': observation.get('reason'), 'processing_ms': _elapsed(route_started)})
+            search = observation['search']
+            search.update(recovery_route=route, route_selector=selector,
+                          route_history=list(history))
+            if observation['status'] == 'localized':
+                observation['processing_ms'] = _elapsed(started)
+                yield {'stage': 'complete', 'observation': observation}
+                return
+    yield {'stage': 'original_face_fallback'}
+    for step in _original_localize_steps(bgr, frame, bbox_px, intrinsics,
+            extrinsics, table_plane, min(1, max_candidates), roi_padding_px,
+            stations_per_step, side_search_height_ratio, False,
+            preselect_outline=True):
+        if step['stage'] == 'complete':
+            observation = step['observation']
+        else:
+            yield step
+    observation['search']['route_history'] = history
+    observation['search']['recovery_route'] = 'original_fallback'
+    observation['processing_ms'] = _elapsed(started)
+    yield {'stage': 'complete', 'observation': observation}
 
 
 def localize(im, K, D, T, table_plane, bbox_px=None, **options):

@@ -856,12 +856,17 @@ class TrackingTask:
             state = self.arm.step(target_version=self.memory.version, allow_success=allow_success)
         else:
             state = before
-        if dispatching_first and state.get('pending_stage') != 'hover':
+        dispatch = state.get('last_goal_dispatch') or {}
+        if (dispatching_first and dispatch.get('name') == 'hover' and
+                dispatch.get('sent_at_ms') is not None):
             self.metrics['arm_attempts'] += 1
+            static_frame = (self.last_parking or {}).get('verification_observation', {})
+            captured = static_frame.get('capture_timestamp_ms')
             self._record('tracking_first_hover', dict(target_version=self.memory.version,
-                static_frame_id=(self.last_parking or {}).get('verification_observation', {}).get('frame_id'),
-                photo_to_hover_ms=age_ms(self.clock(), (self.last_parking or {}).get(
-                    'verification_observation', {}).get('capture_timestamp_ms', self.clock()))))
+                static_frame_id=static_frame.get('frame_id'),
+                dispatch_seq=dispatch.get('seq'),goal_sent_at_ms=dispatch['sent_at_ms'],
+                photo_to_hover_ms=(age_ms(dispatch['sent_at_ms'],captured)
+                                   if captured is not None else None)))
         if state['status'] in ('recovering', 'reobserve_ready') and not self._recovery_seen:
             self._recovery_seen = True
             self.metrics['recoveries'] += 1

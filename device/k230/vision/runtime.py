@@ -34,7 +34,7 @@ def _envelope(mode,frame):
 
 
 def localize_precise(image,frame,intrinsics,extrinsics,table_plane=None,localizer=None):
-    """Shared measured-face or explicit five-corner result; raw Base centre.
+    """Shared measured-face or explicitly typed measured-corner result; raw Base centre.
 
     Missing capture time remains None (e.g. saved-image replay), never replaced
     with processing time. payload retains its own face2px or cube3px evidence.
@@ -51,12 +51,12 @@ def localize_precise(image,frame,intrinsics,extrinsics,table_plane=None,localize
     try:
         raw=localizer(image,K,intrinsics['distortion_coefficients'],extrinsics['T_Base_from_Camera_mm'],table_plane)
         if raw.get('status')=='complete_cube_candidate':
-            try:from .cube_observation import validate_result,EVIDENCE_TYPE,RMS_LIMIT_PX
-            except ImportError:from cube_observation import validate_result,EVIDENCE_TYPE,RMS_LIMIT_PX
+            try:from .cube_observation import validate_result,RMS_LIMIT_PX
+            except ImportError:from cube_observation import validate_result,RMS_LIMIT_PX
             raw,rms=validate_result(raw,K,intrinsics['distortion_coefficients'],
                                     extrinsics['T_Base_from_Camera_mm'],table_plane)
             center=raw['cube_center_Base_mm']
-            quality={'evidence_type':EVIDENCE_TYPE,'reprojection_rms_px':rms,
+            quality={'evidence_type':raw['evidence_type'],'reprojection_rms_px':rms,
                 'reprojection_limit_px':RMS_LIMIT_PX,'vision_path':raw.get('vision_path'),
                 'boundary_method':raw.get('boundary_method')}
         else:
@@ -70,6 +70,11 @@ def localize_precise(image,frame,intrinsics,extrinsics,table_plane=None,localize
                 raise ValueError('Precise face does not meet existing 2px reprojection limit')
             quality={'reprojection_rms_px':rms,'side_selection':raw.get('side_selection'),
                 'vision_path':raw.get('vision_path'),'boundary_method':raw.get('boundary_method')}
+            if raw.get('evidence_type') in ('physical_face_with_G_ridge','physical_face_with_RGB_step'):
+                quality.update(evidence_type=raw['evidence_type'],reprojection_limit_px=2,
+                    separator_evidence=('G_ridge_bidirectional_prominence'
+                        if raw['evidence_type']=='physical_face_with_G_ridge'
+                        else 'original_RGB8_two_blue_flanks'))
         result.update(status='localized',cube_center_Base_mm=list(center),
             coordinate_frame='Base',units='mm',reference_point='cube_geometric_center',
             xy_compensation_applied=False,payload=raw,

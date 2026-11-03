@@ -41,7 +41,10 @@ class PhysicalSideSeedRecoveryTests(unittest.TestCase):
         return cv2.imread(str(path)), json.loads((folder/'config.json').read_text())['car']
 
     def solve(self, image, cfg, **options):
-        return list(vision.localize_steps(image, self.frame(), None,
+        # These are proposal/scan-reuse unit checks of the original algorithm.
+        # The public moving-range delegation remains covered explicitly.
+        solver=vision.localize_steps if options.get('include_range')else vision._original_localize_steps
+        return list(solver(image, self.frame(), None,
             cfg['intrinsics'], cfg['extrinsics'], cfg['table_plane'], **options))
 
     def test_bottom_extension_requires_outside_radius_and_observed_long_support(self):
@@ -233,7 +236,7 @@ class PhysicalSideSeedRecoveryTests(unittest.TestCase):
                             recovered.append(result)
                         return result
                     with patch.object(vision, '_coherent_internal_edge', side_effect=no_rgb_rescan):
-                        steps = list(vision.localize_steps(image, frame, None,
+                        steps = list(vision._original_localize_steps(image, frame, None,
                             cfg['intrinsics'], cfg['extrinsics'], cfg['table_plane']))
                 out = steps[-1]['observation']
                 self.assertEqual(out['status'], 'localized', out)
@@ -271,7 +274,7 @@ class PhysicalSideSeedRecoveryTests(unittest.TestCase):
         predictions = []
         for native in (True, False):
             with self.subTest(native=native), patch.object(vision, '_BATCH_EDGES', native):
-                steps = list(vision.localize_steps(image, metadata['frame'], None,
+                steps = list(vision._original_localize_steps(image, metadata['frame'], None,
                     cfg['intrinsics'], cfg['extrinsics'], cfg['table_plane']))
             out = steps[-1]['observation']
             self.assertEqual(out['status'], 'localized', out)

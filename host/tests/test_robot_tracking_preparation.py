@@ -32,7 +32,8 @@ class TrackingPreparationTests(unittest.TestCase):
             'robot_tracking':SimpleNamespace(TrackingTask=Mock(),ReobserveRequired=ValueError),
             'kinematics':SimpleNamespace(Geometry=Mock())}
         for name in ('edge_profiles', 'separator_profiles', 'profile_recovery',
-                     'cube_pose', 'cube_corners', 'cube_observation'):
+                     'cube_pose', 'cube_corners', 'cube_observation', 'ridge_profiles',
+                     'cube_outline'):
             modules[name]=SimpleNamespace()
         return modules
 
@@ -71,7 +72,8 @@ class TrackingPreparationTests(unittest.TestCase):
         modules['ground_projection'].GroundProjection.side_effect=build_projection
         modules['kinematics'].Geometry.side_effect=build_geometry
         image_modules=('edge_profiles','separator_profiles','profile_recovery',
-                       'cube_pose','cube_corners','cube_observation')
+                       'cube_pose','cube_corners','cube_observation','ridge_profiles',
+                       'cube_outline')
         imported=[]
         original_import=builtins.__import__
         def import_module(name,*args,**kwargs):
@@ -89,15 +91,15 @@ class TrackingPreparationTests(unittest.TestCase):
                 clock.advance(160)  # A separate synthetic audio read between groups.
         self.assertEqual([event['stage'] for event in events[:-1]],
             ['vision_loaded','coarse_loaded','fine_loaded']+
-            ['image_math_loaded']*6+['control_loaded'])
+            ['image_math_loaded']*8+['control_loaded'])
         self.assertEqual([e['module'] for e in events if e.get('stage')=='image_math_loaded'],
                          list(image_modules))
         # Each module import belongs to a different existing audio-read turn,
-        # rather than importing allsix and merely yielding their names later.
+        # rather than importing alleight and merely yielding their names later.
         self.assertEqual(imported,[(name,480+160*j)
                                    for j,name in enumerate(image_modules)])
         self.assertEqual(events[-1]['prepared']['prepare_ms'],7)
-        self.assertEqual(events[-1]['prepared']['prepare_elapsed_ms'],1607)
+        self.assertEqual(events[-1]['prepared']['prepare_elapsed_ms'],1927)
         self.assertEqual(trace,[])
         modules['motor_link'].MotorLink.assert_not_called()
         modules['camera'].CameraSession.assert_not_called()

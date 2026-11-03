@@ -205,7 +205,8 @@ class RobotAppTests(unittest.TestCase):
             'robot_tracking':SimpleNamespace(TrackingTask=Mock(return_value=task),ReobserveRequired=ValueError),
             'kinematics':SimpleNamespace(Geometry=Mock())}
         for name in ('edge_profiles','separator_profiles','profile_recovery',
-                     'cube_pose','cube_corners','cube_observation'):
+                     'cube_pose','cube_corners','cube_observation','ridge_profiles',
+                     'cube_outline'):
             modules[name]=SimpleNamespace()
         config={'arm':{'model':{},'pick':{}},'car':{'projection':dict(K=[],D=[],T=[],plane={}),
             'tracking':{},'vision':{},'tracking_task':{'period_ms':100}}}

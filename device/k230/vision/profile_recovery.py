@@ -1,4 +1,4 @@
-"""One same-frame, single-side appearance recovery after static localization.
+"""One same-frame static physical-face measurement with typed top evidence.
 
 The bbox proposes a search window, never a face or a precise position. The
 profile models choose image measurements; the existing physical-side geometry
@@ -7,14 +7,62 @@ and calibrated-table checks remain the authority. No capture or motion here.
 import math
 
 
-def recover_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
-                  roi_padding_px=24, side_search_height_ratio=1.6, prepared=None):
-    """Try one measured face, yielding the ordinary precise observation schema.
+def _terminal_face_seed(p,smooth,hsv,box,top,details,origin,
+                        intrinsics,extrinsics,table_plane,outline=False):
+    """An observed separator end proposes one narrower face, never a pose.
 
-    Call only after the original static bounded localizer failed on this same
-    owned image. There is no second image, candidate loop, range-only output or
-    pose-guided edge selection. Odd/even fits use distinct measured points in
-    the common candidate window, not independent global appearance searches.
+    A gap beyond the existing12px maximum edge-search radius nominates an
+    internal crease. Its actual position still comes from64 RGB profiles.
+    The lower contour supplies a slanted bottom proposal for that face.
+    """
+    terminal=details.get('terminal_support',{})
+    gaps={side:terminal.get(side+'_gap_px',0.)for side in('left','right')}
+    side=max(gaps,key=gaps.get)
+    if gaps[side]<=12:return None
+    try:from . import cube_corners
+    except ImportError:import cube_corners
+    x,y,w,h=box
+    point=terminal['first_point_px'if side=='left'else'last_point_px']
+    slope=cube_corners._vertical_slope(p,[point[0]+origin[0],point[1]+origin[1]],
+        intrinsics,extrinsics,table_plane)
+    a,b=[[point[0]+slope*(yy-point[1]),yy]for yy in(y+.35*h,y+.85*h)]
+    edge_a,edge_b=(b,a)if outline and side=='left'else(a,b)
+    for event in p._edge_steps(smooth,edge_a,edge_b,hsv=hsv,
+            coherent=not outline,coherent_outline=outline):
+        if event['stage']=='edge_complete':crease=event['edge']
+    crease_seed=p.fit([a,b])
+    left_seed=[1.,0.,-x]if side=='right'else crease_seed
+    right_seed=crease_seed if side=='right'else[1.,0.,-(x+w-1)]
+    lower=y+h-1
+    lx=p.intersect(left_seed,[0.,1.,-lower])[0]
+    rx=p.intersect(right_seed,[0.,1.,-lower])[0]
+    runs,unused=cube_corners._bottom_runs(p,hsv,box)
+    choices=[]
+    for run in runs:
+        if min(run['a'][1],run['b'][1])<=y+.65*h or run['dx']<=0:continue
+        overlap=max(0.,min(rx,run['b'][0])-max(lx,run['a'][0]))
+        if overlap>=25:choices.append((overlap*overlap/run['dx'],run))
+    if not choices:raise ValueError('No front-bottom contour within the observed ridge face')
+    unused,run=max(choices,key=lambda item:item[0])
+    seed=[p.intersect(top[0],left_seed),p.intersect(top[0],right_seed),
+          p.intersect(right_seed,run['line']),p.intersect(left_seed,run['line'])]
+    return seed,{1 if side=='right'else 3:crease},dict(
+        method=('observed_RGB_terminal_outline_and_front_bottom'if outline
+                else'observed_G_terminal_crease_and_front_bottom'),side=side,
+        terminal_gap_px=gaps[side],crease_seed_roi_px=[edge_a,edge_b],
+        crease_quality=crease[1],bottom_contour_seed_roi_px=[run['a'],run['b']])
+
+
+def recover_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
+                  roi_padding_px=24, side_search_height_ratio=1.6, prepared=None,
+                  top_method='auto', cue=None, refine_cube=False):
+    """Try one measured face with B-step or approved G-ridge top evidence.
+
+    The caller owns static routing and the unchanged captured image. Auto
+    chooses one top measurer from the shared cue; it never runs both complete
+    models. Prepared ROI data and its separator_cue belong to this same image.
+    There is no capture, candidate loop, range output or pose-guided pixels.
+    Odd/even fits use distinct measured points in the common candidate window.
     """
     # Delayed imports let physical_side call this fallback without an import
     # cycle, and retain the flat module names used by the board deployment.
@@ -28,6 +76,8 @@ def recover_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
     cv2, np = p.cv2, p.np
     if bgr.shape != (960, 1280, 3):
         raise ValueError('Expected full 1280x960 JPEG95-decoded BGR')
+    if top_method not in ('auto','B','ridge','RGB'):
+        raise ValueError('Choose auto, B, ridge or RGB top measurement')
     if (not isinstance(roi_padding_px, (int, float)) or
             not math.isfinite(roi_padding_px) or roi_padding_px < 16):
         raise ValueError('ROI padding must retain edge search support')
@@ -84,22 +134,53 @@ def recover_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
             anchor = {'component_contour_px': support.reshape((-1, 2)).tolist()}
             local_bbox = [bbox_px[0]-x0, bbox_px[1]-y0, bbox_px[2], bbox_px[3]]
             try:
-                top, details = separator_profiles.measure(
-                    smooth, hsv, local_bbox, p._fit_edge, p.fit, p.residual)
+                if cue is None and prepared is not None:
+                    cue=prepared.get('separator_cue')
+                if cue is None:
+                    cue=separator_profiles.cue24(smooth,hsv,local_bbox,p.fit,p.residual)
+                    if prepared is not None:prepared['separator_cue']=cue
+                selected_method=top_method
+                if selected_method=='auto':
+                    if cue[1].get('method')=='same_frame_RGB_step_cue':
+                        selected_method='RGB'
+                    else:
+                        hint=cue[1].get('B_observability',{})
+                        selected_method='B'if hint.get('positive_B_step_observable',True)else'ridge'
+                metadata['top_method'] = selected_method
+                if selected_method=='ridge':
+                    try:from . import ridge_profiles
+                    except ImportError:import ridge_profiles
+                    measurer=ridge_profiles.measure
+                elif selected_method=='RGB':
+                    measurer=separator_profiles.measure_rgb_step
+                else:measurer=separator_profiles.measure
+                top, details = measurer(smooth, hsv, local_bbox,
+                    p._fit_edge, p.fit, p.residual, cue=cue)
                 metadata['separator_profile'] = details
                 yield {'stage': 'profile_top', 'candidate': 0}
                 x, y, w, h = local_bbox
                 left, right = [x, y+h-1], [x+w-1, y+h-1]
                 upper = [p.intersect(top[0], [1., 0., -point[0]]) for point in (left, right)]
-                if min(left[1]-upper[0][1], right[1]-upper[1][1]) < 25:
-                    raise ValueError('Edge too short')
                 seed = upper+[right, left]
+                reused={}
+                if selected_method in ('ridge','RGB'):
+                    proposal=_terminal_face_seed(p,smooth,hsv,local_bbox,top,details,
+                        [x0,y0],intrinsics,extrinsics,table_plane,
+                        outline=selected_method=='RGB')
+                    if proposal is not None:
+                        seed,reused,metadata['face_proposal']=proposal
+                if min(seed[3][1]-seed[0][1],seed[2][1]-seed[1][1]) < 25:
+                    raise ValueError('Edge too short')
                 if not p.component_support(seed, anchor):
                     raise ValueError('Side proposal outside blue component')
                 measured = 1
                 edges = [top]
                 for edge_index in (1, 2, 3):
                     a, b = seed[edge_index], seed[(edge_index+1) % 4]
+                    if edge_index in reused:
+                        edges.append(reused[edge_index])
+                        yield {'stage':'edge_reused','candidate':0,'edge_index':edge_index,'stations':64}
+                        continue
                     spread = edge_profiles.spread_edge(
                         smooth, hsv, a, b, p._fit_edge, p._native_contrasts)
                     if spread is None:
@@ -131,8 +212,53 @@ def recover_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
                     raise ValueError('Side proposal contains another face')
                 yield {'stage': 'side_boundary', 'candidate': 0}
                 back = min(range(4), key=lambda i: (q[i][1]+q[(i+1) % 4][1])/2)
-                separator = p._separator_evidence(hsv, q[back:]+q[:back], edges[back], im)
+                if selected_method=='ridge':
+                    if back!=0:raise ValueError('Measured G ridge does not own upper face edge')
+                    separator=dict(method='same_frame_G_ridge',
+                        evidence_type='G_peak_two_flanks_DN',support=top[1]['support'],
+                        sampled_stations=64,minimum_prominence_DN=2.,flank_span_px=8.,
+                        both_blue_stations=top[1]['support'],
+                        prominence_min_DN=details['prominence_min_DN'],
+                        prominence_median_DN=details['prominence_median_DN'],
+                        original_RGB8_step_evidence=False)
+                else:
+                    separator = p._separator_evidence(hsv, q[back:]+q[:back], edges[back], im)
                 yield {'stage': 'side_seam', 'candidate': 0}
+                if refine_cube and selected_method in ('ridge','RGB'):
+                    try:
+                        from .cube_corners import front_back_steps
+                        from .cube_observation import build_result
+                    except ImportError:
+                        from cube_corners import front_back_steps
+                        from cube_observation import build_result
+                    context=prepared or {'raw':im,'hsv':hsv,'smooth':smooth,
+                        'local_bbox':local_bbox,'roi_px':roi,
+                        'contour':contour,'vertices':support.reshape((-1,2)).tolist()}
+                    refinement={'candidate_count':0,'rejections':[]}
+                    metadata['cube_refinement']=refinement
+                    for step in front_back_steps(p,smooth,hsv,context,edges,q,
+                            intrinsics,extrinsics,table_plane):
+                        if step['stage']=='cube_candidate':
+                            refinement['candidate_count']+=1
+                            # Once observed nonplanar points contradict a cube,
+                            # a weaker planar fit must not erase that evidence.
+                            raw=build_result(step['measurement'],K,D,T,table_plane)
+                            raw['profile_recovery']=metadata
+                            observation=p.localize_precise(None,frame,intrinsics,
+                                extrinsics,table_plane,localizer=lambda *args:raw)
+                            observation.update(processing_ms=p._elapsed(started),
+                                profile_recovery=metadata,search={
+                                    'roi_px':roi,'seed_count':1,'measured_seed_count':1,
+                                    'candidate_limit':1,'usable_sides':0,
+                                    'rejected':rejected,'top_fallback':False,
+                                    'profile_recovery':True,'sampling_backend':
+                                    'native_remap'if p._BATCH_EDGES else'portable'})
+                            yield {'stage':'complete','observation':observation}
+                            return
+                        elif step['stage']=='front_back_complete':
+                            refinement['rejections']=step['rejections']
+                        else:
+                            yield step
                 poses = p.side_pose(p.pose_candidates(full_q, K, D, refine=True, refiner=p.refine_pose))
                 if not poses:
                     raise ValueError('No accurate vertical-side pose')
@@ -140,6 +266,11 @@ def recover_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
                         'physical_edges': [edge[1] for edge in edges],
                         'seam_support': separator['support'], 'seam_evidence': separator,
                         'area_px2': p.area(q), 'boundary_method': 'image_profile_four_measured_edges'}
+                if selected_method=='ridge':
+                    face.update(evidence_type='physical_face_with_G_ridge',
+                        boundary_method='four_measured_edges_with_G_ridge')
+                elif selected_method=='RGB':
+                    face.update(evidence_type='physical_face_with_RGB_step')
                 face = p.constrain_face(face, table)
                 if face is None:
                     raise ValueError('No side pose consistent with calibrated table')
@@ -156,6 +287,10 @@ def recover_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
                 selected.update(cube_center_Camera_mm=center,
                     cube_center_Base_mm=[sum(T[i][j]*center[j] for j in range(3))+T[i][3] for i in range(3)],
                     vision_path='shared_bounded_physical_sides', profile_recovery=metadata)
+                if metadata.get('top_method')=='ridge':
+                    selected['vision_path']='shared_physical_face_G_ridge'
+                elif metadata.get('top_method')=='RGB':
+                    selected['vision_path']='shared_physical_face_RGB_step'
                 raw = selected
         except ValueError as exc:
             raw = {'status': 'no_complete_face', 'reason': str(exc)}
