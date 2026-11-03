@@ -95,9 +95,13 @@ class PendingFineMotionTests(unittest.TestCase):
     def test_new_near_target_uses_finite_travel_during_its_two_second_solve(self):
         for ratio in (0, .1):
             with self.subTest(ratio=ratio):
-                scene = self.scene(ratio, slices=20)
+                # The first failed solve leaves no precise anchor. A successful
+                # solve now intentionally locks distance against this one-frame
+                # range jump and would test a different control policy.
+                scene = self.scene(ratio, slices=20, fail_first=True)
                 f = scene.f
                 self.until(scene, lambda: f.task.complete is not None)
+                self.assertIsNone(f.task.drive.anchor)
                 old_frame = f.created_fines[0].frame['frame_id']
                 f.motor.advance()
                 f.x = target_x(f.config['workspace']) + 30

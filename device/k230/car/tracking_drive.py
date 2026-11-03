@@ -644,7 +644,7 @@ class DriveController:
             self.near['track_width_mm'], self.projection.normal,
             self.projection.forward_axis_Base, self.projection.motion_origin_Base_mm)
 
-    def _accept(self, complete, state, now, coarse_plan, decision):
+    def _matching_precise_request(self, complete, now):
         if complete.get('target_version') != self.version:
             return None
         observation = complete.get('observation')
@@ -670,6 +670,17 @@ class DriveController:
         key = (self.version, observation.get('frame_id'), purpose)
         if key == self._last_precise:
             return None
+        return request
+
+    def _accept(self, complete, state, now, coarse_plan, decision):
+        request = self._matching_precise_request(complete, now)
+        if request is None:
+            return None
+        observation = complete['observation']
+        purpose = complete['purpose']
+        paired = complete['paired_coarse']
+        ready = complete.get('result_ready_ms', now)
+        key = (self.version, observation.get('frame_id'), purpose)
         verdict = None
         if purpose == 'static':
             stopped = request.get('stopped_at_ms')
@@ -752,6 +763,25 @@ class DriveController:
         else:
             self._adjust_due = True
         return None
+
+    def consume_moving_precise(self, complete, motor_state, now_ms, target_version):
+        """Apply a same-frame moving result before taking another coarse image.
+
+        The ordinary update keeps the existing request, motor-stop and finite
+        endpoint rules. With no current coarse input its first endpoint comes
+        only from the accepted precise pair and the latest encoder feedback.
+        """
+        if (not isinstance(complete, dict) or complete.get('purpose') != 'moving' or
+                complete.get('target_version') != target_version or
+                self.version != target_version or
+                self._matching_precise_request(complete, now_ms) is None):
+            return None
+        if not motor_state.get('run'):
+            # Whether the MCU endpoint or the owner stopped it, this exposure
+            # was made in motion and cannot authorize another moving segment.
+            self._fine_request['stopped_for_verification'] = True
+        return self.update(None, motor_state, now_ms, precise=complete,
+            target_version=target_version, target_event={'target_valid': True})
 
     def _arc(self, angle):
         travel = max(1, int(self.near['track_width_mm']*math.radians(abs(angle))/2+.5))
@@ -865,18 +895,38 @@ class DriveController:
                     'target_version': target_version, 'precise_consumed': False,
                     'precise_deferred': False,
                     'coarse_frame_id': (coarse or {}).get('frame_id')}
+        confirmed_moved = bool(event.get('confirmed_moved') or
+            event.get('event') == 'moved' and event.get('movement_state') == 'confirmed')
+        anchor_locked = (self.anchor is not None and not confirmed_moved and
+            not self._adjust_due and not self._searching and not self._search_inspecting and
+            self._active_action not in ('arc', 'recovery_reverse', 'bottom_reverse',
+                                        'inspection_follow', 'search_follow'))
         changed = self.version != target_version
         initial_busy = self._motor is None and motor_state['run']
         self._observe_motor(motor_state, now_ms)
         state, running = motor_state, bool(motor_state['run'])
         visible = self._visible(coarse, event)
-        if changed and not (owned_follow and fresh and visible and self.retarget_following(target_version)):
+        precise_candidate = bool(event.get('precise_candidate'))
+        query_visible = visible or precise_candidate
+        if (anchor_locked and self.phase == 'settling' and not running and
+                self.stopped_at_ms is not None and not query_visible and
+                (event.get('event') == 'exited' or event.get('search'))):
+            # Its finite approach and original stable-stop window are over.
+            # Explicit current loss may now use the existing search policy;
+            # the historical moving point grants no new forward segment.
+            anchor_locked = False
+        if anchor_locked:
+            # A coarse version/identity gap is not a new physical destination.
+            # Keep the precise point; new stopped jobs still use today's epoch.
+            self.version = target_version
+        elif changed and not (owned_follow and fresh and visible and self.retarget_following(target_version)):
+            self._changed_target(target_version)
+        elif confirmed_moved and self.anchor is not None:
             self._changed_target(target_version)
         if adopted:
             decision['reset_tracker'] = True
-        precise_candidate = bool(event.get('precise_candidate'))
-        query_visible = visible or precise_candidate
-        if (event.get('event') == 'exited' or event.get('search') and not query_visible):
+        if (not anchor_locked and
+                (event.get('event') == 'exited' or event.get('search') and not query_visible)):
             direction = event.get('last_disappearance_direction')
             self.request_search(direction,bottom_history=
                 direction == 'bottom' and event.get('event') == 'exited')
@@ -895,7 +945,7 @@ class DriveController:
         decision['target_visible'] = visible
         decision['precise_candidate'] = precise_candidate
         decision['query_visible'] = query_visible
-        if not target_valid:
+        if not target_valid and not anchor_locked:
             self.anchor = self.parking = self._paired_point = None
             self._coarse_reference = None
             self._near_recovery = None
@@ -1087,6 +1137,36 @@ class DriveController:
                 self._request('static', coarse, state, now_ms, decision, False)
             self.phase = 'fine_static'
             return finish(status='localizing_static')
+        if (self.anchor is not None and not self._adjust_due and
+                self._active_action != 'arc' and not self._search_inspecting):
+            # A successful fine measurement owns distance until the car stops.
+            # Current coarse evidence may steer it, but loss/ambiguity/range
+            # noise cannot replace that endpoint or start a search on the way.
+            if self.phase == 'settling':
+                # The previous coast-aware STOP owns the next static image.
+                # Once run=0 its speed estimate becomes zero; recomputing the
+                # old moving point must not restart its last few millimetres.
+                if running:
+                    return finish('STOP', 'settling')
+                if self.stopped_at_ms is None:
+                    return finish(status='settling')
+                if query_visible:
+                    self._request('static', coarse, state, now_ms, decision, fine_pending)
+                    return finish()
+                return finish(status='waiting_for_target')
+            steering = measured_coarse_plan if visible and fresh else None
+            if steering is None and visible and fresh:
+                bearing = self._coarse_direction(coarse, now_ms)
+                if bearing is not None:
+                    steering = {'predicted_bearing_deg': bearing}
+            plan = self._near_plan(steering, now_ms)
+            decision['plan'] = plan
+            if plan['status'] != 'follow':
+                self.phase = 'settling'
+                return finish('STOP' if running else None, 'settling')
+            self.phase = 'following'
+            name = 'SPEED' if running else 'FOLLOW'
+            return finish(self._follow_command(name, plan))
         if self._searching:
             evidence = (coarse or {}).get('visual_evidence') or {}
             direction = self._search_heading(coarse, event, now_ms, decision)

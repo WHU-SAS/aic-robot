@@ -1,7 +1,8 @@
 """Cooperative persistent task. Callbacks own hardware; no startup motion.
 
-New coarse frames are processed before accepting fine results or stepping the
-arm. A fine job owns one original image, epoch and capture time throughout.
+Moving fine results take over distance control before the next coarse frame.
+Static verification and arm dispatch still require current observations.
+A fine job owns one original image, epoch and capture time throughout.
 Scheduling budgets are soft: native CV, IK and UART calls may still block.
 """
 try:
@@ -695,6 +696,9 @@ class TrackingTask:
             self.complete = dict(job, observation=observation,
                 result_ready_ms=job['session'].latest_ready_ms)
             self.complete.pop('session')
+            if (job['purpose'] == 'moving' and
+                    (observation.get('status') == 'localized' or observation.get('range_candidate'))):
+                self._handoff_moving_precise()
             self._record('tracking_fine_completed', dict(purpose=job['purpose'],
                 frame_id=job['session'].latest.get('frame_id'),
                 status=observation.get('status'),
@@ -711,11 +715,67 @@ class TrackingTask:
                 return True
             return self._light_fine_observation(job)
 
+    def _handoff_moving_precise(self):
+        """Use the completed original distance before taking another image."""
+        done = self.complete
+        if done is None or done['purpose'] != 'moving':
+            return
+        timing = dict(frame_id=done['observation'].get('frame_id'),
+            capture_timestamp_ms=done['observation'].get('capture_timestamp_ms'),
+            result_ready_ms=done['result_ready_ms'], target_version=done['target_version'],
+            capture_motor_state=dict((self.drive._fine_request or {}).get('motor') or {}))
+        try:
+            timing['status_sent_ms'] = self.clock()
+            self._command('STATUS')
+            timing['status_received_ms'] = self.clock()
+            timing['handoff_motor_state'] = dict(self.state)
+            decision = self.drive.consume_moving_precise(
+                done, self.state, self.clock(), self.memory.version)
+            if decision is None:
+                self.drive.cancel_fine()
+                self.drive.restart_observation()
+                decision = dict(phase='settling',status='fine_handoff_unavailable',
+                    command='STOP' if self.state.get('run') else None,precise_consumed=False)
+            if (decision.get('precise_consumed') and not decision.get('moving_fine_stopped') and
+                    self.drive.anchor is not None):
+                stamp = done['observation']['capture_timestamp_ms']
+                current_stamp = (self.coarse or {}).get('capture_timestamp_ms',stamp)
+                # Memory's image reference ends at its last observed frame;
+                # Drive independently propagates the distance to STATUS-now.
+                bound = self.memory.bind_precise(done['observation'],done['paired_coarse'],
+                    done['target_version'],self.drive.odometry.since(stamp,current_stamp))
+                if not bound:
+                    self.drive.restart_observation()
+                    decision.update(phase='settling',status='fine_binding_rejected',
+                        command='STOP' if self.state.get('run') else None)
+                self.target = self.memory.snapshot()
+                timing['memory_bound'] = bound
+            self.decision = decision
+            command = decision.get('command')
+            timing.update(status=decision.get('status'),command=command,
+                precise_consumed=decision.get('precise_consumed'),
+                moving_fine_stopped=bool(decision.get('moving_fine_stopped')),
+                plan=decision.get('plan'))
+            if command:
+                timing['command_sent_ms'] = self.clock()
+                self._command(command)
+                timing['command_reply_ms'] = self.clock()
+            self.complete = None
+            self._force_observe = True
+            if 'first_moving_handoff' not in self.metrics:
+                self.metrics['first_moving_handoff'] = timing
+            self.metrics['last_moving_handoff'] = timing
+            self._record('tracking_moving_handoff',timing)
+        except Exception as exc:
+            self._fault('fine_handoff',exc)
+
     def _match_fine(self, coarse, observation):
         return associate_fine_candidate(observation, coarse)
 
     def _continue_visible_tracking(self, reason, pending_follow=False):
         """Drop stale geometry while an owned approach follows a current cue."""
+        if self.drive.anchor is not None and not (self.target or {}).get('confirmed_moved'):
+            return False
         if (self.arm is not None or self.planning is not None or
                 not self.state.get('run') or not (self.drive._active_action == 'follow' or
                     pending_follow and self.drive._active_action is None) or
@@ -860,6 +920,11 @@ class TrackingTask:
         if self.status == 'succeeded':
             return self.snapshot()
         if self.fault is not None:
+            return self.snapshot()
+        if (self.complete is not None and self.complete['purpose'] == 'moving' and
+                (self.complete['observation'].get('status') == 'localized' or
+                 self.complete['observation'].get('range_candidate'))):
+            self._handoff_moving_precise()
             return self.snapshot()
         started = self.clock()
         vision_paused = self._vision_paused_for_grip(

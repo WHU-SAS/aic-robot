@@ -237,14 +237,32 @@ class GlobalBottomRecoveryTaskTests(unittest.TestCase):
         self.assertIsNone(f.task.drive._bottom_reverse_budget)
         self.assertTrue(f.task.target['associated'])
         self.assertEqual(f.task.drive._active_action,'follow')
+        anchor=f.task.drive.anchor
+        self.assertIsNotNone(anchor)
         command_at=len(f.motor.commands)
         for unused in range(50):s.step('missing')
+        # Finish the measured route before the existing loss search takes over.
+        # The old bottom hint cannot start another reverse budget or turn the
+        # consumed moving point into another forward segment.
         self.assertTrue(f.task.drive._searching)
+        self.assertIsNone(f.task.drive.anchor)
         self.assertEqual(f.task.memory.last_disappearance_direction,'bottom')
         self.assertIsNone(f.task.drive._bottom_reverse_budget)
         commands=[command for at,command in f.motor.commands[command_at:]]
+        self.assertIn('STOP',commands)
         self.assertNotIn('FOLLOW,-15,-15',commands)
         self.assertNotIn('ARC,-10,-10',commands)
+        stopped=False
+        for command in commands:
+            if command=='STOP':stopped=True
+            if command.startswith(('FOLLOW,','SPEED,')):
+                fields=command.split(',')
+                if stopped:
+                    self.assertEqual(len(fields),3)
+                    self.assertEqual(sum(int(value) for value in fields[1:]),0)
+                else:
+                    self.assertEqual(len(fields),4)
+                    self.assertTrue(all(int(value)>=0 for value in fields[1:]))
 
     def test_partial_again_while_settling_cannot_use_the_brief_whole_frame_for_fine(self):
         s=BottomScene(self);s.begin_reverse();f=s.f

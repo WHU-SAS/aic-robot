@@ -115,6 +115,14 @@ class TargetMemory:
         return (math.sqrt(((a[0]-b[0])/width)**2+((a[1]-b[1])/height)**2) <= jump
                 and all(1/ratio_limit <= ratio <= ratio_limit for ratio in ratios))
 
+    def _size_match(self, current, previous):
+        """Shape continuity alone must not reject a genuinely moved target."""
+        if current is None or previous is None:
+            return False
+        limit = self.config.get('tracking', {}).get('max_size_ratio', 3)
+        return all(1/limit <= current['bbox_px'][k]/previous['bbox_px'][k] <= limit
+                   for k in (2,3))
+
     def _common_translation(self, current, previous, expected_center):
         """Translation supported by BOTH box edges; expansion alone is not it."""
         shift = [a-b for a,b in zip(expected_center,previous['center_pixel'])]
@@ -155,6 +163,10 @@ class TargetMemory:
         return (self.last_precise is not None and self._anchor_version == self.version and
                 self.last_precise.get('status') == 'localized')
 
+    def _distance_anchor(self):
+        # bind_precise validates both complete poses and physical-side ranges.
+        return self.last_precise is not None and self._anchor_version == self.version
+
     def invalidate(self, reason='target_changed'):
         """One version change until fresh consistent observations reacquire it.
 
@@ -183,6 +195,10 @@ class TargetMemory:
         identity. The original native association/geometry evidence is kept.
         The coordinator must restrict calls to owned chassis following.
         """
+        # A new colour cue may redirect unmeasured following. Once measured,
+        # only confirmed same-target movement may revoke the travel distance.
+        if self._distance_anchor():
+            return None
         evidence = self._evidence(observation)
         box, pixel = evidence.get('bbox_px'), evidence.get('center_pixel')
         stamp = observation.get('capture_timestamp_ms', observation.get('timestamp_ms'))
@@ -234,7 +250,8 @@ class TargetMemory:
         increments exist, encoder/image disagreement is model uncertainty, not
         target motion. During commanded running, a current visible jump rebases
         following and revokes old fine geometry without a suspected-motion pause.
-        Stopped and arm-stage movement retain their own confirmation rules.
+        A measured travel anchor instead requires confirmed, associated whole-
+        region translation; coarse proxy noise or reacquisition cannot revoke it.
         """
         deltas = tuple(wheel_deltas)
         moving = bool((motion_state or {}).get('run')) or any(abs(a)+abs(b) for a,b in deltas)
@@ -344,6 +361,25 @@ class TargetMemory:
                 reference = None
         elif any(abs(a)+abs(b) for a,b in deltas):
             reference = None
+        anchored = self._distance_anchor()
+        if anchored and (not self._associated or visual is None or reference is None or
+                not self._size_match(visual, reference) or
+                evidence.get('reason') in ('sparse_blob', 'implausible_aspect_ratio',
+                    'invalid_or_tiny_blob', 'inconsistent_with_20mm_cube_shape')):
+            # A different/ambiguous patch, a gap or an expired native identity
+            # cannot replace this measured target. Preserve its references;
+            # the owner can finish the known travel and then take a new pose.
+            self._associated = self._distance_valid = self._precise_candidate = False
+            self._query_visual = None
+            self._visibility = 'ambiguous' if ambiguous else 'unknown'
+            self._movement_state = 'unknown'
+            self._event = 'none' if self._gap else 'unknown'
+            self._gap = True
+            self._visual_previous = None
+            self._motion_rows = []
+            self._motion_count = 0
+            self._motion_direction = None
+            return self.snapshot()
         measured_jump = False
         if (self._distance_valid and evidence.get('associated') is False and
                 visual is not None and source_reference is not None and reference is not None):
@@ -354,12 +390,12 @@ class TargetMemory:
             size = self.config.get('tracking',{}).get('image_size_px',[1280,960])
             measured_jump = math.sqrt(sum((value/scale)**2 for value,scale in zip(shift,size))) > \
                 self.config.get('tracking',{}).get('max_center_jump_fraction',.15)
-        if (bool((motion_state or {}).get('run')) and not arm and not ambiguous and
+        if (not anchored and bool((motion_state or {}).get('run')) and not arm and not ambiguous and
                 (self._visual_jump(visual,reference) or measured_jump) and
                 self.retarget_current(observation) is not None):
             return self.snapshot()
         unconfirmed_reacquisition = False
-        if (unique and self._distance_valid and self._gap and visual is not None and
+        if (not anchored and unique and self._distance_valid and self._gap and visual is not None and
                 self._identity_visual is not None and
                 not self._held_match(visual,self._identity_visual)):
             if not self._precise_candidate:
@@ -441,9 +477,9 @@ class TargetMemory:
             expected = (self.projection.base_to_pixel(self._motion_reference)
                         if self._motion_reference is not None else self._motion_visual['center_pixel'])
             shift = self._common_translation(visual,self._motion_visual,expected)
+            observed = self._common_translation(visual,self._motion_visual,
+                self._motion_visual['center_pixel'])
             if motion_state is not None and not motion_state.get('run'):
-                observed = self._common_translation(visual,self._motion_visual,
-                    self._motion_visual['center_pixel'])
                 if math.sqrt(sum(value*value for value in observed)) > self._pixel_limit(evidence):
                     # Passive wheel counts cannot erase an independently seen
                     # stopped-target translation. Its residual still subtracts
@@ -452,7 +488,8 @@ class TargetMemory:
             previous_box = self._motion_visual['bbox_px']
             self._appearance_changed = any(abs(bbox[k]/previous_box[k]-1) >
                 self.distance_fraction for k in (2,3))
-            if moving:
+            moving_evidence = moving and anchored and not self._appearance_changed
+            if moving and not moving_evidence:
                 # A fixed cube can barely move in the image while an ARC's
                 # wheel model predicts65px. Do not stop/relocalize for that
                 # disagreement or carry it into the first stationary frame.
@@ -461,14 +498,34 @@ class TargetMemory:
                 self._motion_direction = None
                 self._residual_px = math.sqrt(sum(value*value for value in shift))
                 self._motion_model_uncertain = self._residual_px > self._pixel_limit(evidence)
+            elif moving_evidence:
+                # Require actual whole-box translation as well as the
+                # encoder-compensated residual. A stationary image with a bad
+                # wheel/axle model alone cannot prove external target motion.
+                if self._motion_rows and len(self._motion_rows[-1]) != 5:
+                    self._motion_rows = []
+                    self._motion_count = 0
+                    self._motion_direction = None
+                self._motion_rows.append((stamp,shift[0],shift[1],observed[0],observed[1]))
             else:
+                if self._motion_rows and len(self._motion_rows[-1]) != 3:
+                    self._motion_rows = []
+                    self._motion_count = 0
+                    self._motion_direction = None
                 self._motion_rows.append((stamp,shift[0],shift[1]))
             self._motion_rows = [row for row in self._motion_rows
                 if 0 <= age_ms(stamp,row[0]) <= self._motion_window_ms][-self._motion_row_limit:]
             total = [sum(row[k] for row in self._motion_rows) for k in (1,2)]
-            if not moving:
+            confirmed_evidence = not moving
+            if moving_evidence:
+                observed_total = [sum(row[k] for row in self._motion_rows) for k in (3,4)]
+                confirmed_evidence = (math.sqrt(sum(value*value for value in observed_total)) >
+                    self._pixel_limit(evidence) and sum(a*b for a,b in zip(total,observed_total)) > 0)
+                self._motion_model_uncertain = math.sqrt(sum(value*value for value in total)) > \
+                    self._pixel_limit(evidence) and not confirmed_evidence
+            if not moving or moving_evidence:
                 self._residual_px = math.sqrt(sum(value*value for value in total))
-            if not moving and self._residual_px > self._pixel_limit(evidence):
+            if confirmed_evidence and self._residual_px > self._pixel_limit(evidence):
                 coherent = (self._motion_direction is not None and
                             sum(a*b for a,b in zip(total,self._motion_direction)) > 0)
                 self._motion_count = self._motion_count+1 if coherent else 1
@@ -554,7 +611,11 @@ class TargetMemory:
             residual = math.sqrt(sum(value*value for value in shift))
         except (ValueError, TypeError):
             return 'unknown'
-        return 'changed' if residual > self._pixel_limit(evidence) else 'consistent'
+        if residual > self._pixel_limit(evidence):
+            # This single coarse comparison is diagnostic. A bound travel
+            # anchor is revoked only by update's confirmed movement rule.
+            return 'unknown' if self._distance_anchor() else 'changed'
+        return 'consistent'
 
     def bind_precise(self, observation, coarse, version, wheel_deltas=None):
         """Bind only the original same-frame coarse/fine pair, in this version.

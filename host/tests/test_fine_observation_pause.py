@@ -98,11 +98,26 @@ class FineObservationPauseTests(unittest.TestCase):
     def complete_paused_image(self,f,scene_change,purpose):
         for unused in range(2000):
             f.tick()
-            if f.task.complete is not None:
+            if (purpose=='moving' and f.task.metrics.get('first_moving_handoff') or
+                    purpose=='static' and f.task.complete is not None):
                 break
         else:
             self.fail(f.task.snapshot())
-        done=copy.deepcopy(f.task.complete)
+        if purpose=='moving':
+            # Moving results are consumed immediately in their completion
+            # slice; self.complete must not be awaited until a later static job.
+            session=f.created_fines[0]
+            saved=next(row for row in f.task.evidence
+                if row['frame']['frame_id']==session.frame['frame_id'])
+            done=dict(purpose='moving',observation=copy.deepcopy(session.latest),
+                result_ready_ms=session.latest_ready_ms,
+                paired_coarse=copy.deepcopy(saved['frame']['paired_coarse']),
+                handoff=copy.deepcopy(f.task.metrics['first_moving_handoff']))
+            self.assertEqual(done['handoff']['frame_id'],session.frame['frame_id'])
+            self.assertTrue(done['handoff']['memory_bound'])
+            self.assertIn(session.frame['frame_id'],f.bind_attempts)
+        else:
+            done=copy.deepcopy(f.task.complete)
         self.assertEqual(done['purpose'],purpose)
         self.assertTrue(scene_change)
         self.assertEqual(done['observation']['frame_id'],scene_change[0]['frame'])
@@ -126,7 +141,13 @@ class FineObservationPauseTests(unittest.TestCase):
         self.assertGreater(f.task.coarse['frame_id'],done['observation']['frame_id'])
         self.assertEqual(evidence['association_confirmations'],1)
         self.assertTrue(evidence['navigation_confirmed'])
-        self.assert_old_fine_is_not_used(f,done)
+        if done['purpose']=='static':
+            self.assert_old_fine_is_not_used(f,done)
+        else:
+            # A single later frame can steer, but cannot revoke this measured
+            # distance before the existing movement confirmation succeeds.
+            self.assertFalse(f.task.target['confirmed_moved'])
+            self.assertEqual(f.task.drive.anchor['frame_id'],done['observation']['frame_id'])
         return [command for unused,command in f.motor.commands[command_at:]]
 
     def test_static_old_full_image_cannot_authorize_arm_after_a_paused_scene_change(self):
@@ -136,7 +157,7 @@ class FineObservationPauseTests(unittest.TestCase):
         self.assertFalse(any(command.split(',')[0] in ('FOLLOW','SPEED','ARC') and
             any(float(value)!=0 for value in command.split(',')[1:]) for command in commands),commands)
 
-    def test_moving_old_full_and_range_are_discarded_while_current_coarse_keeps_following(self):
+    def test_moving_full_and_range_are_used_before_later_confirmed_scene_change(self):
         for capability in ('full','range'):
             with self.subTest(capability=capability):
                 f,moved=self.fixture('moving',capability)
@@ -144,11 +165,18 @@ class FineObservationPauseTests(unittest.TestCase):
                 self.assertEqual(done['observation']['target_association']['geometry_capability'],
                     'moving_range' if capability=='range' else 'full_pose')
                 commands=self.consume_fresh_frame(f,done)
-                self.assertTrue(any(command.startswith('SPEED,') for command in commands),commands)
+                self.assertTrue(done['handoff']['command'].startswith('SPEED,'))
+                self.assertLessEqual(done['handoff']['command_sent_ms'],
+                                     f.task.coarse['capture_timestamp_ms'])
                 self.assertNotIn('STOP',commands)
                 self.assertEqual(f.motor.run,1)
                 self.assertFalse(f.task.drive._searching)
                 self.assertNotEqual(f.task.snapshot()['phase'],'searching')
+                f.task._force_observe=True;f.tick()
+                self.assertTrue(f.task.target['confirmed_moved'])
+                self.assertIsNone(f.task.drive.anchor)
+                self.assertFalse(f.task.memory.snapshot()['anchor_valid'])
+                self.assertFalse(f.handoffs)
 
     def test_current_photo_comparison_excludes_post_exposure_driving(self):
         f=fixtures.RobotTrackingTests()

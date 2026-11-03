@@ -92,31 +92,30 @@ class VisibleRetargetTaskTests(unittest.TestCase):
                 old_frame=old['observation']['frame_id']
                 command_at=len(f.motor.commands)
                 helper.consume_fresh_frame(f,old)
+                self.assertEqual(f.task.drive.anchor['frame_id'],old_frame)
+                self.until(f,lambda:f.task.target.get('confirmed_moved'))
+                self.assertIsNone(f.task.drive.anchor)
+                self.assertFalse(f.task.memory.snapshot()['anchor_valid'])
                 self.until(f,lambda:len(f.created_fines)>=2)
                 new=f.created_fines[1]
                 self.assertGreater(new.frame['frame_id'],old_frame)
                 new_start=next(row for row in f.fine_start_states
                                if row['frame']==new.frame['frame_id'])
-                self.assertEqual(new_start['purpose'],'moving')
-                self.assertEqual(new_start['run'],1)
-                self.assertNotIn('STOP',[command for unused,command in f.motor.commands[command_at:]])
+                self.assertIn(new_start['purpose'],('moving','static'))
+                self.assertEqual(new_start['run'],int(new_start['purpose']=='moving'))
                 self.assertFalse(f.task.drive._searching)
-                helper.assert_old_fine_is_not_used(f,old)
-                self.until(f,lambda:f.task.drive.anchor is not None and
-                           f.task.drive.anchor['frame_id']==new.frame['frame_id'])
-                self.assertIn(new.frame['frame_id'],f.bind_attempts)
-                self.assertNotIn(old_frame,f.bind_attempts)
+                self.assertIn(old_frame,f.bind_attempts)
                 self.assertFalse(f.handoffs)
                 self.until(f,lambda:f.task.status=='succeeded')
                 self.assertEqual(len(f.handoffs),1)
                 handoff=f.handoffs[0][1]
-                self.assertNotIn(handoff['frame_id'],(old_frame,new.frame['frame_id']))
+                self.assertNotEqual(handoff['frame_id'],old_frame)
                 static=next(row for row in f.fine_start_states if row['frame']==handoff['frame_id'])
                 self.assertEqual(static['purpose'],'static')
                 self.assertEqual(static['run'],0)
                 self.assertEqual(handoff['status'],'localized')
                 self.assertTrue(f.task.last_parking['verification']['accepted'])
-                self.assertNotIn(old_frame,f.bind_attempts)
+                self.assertIn(new.frame['frame_id'],f.bind_attempts)
 
     def test_visible_jump_with_unusable_coarse_range_keeps_direction_and_requests_fine(self):
         unused,f,unused=self.fixture()
@@ -144,18 +143,17 @@ class VisibleRetargetTaskTests(unittest.TestCase):
         self.assertFalse(f.task.drive._searching)
         self.assertIsNone(f.task.drive.anchor)
 
-    def test_rejected_binding_replaces_a_pending_drive_STOP_before_transmission(self):
+    def test_post_handoff_weak_scaled_region_does_not_revoke_accepted_distance(self):
         unused,f,changes=self.fixture(move_during_fine=True)
-        f.fine_slices=20
         advance=f.Fine.advance
         def return_block_before_next_capture(session):
             advance(session)
-            if changes and not getattr(session,'returned_to_origin',False):
+            if session.index==0 and changes and not getattr(session,'returned_to_origin',False):
                 f.y-=40
                 session.returned_to_origin=True
         f.Fine.advance=return_block_before_next_capture
-        self.until(f,lambda:f.task.complete is not None)
-        done=f.task.complete
+        helper=paused.FineObservationPauseTests()
+        done=helper.complete_paused_image(f,changes,'moving')
         old_frame=done['observation']['frame_id']
         self.assertEqual(done['purpose'],'moving')
         self.assertEqual(done['observation']['status'],'localized')
@@ -177,37 +175,30 @@ class VisibleRetargetTaskTests(unittest.TestCase):
             return coarse
         f.task.track=weak_scaled_protocol_input
         command_at=len(f.motor.commands)
-        timeline_at=len(f.task.timeline)
+        version=f.task.memory.version
         f.tick()
         commands=[command for unused,command in f.motor.commands[command_at:]]
-        events=f.task.timeline[timeline_at:]
-        self.assertEqual(done['current_consistency'],'unknown')
         self.assertTrue(f.task.coarse['visual_evidence']['associated'])
         self.assertEqual(f.task.coarse['visual_evidence']['bbox_px'][2:],[240,240])
-        self.assertTrue(any(row['event']=='tracking_drive' and
-                            row['details'].get('command')=='STOP' for row in events))
-        # The production Drive first proposed STOP and the production Memory
-        # rejected binding. Neither is mocked; only the final intention may
-        # reach the UART after the coordinator restores the owned follow.
+        self.assertFalse(f.task.target['confirmed_moved'])
+        self.assertEqual(f.task.memory.version,version)
         self.assertIn(old_frame,f.bind_attempts)
-        self.assertTrue(any(row['event']=='tracking_fine_binding_rejected' and
-                            row['details']['frame_id']==old_frame for row in events))
         self.assertNotIn('STOP',commands)
-        speed=next((command for command in commands if command.startswith('SPEED,')),None)
-        self.assertIsNotNone(speed,commands)
-        self.assertEqual(len(speed.split(',')),3)
-        self.assertEqual(sum(map(int,speed.split(',')[1:3])),0)
         self.assertEqual(f.motor.run,1)
         self.assertEqual(f.task.drive._active_action,'follow')
-        self.assertIsNone(f.task.memory.last_precise)
-        self.assertIsNone(f.task.drive.anchor)
+        self.assertEqual(f.task.memory.last_precise['frame_id'],old_frame)
+        self.assertEqual(f.task.drive.anchor['frame_id'],old_frame)
+        self.assertTrue(f.task.memory.snapshot()['anchor_valid'])
         self.assertFalse(f.task.drive._searching)
         self.assertFalse(f.handoffs)
         self.assertIsNone(f.task.fault)
-        self.until(f,lambda:len(f.created_fines)>=2)
-        self.assertEqual(f.fine_start_states[1]['purpose'],'moving')
-        self.assertEqual(f.fine_start_states[1]['run'],1)
-        self.assertNotIn('STOP',[command for unused,command in f.motor.commands[command_at:]])
+        f.task.track=ordinary
+        self.until(f,lambda:f.task.status=='succeeded')
+        self.assertEqual(len(f.handoffs),1)
+        self.assertNotEqual(f.handoffs[0][1]['frame_id'],old_frame)
+        static=next(row for row in f.fine_start_states if row['frame']==f.handoffs[0][1]['frame_id'])
+        self.assertEqual(static['purpose'],'static')
+        self.assertEqual(static['run'],0)
 
     def test_genuine_loss_still_stops_after_retained_fine_remaining_travel(self):
         unused,f,unused=self.fixture()

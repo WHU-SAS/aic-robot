@@ -190,8 +190,10 @@ class TargetMemoryTests(unittest.TestCase):
         initial=observation(66,351);self.memory.update(initial)
         self.memory.bind_precise(self.precise(initial,(275,0,10)),initial,0)
         changed=self.memory.update(observation(238,267))
-        self.assertTrue(changed['measurement_inconsistent'])
-        self.assertTrue(changed['appearance_changed'])
+        # This mask grows beyond native identity continuity. It is unknown,
+        # rather than a new distance or independent target-motion evidence.
+        self.assertEqual(changed['visibility'],'unknown')
+        self.assertTrue(changed['anchor_valid'])
         self.assertFalse(changed['confirmed_moved'])
         for unused in range(15):state=self.memory.update(observation(238,267))
         self.assertEqual(state['version'],0)
@@ -281,10 +283,10 @@ class TargetMemoryTests(unittest.TestCase):
     def test_commanded_motion_does_not_need_encoder_counts_to_enter_motion_policy(self):
         self.seed()
         # A stalled/quantized/weak drive may report no increment. The car is
-        # still in its motion phase and slow image changes are not independent
-        # proof that the human moved the cube.
+        # still in its motion phase. Unchanged pixels with no encoder motion
+        # must not invent a target displacement or a suspected-motion pause.
         for index in range(1,10):
-            state=self.memory.update(self.coarse((500,30+4*index,0)),
+            state=self.memory.update(self.coarse(),
                                      motion_state={'run':1})
             self.assertEqual(state['version'],0)
             self.assertEqual(state['movement_state'],'consistent')
@@ -298,7 +300,8 @@ class TargetMemoryTests(unittest.TestCase):
         self.assertEqual(self.memory.last_precise['cube_center_Base_mm'],[490,71,10])
 
     def test_observed_image_jump_during_motion_still_invalidates_inflight_fine(self):
-        coarse,fine=self.seed()
+        # An in-flight result is not yet an accepted travel anchor.
+        coarse=self.coarse();self.memory.update(coarse);fine=self.precise(coarse)
         raw=self.visual((500,330,0),associated=False,reason='unassociated_blue')
         before=copy.deepcopy(raw)
         first=self.memory.update(raw,motion_state={'run':1})
@@ -320,7 +323,7 @@ class TargetMemoryTests(unittest.TestCase):
         self.assertFalse(self.memory.bind_precise(fine,coarse,0))
 
     def test_moving_visual_update_is_not_later_reported_as_a_stationary_exception(self):
-        self.seed()
+        self.memory.update(self.coarse())  # No accepted fine distance yet.
         self.memory.update(self.visual((500,330,0)),motion_state={'run':1})
         state=self.memory.update(self.visual((500,340,0)),motion_state={'run':0})
         self.assertEqual(state['version'],1)
@@ -328,7 +331,7 @@ class TargetMemoryTests(unittest.TestCase):
         self.assertFalse(state['confirmed_moved'])
 
     def test_moving_jump_and_return_update_both_positions_without_restoring_old_fine(self):
-        coarse,fine=self.seed()
+        coarse=self.coarse();self.memory.update(coarse);fine=self.precise(coarse)
         first=self.memory.update(self.visual((500,330,0)),motion_state={'run':1})
         self.assertEqual(first['version'],1)
         for unused in range(4):
@@ -346,7 +349,8 @@ class TargetMemoryTests(unittest.TestCase):
                 bbox_px=[890,490,160,60]),motion_state={'run':1})
             self.assertEqual(state['version'],0)
             self.assertNotEqual(state['event'],'suspected')
-            self.assertFalse(state['needs_precise'])
+            self.assertTrue(state['anchor_valid'])
+            self.assertEqual(state['visibility'],'unknown')
 
     def test_unassociated_large_mask_expansion_without_common_translation_keeps_fine(self):
         unused,fine=self.seed()
@@ -360,7 +364,7 @@ class TargetMemoryTests(unittest.TestCase):
         self.assertEqual(state['last_precise'],fine)
 
     def test_unknown_and_shape_discontinuity_do_not_confirm_a_moving_visual_jump(self):
-        self.seed()
+        self.memory.update(self.coarse())  # Exercise unanchored following.
         self.memory.update(self.visual((500,330,0)),motion_state={'run':1})
         self.memory.update(self.absent(),motion_state={'run':1})
         state=self.memory.update(self.visual((500,330,0)),motion_state={'run':1})
@@ -373,13 +377,13 @@ class TargetMemoryTests(unittest.TestCase):
 
     def test_passive_tiny_wheel_counts_do_not_enable_running_retarget_policy(self):
         self.seed()
-        state=self.memory.update(self.visual((500,230,0)),[(.01,.01)],motion_state={'run':0})
+        state=self.memory.update(self.visual((500,200,0)),[(.01,.01)],motion_state={'run':0})
         self.assertEqual(state['version'],0)
         self.assertEqual(state['movement_state'],'suspected')
         self.assertFalse(state['tracking_update'])
         self.assertIsNone(state['navigation_cue'])
         for unused in range(3):
-            state=self.memory.update(self.visual((500,230,0)),[],motion_state={'run':0})
+            state=self.memory.update(self.visual((500,200,0)),[],motion_state={'run':0})
         self.assertEqual(state['version'],1)
         self.assertFalse(state['anchor_valid'])
         self.assertTrue(state['needs_precise'])
@@ -412,7 +416,9 @@ class TargetMemoryTests(unittest.TestCase):
             bbox_px=[0,510,12,20],edge_directions=['left']),motion_state={'run':1})
         state=self.memory.update(self.absent(),motion_state={'run':1})
         self.assertEqual(state['event'],'exited')
-        self.assertEqual(state['version'],1)
+        # The visible same-target translation has already revoked its anchor;
+        # the later departure may begin a subsequent unanchored epoch.
+        self.assertGreaterEqual(state['version'],1)
         self.assertFalse(self.memory.bind_precise(fine,coarse,0))
 
     def test_observable_slow_whole_box_translation_accumulates_in_short_window(self):
@@ -451,12 +457,11 @@ class TargetMemoryTests(unittest.TestCase):
         self.memory.bind_precise(self.precise(reappeared),reappeared,0)
         self.assertFalse(self.memory.snapshot()['needs_precise'])
 
-    def test_explicit_edge_departure_is_distinct_from_a_central_occlusion(self):
+    def test_unanchored_edge_departure_is_distinct_from_a_central_occlusion(self):
         # A coarse-valid target can already be near the edge. Its continuous
         # weak clipped remainder then supports an explicit departure.
         near=self.visual(center_pixel=[20,520],bbox_px=[10,510,20,20])
         self.memory.update(near)
-        self.assertTrue(self.memory.bind_precise(self.precise(near),near,0))
         self.memory.update(self.visual(distance_valid=False,
             center_pixel=[6,520],bbox_px=[0,510,12,20],edge_directions=['left']))
         state=self.memory.update(self.absent())
@@ -901,9 +906,8 @@ class TargetMemoryTests(unittest.TestCase):
                         'schema':'aic.car.side_range.v1','status':'range_candidate',
                         'coordinate_frame':'Base','units':'mm','Base_X_mm':point[0],
                         'raw_center_Base_mm':point,'not_arm_or_parking_authority':True})
-                # During a running fine pause this moderate shift remains
-                # model uncertainty under movement policy, not a two-frame
-                # target-version change. Its stale input is still detectable.
+                # One changed coarse region is not the two-frame movement
+                # confirmation needed to revoke an accepted travel anchor.
                 self.stamp+=600
                 state=self.memory.update(self.visual((500,100,0),
                     association_confirmations=1,navigation_confirmed=False),
@@ -911,7 +915,7 @@ class TargetMemoryTests(unittest.TestCase):
                 self.assertTrue(state['associated'])
                 self.assertEqual(state['version'],0)
                 before=copy.deepcopy(self.memory.snapshot())
-                self.assertEqual(self.memory.precise_consistency(fine,source,[]),'changed')
+                self.assertEqual(self.memory.precise_consistency(fine,source,[]),'unknown')
                 self.assertEqual(self.memory.snapshot(),before)
                 self.memory.update(self.absent())
                 self.assertEqual(self.memory.precise_consistency(fine,source,[]),'unknown')
@@ -920,7 +924,7 @@ class TargetMemoryTests(unittest.TestCase):
                     association_confirmations=3))
                 self.assertEqual(self.memory.precise_consistency(fine,source,[]),'unknown')
 
-    def test_gap_reacquisition_needs_native_confirmation_and_cannot_inherit_old_full_or_range(self):
+    def test_gap_new_candidate_cannot_revoke_or_inherit_old_full_or_range(self):
         for capability in ('full','range'):
             with self.subTest(capability=capability):
                 self.setUp()
@@ -941,7 +945,7 @@ class TargetMemoryTests(unittest.TestCase):
                 self.stamp+=600  # Native tracker identity has expired too.
                 for count in (1,2):
                     candidate=self.visual((500,230,0),association_confirmations=count,
-                        navigation_confirmed=False)
+                        navigation_confirmed=False,bbox_px=[867,517,6,6])
                     self.assertEqual(candidate['visual_evidence']['center_pixel'],[870.,520.])
                     state=self.memory.update(candidate,motion_state={'run':0})
                     self.assertFalse(state['associated'])
@@ -954,27 +958,27 @@ class TargetMemoryTests(unittest.TestCase):
                     self.assertEqual(self.memory._last_center,center)
                     self.assertEqual(state['last_disappearance_direction'],'left')
                 candidate=self.visual((500,230,0),association_confirmations=3,
-                    navigation_confirmed=True)
+                    navigation_confirmed=True,bbox_px=[867,517,6,6])
                 state=self.memory.update(candidate,motion_state={'run':0})
-                self.assertEqual(state['version'],1)
-                self.assertFalse(state['anchor_valid'])
-                self.assertFalse(state['target_valid'])
+                self.assertEqual(state['version'],0)
+                self.assertTrue(state['anchor_valid'])
+                self.assertTrue(state['target_valid'])
+                self.assertFalse(state['associated'])
                 self.assertTrue(state['needs_precise'])
                 self.assertEqual(state['last_precise'],fine)
                 self.assertEqual(state['paired_coarse'],original)
-                self.assertEqual(state['last_seen'],candidate)
+                self.assertEqual(state['last_seen'],original)
                 self.assertEqual(state['last_disappearance_direction'],'left')
-                self.assertFalse(self.memory.bind_precise(fine,original,0))
+                self.assertTrue(self.memory.bind_precise(fine,original,0))
                 self.assertFalse(self.memory.bind_precise(fine,original,1))
-                premature=self.precise(candidate)
-                premature['target_association']={'status':'matched'}
-                self.assertFalse(self.memory.bind_precise(premature,candidate,1))
-                current=self.visual((500,230,0),association_confirmations=4,
+                # The old target can return without being replaced by the
+                # other candidate or manufacturing another target version.
+                current=self.visual(association_confirmations=4,
                     navigation_confirmed=True)
                 self.memory.update(current)
                 fresh=self.precise(current)
                 fresh['target_association']={'status':'matched'}
-                self.assertTrue(self.memory.bind_precise(fresh,current,1))
+                self.assertTrue(self.memory.bind_precise(fresh,current,0))
                 self.assertTrue(self.memory.snapshot()['anchor_valid'])
                 self.assertEqual(self.memory.last_precise,fresh)
 
@@ -986,8 +990,8 @@ class TargetMemoryTests(unittest.TestCase):
         self.assertEqual(state['visibility'],'ambiguous')
         self.assertFalse(state['table_distance_valid']);self.assertEqual(state['version'],0)
 
-    def test_unique_unassociated_jump_can_be_confirmed_as_new_location(self):
-        self.seed()
+    def test_unanchored_unique_unassociated_jump_can_be_confirmed_as_new_location(self):
+        self.memory.update(self.coarse())
         for unused in range(2):state=self.memory.update(self.visual((400,100,0),
             associated=False,reason='unassociated_blue'))
         self.assertEqual(state['event'],'moved');self.assertTrue(state['associated'])

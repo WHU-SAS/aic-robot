@@ -14,11 +14,14 @@ from host.tests import test_pending_fine_motion as pending
 class PreJpegMotionTests(unittest.TestCase):
     def scene(self, ratio=0):
         self.helper = pending.PendingFineMotionTests()
-        return self.helper.scene(ratio,start_ms=259,slices=20)
+        # Retrying after an unavailable first solve has no precise endpoint;
+        # the next current coarse frame must control its pre-JPEG speed.
+        return self.helper.scene(ratio,start_ms=259,slices=20,fail_first=True)
 
     def near_retarget(self, scene, remaining):
         f=scene.f
         self.helper.until(scene,lambda:f.task.complete is not None)
+        self.assertIsNone(f.task.drive.anchor)
         f.motor.advance()
         f.x=target_x(f.config['workspace'])+remaining
         f.y=sum(bounds_mm(f.config['workspace'],f.x)['Base_Y_mm'])/2

@@ -141,7 +141,11 @@ class TrackingSchedulingTests(unittest.TestCase):
                                 fixture.clock.now()+1)
             statuses = [at for at, command in fixture.motor.commands
                         if command == 'STATUS' and row['at'] <= at < next_capture]
-            self.assertEqual(len(statuses), 1)
+            handoff = fixture.task.metrics.get('last_moving_handoff') or {}
+            immediate = handoff.get('status_sent_ms')
+            # The accepted moving result now obtains its own t2 feedback and
+            # sends the distance command BEFORE the next coarse capture.
+            self.assertEqual(len(statuses), 1 + int(immediate in statuses))
         renewals = [at for at, command in fixture.motor.commands
                     if command.split(',')[0] in ('FOLLOW', 'SPEED', 'HB', 'ARC')]
         self.assertGreater(len(renewals), 2)

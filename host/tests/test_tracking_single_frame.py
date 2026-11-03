@@ -51,7 +51,7 @@ class SingleFrameCandidateTests(unittest.TestCase):
             {'visible':False,'associated':False},100,{})
         self.assertEqual(direction,'left')
 
-    def test_one_frame_new_epoch_revokes_old_full_and_range(self):
+    def test_one_frame_keeps_full_and_range_until_same_target_motion_is_confirmed(self):
         for capability in ('full','range'):
             with self.subTest(capability=capability):
                 fixture=memory_fixtures.TargetMemoryTests()
@@ -74,9 +74,20 @@ class SingleFrameCandidateTests(unittest.TestCase):
                 current=fixture.visual((500,230,0),association_confirmations=1,
                     navigation_confirmed=True)
                 state=memory.update(current)
+                self.assertEqual(state['version'],0)
+                self.assertTrue(state['anchor_valid'])
+                self.assertFalse(state['confirmed_moved'])
+                self.assertEqual(state['last_precise'],fine)
+                self.assertEqual(state['paired_coarse'],old)
+                # Native acquisition stays one-frame, but a measured travel
+                # anchor is revoked only after the original movement gate.
+                current=fixture.visual((500,230,0),association_confirmations=2,
+                    navigation_confirmed=True)
+                state=memory.update(current)
                 self.assertEqual(state['version'],1)
                 self.assertTrue(state['associated'])
-                self.assertTrue(state['target_valid'])
+                self.assertFalse(state['target_valid'])
+                self.assertTrue(state['confirmed_moved'])
                 self.assertTrue(state['table_distance_valid'])
                 self.assertEqual(state['last_seen'],current)
                 self.assertFalse(state['anchor_valid'])
@@ -127,28 +138,30 @@ class SingleFrameCandidateTests(unittest.TestCase):
         image,frame=fixture.capture()
         old=single(image,frame)
         fixture.task.memory.update(old)
-        self.assertTrue(fixture.task.memory.bind_precise(fixture.precise(image,frame),old,0))
+        old_fine=fixture.precise(image,frame)
+        self.assertTrue(fixture.task.memory.bind_precise(old_fine,old,0))
         fixture.y+=80
         fixture.clock.advance(100)
-        fixture.frame+=1
-        fixture.task.memory.update(dict(frame_id=fixture.frame,
-            capture_timestamp_ms=fixture.clock.now(),status='lost',
-            visual_evidence={'visible':False,'associated':False,'ambiguous':False}))
-        fixture.clock.advance(700)
+        image,frame=fixture.capture()
+        first=fixture.task.memory.update(single(image,frame))
+        self.assertEqual(first['version'],0)
+        self.assertTrue(first['anchor_valid'])
+        fixture.clock.advance(100)
         fixture.task.step()
         transition=fixture.task.coarse['capture_timestamp_ms']
         self.assertEqual(fixture.task.memory.version,1)
         self.assertEqual(fixture.task.memory._epoch_start_stamp,transition)
         self.assertEqual(fixture.task.metrics['fine_started'],0)
         self.assertFalse(fixture.created_fines)
-        self.assertTrue(fixture.task._force_observe)
-        fixture.clock.advance(5)
+        self.assertFalse(fixture.task.memory.bind_precise(old_fine,old,0))
+        fixture.clock.advance(fixture.task.period)
         fixture.task.step()
         self.assertEqual(fixture.task.metrics['fine_started'],1)
         self.assertGreater(fixture.created_fines[0].frame['capture_timestamp_ms'],transition)
         fixture.finish()
         self.assertEqual(fixture.task.metrics['fine_started'],1)
         self.assertEqual(len(fixture.handoffs),1)
+        self.assertGreater(fixture.handoffs[0][1]['capture_timestamp_ms'],transition)
 
     def test_confirmed_target_motion_still_needs_two_observations(self):
         fixture=memory_fixtures.TargetMemoryTests()

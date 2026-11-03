@@ -382,7 +382,7 @@ class TrackingDriveTests(unittest.TestCase):
         self.assertNotEqual(result['phase'],'settling')
         self.assertIsNone(self.drive.anchor)
 
-    def test_first_real_native_large_scale_jump_revokes_full_and_range_without_stopping(self):
+    def test_first_native_large_scale_jump_keeps_full_and_range_endpoint(self):
         for capability in ('full','range'):
             with self.subTest(capability=capability):
                 self.setUp()
@@ -426,18 +426,22 @@ class TrackingDriveTests(unittest.TestCase):
                 self.assertGreater(evidence['bbox_px'][2]/old['bbox_px'][2],
                                    self.config['tracking']['max_size_ratio'])
                 target=memory.update(fresh,[(7,7)],motion_state=self.state(1100,True,7))
-                self.assertTrue(target['tracking_update'])
-                self.assertEqual(target['version'],1)
-                self.assertFalse(target['anchor_valid'])
-                self.assertIsNotNone(memory._query_visual)
-                self.assertFalse(memory.bind_precise(fine,old,0))
+                # A single unassociated scale jump is not confirmed physical
+                # movement. Neither the full pose nor its range-only variant
+                # may surrender their measured distance to this new cue.
+                self.assertFalse(target['tracking_update'])
+                self.assertEqual(target['version'],0)
+                self.assertTrue(target['anchor_valid'])
+                self.assertFalse(target['confirmed_moved'])
+                self.assertEqual(memory.last_precise,fine)
                 result=self.drive.update(fresh,self.state(1100,True,7),1100,
                     target_version=memory.version,target_event=target)
-                self.assertTrue(result['command'].startswith('SPEED,'),result)
-                self.assertEqual(result['request_fine'],'moving')
+                self.assert_bounded_follow(result,'SPEED')
+                self.assertGreater(int(result['command'].split(',')[3]),850)
+                self.assertIsNone(result['request_fine'])
                 self.assertNotEqual(result['phase'],'settling')
                 self.assertFalse(self.drive._searching)
-                self.assertIsNone(self.drive.anchor)
+                self.assertIs(self.drive.anchor,fine)
                 self.assertEqual(fresh,untouched)
 
     def test_expired_visible_retarget_cue_cannot_start_bearing_only_motion(self):
