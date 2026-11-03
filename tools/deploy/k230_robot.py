@@ -51,7 +51,8 @@ def build_bundle(pick_config=None, tracking=False):
     car, car_files, _, _ = car_bundle(near_parking=True)
     arm, arm_files, _ = arm_bundle(DEFAULT_PICK_CONFIG if pick_config is None else pick_config)
     _paired_config(car, arm)
-    config = {'car':car, 'arm':arm, 'voice':arm['voice']}
+    config = {'car':car, 'arm':arm, 'voice':arm['voice'],
+              'fill_light':{'enabled':True, 'gpio':26, 'active_high':True}}
     files = {}
     for source in (car_files, arm_files):
         for name, data in source.items():
@@ -63,6 +64,7 @@ def build_bundle(pick_config=None, tracking=False):
     for name, path in (
             ('robot_task.py', 'device/k230/robot/task.py'),
             ('robot_app.py', 'device/k230/robot/app.py'),
+            ('fill_light.py', 'device/k230/robot/fill_light.py'),
             ('static_pick_session.py', 'device/k230/vision/static_pick_session.py')):
         data = (ROOT / path).read_bytes()
         if name in files and digest(files[name]) != digest(data):

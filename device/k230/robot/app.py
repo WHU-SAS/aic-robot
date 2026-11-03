@@ -130,7 +130,8 @@ def prepare_tracking(config):
             return event['prepared']
 
 
-def tracking_task(config, ready_dispatched=False, camera=None, prepared=None, wake_timing=None):
+def tracking_task(config, ready_dispatched=False, camera=None, prepared=None, wake_timing=None,
+                  fill_light=None):
     """Keep one camera through parking/grasp; the voice owner may lend it."""
     entered_at = time.ticks_ms()
     if prepared is None:
@@ -210,6 +211,9 @@ def tracking_task(config, ready_dispatched=False, camera=None, prepared=None, wa
         task.arm_context = held_context
         while task.status != 'succeeded':
             task.step()
+            if task.status == 'succeeded' and fill_light is not None:
+                # This is the existing post-lift confirmation, before archive.
+                fill_light.off()
             delay = task.idle_delay_ms()
             if delay:
                 time.sleep_ms(delay)
@@ -217,15 +221,19 @@ def tracking_task(config, ready_dispatched=False, camera=None, prepared=None, wa
         return result
     finally:
         try:
-            if task is not None:
-                task.close()
+            if fill_light is not None:
+                fill_light.off()
         finally:
             try:
-                if owns_camera:
-                    camera.close()
+                if task is not None:
+                    task.close()
             finally:
-                if link is not None:
-                    link.close()
+                try:
+                    if owns_camera:
+                        camera.close()
+                finally:
+                    if link is not None:
+                        link.close()
         record = result or (task.snapshot() if task is not None else
                             {'status':'tracking_initialization_interrupted'})
         record.update(ready_pose2_goal_sent=True,ready_pose2_arrival_checked=False,
@@ -243,9 +251,11 @@ def tracking_task(config, ready_dispatched=False, camera=None, prepared=None, wa
             emit('log_error',{'error':str(exc)})
 
 
-def dispatch(action, config, ready_dispatched=False, camera=None, prepared=None, wake_timing=None):
+def dispatch(action, config, ready_dispatched=False, camera=None, prepared=None, wake_timing=None,
+             fill_light=None):
     import app as arm
     if action == 'ready':
+        if fill_light is not None:fill_light.off()
         if not ready_dispatched:arm.run_ready(config['arm'])
         return {'status':'ready_dispatched', 'ready_pose':1, 'arrival_checked':False}
     if action != 'pick':
@@ -258,6 +268,8 @@ def dispatch(action, config, ready_dispatched=False, camera=None, prepared=None,
             options['prepared'] = prepared
         if wake_timing is not None:
             options['wake_timing'] = wake_timing
+        if fill_light is not None:
+            options['fill_light'] = fill_light
         return tracking_task(config, ready_dispatched, **options)
     from robot_task import execute_task
     if not ready_dispatched:arm.run_ready(config['arm'],pose=2,immediate=True)
@@ -270,8 +282,11 @@ def dispatch(action, config, ready_dispatched=False, camera=None, prepared=None,
     def grasp(observation):
         nonlocal arm_started
         arm_started = True
-        return arm.run_from_observation(config['arm'], observation,
+        plan = arm.run_from_observation(config['arm'], observation,
             execute=True, source_config=config['car'])
+        if fill_light is not None and isinstance(plan, dict) and plan.get('grasp_confirmed') is True:
+            fill_light.off()
+        return plan
     try:
         result = execute_task(drive, grasp, emit)
         return result
@@ -279,6 +294,7 @@ def dispatch(action, config, ready_dispatched=False, camera=None, prepared=None,
         error = str(exc)
         raise
     finally:
+        if fill_light is not None:fill_light.off()
         record = result or {'schema':'aic.robot.task.v1', 'status':'runtime_error',
                             'error':error, 'arm_started':arm_started,
                             'parking':parking[-1] if parking else None}
@@ -299,6 +315,16 @@ def dispatch(action, config, ready_dispatched=False, camera=None, prepared=None,
             emit('log_error', {'error':str(exc)})
 
 
+def _make_fill_light(config):
+    options = config.get('fill_light', {})
+    if not options.get('enabled', False):
+        return None
+    if options.get('gpio') != 26 or options.get('active_high') is not True:
+        raise ValueError('Fill light wiring must be active-high GPIO26')
+    from fill_light import FillLight
+    return FillLight()
+
+
 class _CameraWarmupFailed(RuntimeError):
     pass
 
@@ -308,6 +334,7 @@ def run_forever(root):
     import app as arm
     arm_imported = time.ticks_ms()
     config = load(root)
+    fill_light = _make_fill_light(config)
     emit('configured', {'release_path':root, 'trigger':'思达思达',
                         'ready_command':'回准备位', 'startup_motion':False,
                         'ready_command_pose':1,'pick_wake_response_pose':2,
@@ -367,7 +394,14 @@ def run_forever(root):
         warmup = timing.get('cold_start_audio_warmup_chunks',32) if tracking else 32
         while True:
             response,respond = arm.make_wake_response(config['arm'])
-            options = {'on_command':respond}
+            on_command = respond
+            if fill_light is not None:
+                def on_command(action, respond=respond):
+                    # Keep the original immediate ready target first. Only a
+                    # GPIO write follows, before audio teardown or logging.
+                    respond(action)
+                    fill_light.set_active(action == 'pick')
+            options = {'on_command':on_command}
             if startup_pending:
                 options['on_warmup'] = prepare_startup
             try:
@@ -385,6 +419,7 @@ def run_forever(root):
             try:
                 if response['error'] is not None:raise response['error']
                 options = {'ready_dispatched':response['sent']}
+                if fill_light is not None:options['fill_light'] = fill_light
                 if camera is not None:options['camera'] = camera
                 if prepared is not None:options['prepared'] = prepared
                 if tracking and response.get('recognized_at_ms') is not None:
@@ -397,10 +432,14 @@ def run_forever(root):
             except Exception as exc:
                 emit('task_error', {'error':str(exc)})
             finally:
+                if fill_light is not None:fill_light.off()
                 gc.collect()
     finally:
         try:
-            if startup_steps is not None:startup_steps.close()
+            if fill_light is not None:fill_light.off()
         finally:
-            if camera is not None:
-                camera.close()
+            try:
+                if startup_steps is not None:startup_steps.close()
+            finally:
+                if camera is not None:
+                    camera.close()

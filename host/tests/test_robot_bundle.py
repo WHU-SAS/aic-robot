@@ -32,7 +32,8 @@ class RobotBundleTests(unittest.TestCase):
 
     def test_complete_nested_configs_keep_the_accepted_motion_and_calibration(self):
         config, files, manifest = self.build()
-        self.assertEqual(set(config), {'car', 'arm', 'voice'})
+        self.assertEqual(set(config), {'car', 'arm', 'voice', 'fill_light'})
+        self.assertEqual(config['fill_light'], {'enabled':True, 'gpio':26, 'active_high':True})
         self.assertEqual(config['car'], self.car_source[0])
         self.assertEqual(config['arm'], self.arm_source[0])
         self.assertEqual(config['voice'], self.arm_source[0]['voice'])
@@ -108,6 +109,7 @@ class RobotBundleTests(unittest.TestCase):
         for name, relative in (
                 ('robot_task.py', 'device/k230/robot/task.py'),
                 ('robot_app.py', 'device/k230/robot/app.py'),
+                ('fill_light.py', 'device/k230/robot/fill_light.py'),
                 ('static_pick_session.py', 'device/k230/vision/static_pick_session.py')):
             self.assertEqual(files[name], (ROOT / relative).read_bytes())
         for name, data in files.items():
