@@ -605,6 +605,8 @@ class TrackingTask:
                 following_before_decision = (self.state.get('run') and
                     self.drive._active_action == 'follow' and
                     self.arm is None and self.planning is None)
+                recovery_before_decision = (self.drive._bottom_reverse_budget,
+                    self.drive._search_reverse_required,self.drive._search_reverse_done)
                 self.decision = self.drive.update(self.coarse, self.state, self.clock(),
                     precise=eligible, target_version=self.memory.version,
                     fine_pending=self.job is not None, target_event=event,
@@ -637,6 +639,9 @@ class TrackingTask:
                                 self.coarse['capture_timestamp_ms']))
                         if not bound:
                             self.last_parking=None
+                            if done['purpose']=='static' and recovery_before_decision[0] is not None:
+                                (self.drive._bottom_reverse_budget,self.drive._search_reverse_required,
+                                 self.drive._search_reverse_done) = recovery_before_decision
                             if done['purpose']=='moving' and self._continue_visible_tracking(
                                     'fine_binding_rejected',pending_follow=bool(
                                         following_before_decision and
@@ -645,6 +650,7 @@ class TrackingTask:
                                     target_version=self.memory.version,target_event=dict(self.target))
                             else:
                                 self.drive.restart_observation(discard_reference=True)
+                                self.drive._active_action = None  # Reject the unsent motion decision too.
                                 self.decision.update(allow_arm=False,parking=None,phase='settling',
                                     command='STOP' if self.state.get('run') else None)
                             self._force_observe=True

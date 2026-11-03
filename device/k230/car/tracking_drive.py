@@ -52,6 +52,8 @@ class DriveController:
         self._searching = False
         self._search_reverse_required = False
         self._search_reverse_done = False
+        self._bottom_reverse_budget = None
+        self._bottom_static_pending = False
         self._search_inspecting = False
         self._search_view_pending = False
         self._search_arc_active = False
@@ -103,13 +105,21 @@ class DriveController:
         self._moving_started = False
         self.phase = 'settling'
 
-    def request_search(self, direction=None):
-        if self._searching:
+    def request_search(self, direction=None, bottom_history=False):
+        if self._searching and not (direction == 'bottom' and bottom_history and
+                                   not self._search_reverse_required):
             return
+        self._retain_reverse_budget()
         self._searching = direction != 'top'
         self._search_direction = direction or self._search_direction or 'left'
-        self._search_reverse_required = direction == 'bottom'
+        self._search_reverse_required = direction == 'bottom' and (
+            bottom_history or self._bottom_reverse_budget is not None)
         self._search_reverse_done = False
+        self._bottom_static_pending = False
+        if self._search_reverse_required and self._bottom_reverse_budget is None:
+            self._bottom_reverse_budget = {}
+        if self._search_reverse_required:
+            self._bottom_reverse_budget.pop('view_recovered',None)
         self._search_inspecting = self._search_view_pending = False
         self._search_arc_active = False
         self._search_follow_active = False
@@ -123,6 +133,7 @@ class DriveController:
         self.cancel_fine()
 
     def _changed_target(self, version):
+        self._retain_reverse_budget()
         searching = self._searching
         self.version = version
         self.anchor = self.paired_coarse = self.parking = self._paired_point = None
@@ -611,6 +622,9 @@ class DriveController:
                 self._moving_retry_frame = decision.get('coarse_frame_id')
             return None
         if verdict['status'] in ('parked', 'not_parked'):
+            self._bottom_reverse_budget = None
+            self._bottom_static_pending = self._search_reverse_required = False
+            self._search_reverse_done = False
             self._remember_near(now, observation)
             self._awaiting_query_identity = not decision.get('target_visible')
         if verdict['accepted']:
@@ -674,6 +688,7 @@ class DriveController:
             count >= self.config['tracking'].get('confirmation_frames', 3))
 
     def _reverse_limit(self, reference, state):
+        self._retain_reverse_budget()
         start = reference.get('reverse_start_counts')
         if start is None:
             return reference.get('reverse_exhausted', False)
@@ -683,7 +698,35 @@ class DriveController:
         coast = max(abs(speeds['left_mm_s']),abs(speeds['right_mm_s']))*self.near['coast_s']
         if travel+coast >= 100:
             reference['reverse_exhausted'] = True
+            if self._bottom_reverse_budget is not None:
+                self._bottom_reverse_budget['reverse_exhausted'] = True
         return reference.get('reverse_exhausted', False)
+
+    def _retain_reverse_budget(self):
+        """Carry only physical wheel travel across target/search bookkeeping."""
+        reference = self._near_recovery
+        if reference is None:
+            return
+        if self._bottom_reverse_budget is None and 'reverse_start_counts' in reference:
+            self._bottom_reverse_budget = {key:reference[key] for key in
+                ('reverse_start_counts','reverse_exhausted') if key in reference}
+        elif self._bottom_reverse_budget is not None:
+            if 'reverse_start_counts' in self._bottom_reverse_budget:
+                reference['reverse_start_counts'] = self._bottom_reverse_budget['reverse_start_counts']
+            if reference.get('reverse_exhausted') or self._bottom_reverse_budget.get('reverse_exhausted'):
+                reference['reverse_exhausted'] = self._bottom_reverse_budget['reverse_exhausted'] = True
+
+    def _bottom_full_view(self, coarse, event, now):
+        evidence = (coarse or {}).get('visual_evidence') or {}
+        if (evidence.get('visible') is not True or evidence.get('ambiguous') or
+                evidence.get('reason') == 'clipped_blob' or
+                evidence.get('edge_directions') or not self._search_shape(evidence)):
+            return False
+        stamp = (coarse or {}).get('capture_timestamp_ms')
+        # A new whole-looking cue may not share the previous partial identity.
+        # It can stop view recovery; only NEW static fine can authorize a pose.
+        return (type(stamp) is int and evidence.get('timestamp_ms',stamp) == stamp and
+            0 <= age_ms(now,stamp) <= self.config['tracking']['max_age_ms'])
 
     def _adjust(self, allow_reverse=True, coarse=None, now=None):
         self._adjust_due = False
@@ -753,8 +796,9 @@ class DriveController:
         precise_candidate = bool(event.get('precise_candidate'))
         query_visible = visible or precise_candidate
         if (event.get('event') == 'exited' or event.get('search') and not query_visible):
-            if not self._searching:
-                self.request_search(event.get('last_disappearance_direction'))
+            direction = event.get('last_disappearance_direction')
+            self.request_search(direction,bottom_history=
+                direction == 'bottom' and event.get('event') == 'exited')
         target_valid = event.get('target_valid', True)
         invalidated_view = bool(not target_valid and self._near_recovery is not None and
                                 'bottom_view_frame_ms' in self._near_recovery)
@@ -788,12 +832,14 @@ class DriveController:
             if not cache_valid:
                 self.restart_observation()
 
-        def finish(command=None, status=None, recovery_reverse=False):
+        def finish(command=None, status=None, recovery_reverse=False, bottom_reverse=False):
             if command:
                 decision['command'] = command
                 name = command.split(',')[0]
                 if name in ('FOLLOW', 'SPEED'):
-                    if recovery_reverse or self._active_action == 'recovery_reverse':
+                    if bottom_reverse:
+                        self._active_action = 'bottom_reverse'
+                    elif recovery_reverse or self._active_action == 'recovery_reverse':
                         self._active_action = 'recovery_reverse'
                     elif self._search_follow_active:
                         self._active_action = 'inspection_follow' if self._search_inspecting else 'search_follow'
@@ -828,12 +874,12 @@ class DriveController:
                 self.last_arc_end = {'at_ms': now_ms, 'command': self._arc_command,
                     'target_version': self.version, 'phase': self.phase, 'state': dict(state)}
                 self._search_arc_active = False
-            elif self._active_action in ('search_follow', 'inspection_follow', 'recovery_reverse'):
+            elif self._active_action in ('search_follow', 'inspection_follow', 'recovery_reverse', 'bottom_reverse'):
                 # Signed FOLLOW retains the MCU's existing segment deadline.
                 # Reobserve after its reason-3 stop, then start a new segment.
                 self._search_follow_active = False
                 self._search_speeds = None
-                if self._active_action == 'recovery_reverse':
+                if self._active_action in ('recovery_reverse','bottom_reverse'):
                     self.phase = 'settling'
             if reason in (2, 4):
                 self._motion_hold = 'existing_motor_stop_%d' % reason
@@ -855,6 +901,59 @@ class DriveController:
         if self._motion_hold:
             decision['motion_wait_reason'] = self._motion_hold
             return finish('STOP' if running else None, 'motion_wait')
+        if (self._bottom_static_pending or
+                (self._bottom_reverse_budget or {}).get('view_recovered') and
+                not self._bottom_full_view(coarse,event,now_ms)):
+            self.phase = 'settling'
+            if running:
+                return finish('STOP','recovering_bottom_view')
+            if self.stopped_at_ms is None:
+                return finish(status='settling')
+            if self._bottom_full_view(coarse,event,now_ms):
+                if age_ms(coarse['capture_timestamp_ms'],self.stopped_at_ms) < 0:
+                    return finish(status='waiting_for_post_stop_view')
+                self._bottom_static_pending = False
+                self._request('static',coarse,state,now_ms,decision,fine_pending)
+                return finish(status='recovering_bottom_view')
+            # Whole visibility must still hold after the static solve. Losing
+            # it during computation revokes that image, not the wheel budget.
+            self.restart_observation(discard_reference=True)
+            self._bottom_static_pending = self._search_reverse_done = False
+            self._search_reverse_required = self._searching = True
+            self._bottom_reverse_budget.pop('view_recovered',None)
+        if (self._search_reverse_required and
+                not (self._bottom_reverse_budget or {}).get('view_recovered') and
+                self._bottom_full_view(coarse,event,now_ms)):
+            self._search_reverse_done = self._bottom_static_pending = True
+            self._bottom_reverse_budget['view_recovered'] = True
+            self._end_search()
+            self.restart_observation(discard_reference=True)
+            if (coarse.get('visual_evidence') or {}).get('associated') is not True:
+                decision['reset_tracker'] = True
+            return finish('STOP' if running else None,'recovering_bottom_view')
+        if (self._search_reverse_required and
+                (self._bottom_reverse_budget or {}).get('reverse_exhausted') and
+                not self._bottom_reverse_budget.get('view_recovered')):
+            self.phase = 'observing'
+            return finish('STOP' if running else None,'bottom_reverse_limit')
+        if self._search_reverse_required and not self._search_reverse_done:
+            self.phase = 'recovering_bottom_view'
+            reference = self._bottom_reverse_budget
+            if reference is None or self._reverse_limit(reference,state):
+                self._search_reverse_done = True
+                return finish('STOP' if running else None,'bottom_reverse_limit')
+            if running:
+                if self._active_action not in ('bottom_reverse','recovery_reverse'):
+                    return finish('STOP','starting_bottom_recovery')
+                self._active_action = 'bottom_reverse'
+                return finish('HB','recovering_bottom_view')
+            if self.stopped_at_ms is None:
+                return finish(status='settling')
+            if 'reverse_start_counts' not in reference:
+                reference['reverse_start_counts'] = [state['encoder_a'],state['encoder_b']]
+            speed = int(self.options.get('recovery_reverse_mm_s',15))
+            self._search_follow_active = False
+            return finish('FOLLOW,%d,%d' % (-speed,-speed),'recovering_bottom_view',bottom_reverse=True)
         if invalidated_view and running:
             self.phase = 'observing'
             return finish('STOP', 'target_invalidated')
@@ -941,11 +1040,6 @@ class DriveController:
                     return finish('HB')
                 if self.stopped_at_ms is None:
                     return finish(status='settling')
-                if self._search_reverse_required and not self._search_reverse_done:
-                    self._search_reverse_done = True
-                    self._search_arc_active = True
-                    distance = self.options.get('reobserve_reverse_mm', 10)
-                    return finish('ARC,%d,%d' % (-distance, -distance), 'searching')
                 speed = int(self.options.get('search_speed_mm_s', 20))
                 self._search_speeds = ((speed, -speed) if self._search_direction == 'right'
                                        else (-speed, speed))
@@ -977,11 +1071,18 @@ class DriveController:
                     recovery['bottom_view_frame_ms'] = stamp
                     if 'reverse_start_counts' not in recovery:
                         recovery['reverse_start_counts'] = [state['encoder_a'],state['encoder_b']]
+                    self._retain_reverse_budget()
+                    self._search_reverse_required = True
+                    self._search_reverse_done = False
                     self.anchor = self._paired_point = self._coarse_reference = None
                     self._adjust_due = False
                     self.phase = 'recovering_view'
                     speed = int(self.options.get('recovery_reverse_mm_s', 15))
                     return finish('FOLLOW,%d,%d' % (-speed,-speed), 'recovering_view', True)
+                if bottom and recovery.get('reverse_exhausted'):
+                    self._search_reverse_required = self._search_reverse_done = True
+                    self.phase = 'observing'
+                    return finish(status='bottom_reverse_limit')
                 self._adjust_due = True
             else:
                 recovery.pop('bottom_view_frame_ms', None)
