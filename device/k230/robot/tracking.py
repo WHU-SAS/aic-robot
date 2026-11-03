@@ -40,6 +40,8 @@ class TrackingTask:
         self.period = timing.get('period_ms', 100)
         self.stationary_period = timing.get('stationary_period_ms', 250)
         self.stationary_status_period = timing.get('stationary_status_period_ms', 500)
+        self.motion_refresh = timing.get('motion_refresh_ms', 250)
+        self._motion_sent_at = self._motion_speeds = None
         synced_at = self.clock()
         self.state = self.link.sync()
         self.state['_k230_sent_ms'], self.state['_k230_received_ms'] = synced_at, self.clock()
@@ -63,7 +65,7 @@ class TrackingTask:
             fine_started=0, fine_cancelled=0, arm_plans=0, arm_attempts=0, recoveries=0,
             planning_steps=0, plans_cancelled=0, max_planning_step_ms=0,
             target_changes=0, obsolete_frames_released=0, status_queries=0,
-            first_motion_request=None)
+            commands_coalesced=0, first_motion_request=None)
 
     def _record(self, event, details):
         # Keep transitions in RAM during motion. They join the existing final
@@ -74,7 +76,22 @@ class TrackingTask:
 
     def _command(self, command):
         sent = self.clock()
+        parts = command.split(',')
+        name, speeds = parts[0], tuple(parts[1:])
+        if (self.state.get('run') and self._motion_sent_at is not None and
+                0 <= age_ms(sent, self._motion_sent_at) < self.motion_refresh and
+                (name == 'HB' or name == 'SPEED' and speeds == self._motion_speeds)):
+            # STATUS never renews the MCU lease. Keep the original real reply
+            # and timestamps; only an unchanged command can wait for refresh.
+            self.metrics['commands_coalesced'] += 1
+            return self.state
         state = self.link.expect(command)
+        if name in ('FOLLOW', 'SPEED', 'HB', 'ARC'):
+            self._motion_sent_at = sent
+            if name != 'HB':
+                self._motion_speeds = speeds if name in ('FOLLOW', 'SPEED') else None
+        elif name == 'STOP':
+            self._motion_sent_at = self._motion_speeds = None
         if (self.metrics['first_motion_request'] is None and
                 command.split(',')[0] in ('FOLLOW', 'SPEED', 'ARC') and
                 any(value != '0' for value in command.split(',')[1:])):
@@ -88,8 +105,9 @@ class TrackingTask:
             # The first control decision must still see an unowned running
             # motor as initially busy. Thereafter latch every real sample,
             # including excursions between camera frames; Memory stays frame-owned.
-            if self.drive._motor is not None:
-                self.drive._observe_motor(state, self._last_motor_reply)
+        if (self.drive._motor is not None and (name == 'STATUS' or
+                self.job is not None and self.job['purpose'] == 'moving')):
+            self.drive._observe_motor(state, self._last_motor_reply)
         return state
 
     def _moving_observation(self):
@@ -110,14 +128,16 @@ class TrackingTask:
         # Moving feedback and initial stop confirmation keep their original
         # cadence. Once stopped, STATUS has its own slower deadline, independent
         # of how often the camera observes; reusing a reply never renews its age.
+        if self.job is not None and self.job['purpose'] == 'static':
+            return age_ms(self.clock(), self._last_motor_reply) >= self.stationary_status_period
         if self._moving_observation():
             return at_observation
         return ((at_observation and self.drive.stopped_at_ms is None) or
                 age_ms(self.clock(), self._last_motor_reply) >= self.stationary_status_period)
 
     def idle_delay_ms(self):
-        """Stopped background calculation can use its next slice immediately."""
-        if (self.fault is None and self.arm is None and not self.state.get('run') and
+        """Background calculation can use time before the next camera deadline."""
+        if (self.fault is None and self.arm is None and
                 (self.job is not None or self.planning is not None) and
                 (self.target or {}).get('movement_state') != 'suspected'):
             return 0
@@ -125,21 +145,28 @@ class TrackingTask:
 
     def _fault(self, stage, error):
         reason = '%s: %s' % (stage, error)
-        changed=self.fault != reason
-        self.fault = reason
+        changed=self.fault is None
+        if changed:
+            self.fault = reason
+            self.metrics['fault_state_before_stop'] = dict(self.state)
+        else:
+            self.metrics['last_secondary_fault'] = reason
         # A lost ACK may leave state.run stale even after the MCU began motion.
         # Stop before logging or generator cleanup, either of which may fail.
         try:
             self._command('STOP')
-        except Exception:
-            pass  # Existing MCU communication lease still applies.
+            if changed:
+                self.metrics['fault_stop_reply'] = dict(self.state)
+        except Exception as exc:
+            if changed:
+                self.metrics['fault_stop_error'] = str(exc)
         for cancel in (self._cancel_job,self._cancel_plan):
             try:
                 cancel('execution_fault')
             except Exception as exc:
                 self.metrics['cleanup_error']=str(exc)
         if changed:
-            try:self.emit('tracking_fault_wait', {'reason': reason, 'task_terminal': False})
+            try:self._record('tracking_fault_wait', {'reason': self.fault, 'task_terminal': False})
             except Exception:pass
 
     def _save_job(self, reason=None):
@@ -202,10 +229,21 @@ class TrackingTask:
         if ((self.arm is None and self.planning is None) or
                 self._arm_motor_reference is None):
             return
-        if not self.state.get('run') and not any(
-                abs(count_delta(self._arm_motor_reference[key], self.state[key]))*
-                self.config['mm_per_count'] > .1 for key in ('encoder_a', 'encoder_b')):
+        deltas = {key:count_delta(self._arm_motor_reference[key], self.state[key])*
+                  self.config['mm_per_count'] for key in ('encoder_a', 'encoder_b')}
+        arm_state = self.arm.snapshot() if self.arm is not None else None
+        tolerance = (self.config.get('tracking_task', {}).get('grasp_chassis_tolerance_mm', 1.)
+                     if arm_state is not None and arm_state.get('pending_stage') != 'hover' else .1)
+        if not self.state.get('run') and max(abs(v) for v in deltas.values()) <= tolerance:
             return
+        self.metrics['last_chassis_invalidation'] = dict(
+            wheel_displacement_mm=deltas, tolerance_mm=tolerance, run=self.state.get('run'),
+            reference={key:self._arm_motor_reference.get(key) for key in
+                       ('encoder_a','encoder_b','ms','_k230_received_ms')},
+            state={key:self.state.get(key) for key in
+                   ('encoder_a','encoder_b','ms','_k230_received_ms')},
+            phase=arm_state.get('phase') if arm_state is not None else 'planning')
+        self._record('tracking_chassis_invalidated',self.metrics['last_chassis_invalidation'])
         self.memory.invalidate('chassis_moved_during_grasp')
         self.target = self.memory.snapshot()
         self.last_parking = None
@@ -386,6 +424,7 @@ class TrackingTask:
                 status=observation.get('status'),
                 target_association=(observation.get('target_association') or {}).get('status'),
                 reason=observation.get('reason'),search=observation.get('search'),
+                localization_timing=getattr(job['session'], 'timing', None),
                 request_id=job['request_id'],
                 elapsed_ms=age_ms(job['session'].latest_ready_ms,
                     job['session'].latest.get('capture_timestamp_ms', job['session'].latest_ready_ms))))
@@ -462,11 +501,15 @@ class TrackingTask:
         """
         started = self.clock()
         budget = self.config.get('tracking_task', {}).get('fine_budget_ms', 20)
+        progressed = False
         while self.fault is None and self.arm is None:
-            if (age_ms(self.clock(), started) >= budget or
-                    (self._last_capture is not None and
+            if progressed and (age_ms(self.clock(), started) >= budget or
+                    (self.job is None and self._last_capture is not None and
                      age_ms(self.clock(), self._last_capture) >= self._observation_period())):
                 return
+            # A camera/UART cycle may itself exceed its target period. Always
+            # grant one existing slice, or every cycle can starve fine vision.
+            progressed = True
             if self.planning is not None:
                 if self.target.get('movement_state') == 'suspected':
                     return
@@ -482,8 +525,10 @@ class TrackingTask:
         """Advance one cooperative slice; recoverable scenes never end the task."""
         if self.status == 'succeeded':
             return self.snapshot()
+        if self.fault is not None:
+            return self.snapshot()
         started = self.clock()
-        observed = (self._last_capture is None or self._fresh_before_arm or self._force_observe or
+        observed = self.job is None and (self._last_capture is None or self._fresh_before_arm or self._force_observe or
                     (self.complete is not None and
                      not (self.decision or {}).get('precise_deferred')) or
                     age_ms(started, self._last_capture) >= self._observation_period())
@@ -505,6 +550,24 @@ class TrackingTask:
                     event['search'] = True
                 eligible = self.complete if (self.target.get('target_valid') or
                                               self.target.get('precise_candidate')) else None
+                if eligible is not None:
+                    source = eligible['observation']
+                    consistency = self.memory.precise_consistency(source, eligible['paired_coarse'],
+                        self.drive.odometry.since(source.get('capture_timestamp_ms',self.clock()),
+                                                  self.coarse['capture_timestamp_ms']))
+                    eligible['current_consistency'] = consistency
+                    if consistency == 'changed':
+                        self._record('tracking_fine_current_mismatch',dict(
+                            frame_id=source.get('frame_id'),purpose=eligible['purpose']))
+                        # This is a stale capability, not a failed face solve.
+                        # Do not turn it into an automatic view-changing move.
+                        self.complete = self.last_parking = None
+                        self.drive.restart_observation(discard_reference=True)
+                        self.decision = {'phase':'settling','status':'fine_outdated'}
+                        self._force_observe = True
+                        if self.state.get('run'):
+                            self._command('STOP')
+                        return self.snapshot()
                 outstanding_request=(self.drive._fine_request or {}).get('request_id')
                 self.decision = self.drive.update(self.coarse, self.state, self.clock(),
                     precise=eligible, target_version=self.memory.version,
@@ -534,7 +597,8 @@ class TrackingTask:
                     if done['observation'].get('target_association', {}).get('status') == 'matched':
                         bound=self.memory.bind_precise(done['observation'], done['paired_coarse'],
                             done['target_version'], self.drive.odometry.since(
-                                done['observation'].get('capture_timestamp_ms', self.clock()), self.clock()))
+                                done['observation'].get('capture_timestamp_ms', self.clock()),
+                                self.coarse['capture_timestamp_ms']))
                         if not bound:
                             self.last_parking=None
                             self.drive.restart_observation(discard_reference=True)
@@ -582,6 +646,11 @@ class TrackingTask:
                              self.decision['request_fine']=='static' and
                              self.target.get('precise_candidate'))):
                         self._start_job(self.decision['request_fine'], image, frame)
+        elif self.fault is None and self.job is not None and self.state.get('run'):
+            try:
+                self._command('HB' if self.job['purpose']=='moving' else 'STOP')
+            except Exception as exc:
+                self._fault('fine_motor_feedback',exc)
         elif self.fault is None and self._status_due():
             try:
                 self._command('STATUS')
@@ -608,8 +677,10 @@ class TrackingTask:
         state = self.arm.snapshot() if self.arm is not None else None
         return {'schema': 'aic.robot.tracking.v1', 'status': self.status,
             'target_version': self.memory.version, 'target': self.memory.snapshot(),
-            'phase': state['phase'] if state else ('planning' if self.planning is not None else
+            'phase': 'fault_wait' if self.fault is not None else
+                state['phase'] if state else ('planning' if self.planning is not None else
                       (self.decision or {}).get('phase', 'observe')),
+            'motor_state':dict(self.state),
             'planning_pending':self.planning is not None, 'fine_pending':self.job is not None,
             'arm_started': self.metrics['arm_attempts'] > 0, 'arm_state': state,
             'parking': self.last_parking or (self.decision or {}).get('parking'),

@@ -1,8 +1,9 @@
-"""A coordinate reexpression keeps the selected physical parking region.
+"""A historical reexpression and a later user-selected runtime expansion.
 
 Independent rigid transforms compare the retained old calibration/window with
 the configuration-only approximation, rather than accepting a second survey.
 """
+import copy
 import hashlib
 import json
 import math
@@ -24,6 +25,9 @@ class CalibrationPairingTests(unittest.TestCase):
         cls.old = read('configs/car/workspace_definition.json')
         cls.approach = read('configs/car/approach.json')
         cls.new = read(cls.approach['workspace_config'])
+        cls.mapping = copy.deepcopy(cls.new)
+        for axis, allowed in cls.new['coordinate_reexpression']['base_allowed'].items():
+            cls.mapping['normalized_window'][axis]['allowed'] = list(allowed)
         cls.policy = read('configs/car/near_parking.json')
         cls.old_vision = read('configs/vision/trials/fixed_tip_top_20261022.json')
         cls.new_vision = read(cls.approach['vision_config'])
@@ -71,25 +75,51 @@ class CalibrationPairingTests(unittest.TestCase):
                 (ROOT/self.new_loc[key]).read_bytes()).hexdigest())
         self.assertFalse(provenance['physical_field_revalidated'])
 
-    def test_inset_and_allowed_intervals_are_not_applied_twice_or_narrowed(self):
+    def test_historical_inset_and_allowed_intervals_are_not_applied_twice_or_narrowed(self):
         for key in ('longitudinal', 'lateral'):
-            self.assertEqual(self.new['normalized_window'][key]['allowed'],
+            self.assertEqual(self.mapping['normalized_window'][key]['allowed'],
                              self.old['normalized_window'][key]['allowed'])
         self.assertEqual(self.new['normalized_window']['inset_mm'], 10)
         self.assertEqual(self.new['coordinate_reexpression']['inset_applied_times'], 1)
         old_x = bounds_mm(self.old)['Base_X_mm']
         expected_x = [self.mapped(self.center(self.old, x, self.old_loc))[0]
                       for x in old_x]
-        actual_x = bounds_mm(self.new)['Base_X_mm']
+        actual_x = bounds_mm(self.mapping)['Base_X_mm']
         for actual, expected in zip(actual_x, expected_x):
             self.assertAlmostEqual(actual, expected, places=9)
-        for x, y in polygon_mm(self.new):
-            self.assertTrue(evaluate(x, y, self.new)['inside'])
+        for x, y in polygon_mm(self.mapping):
+            self.assertTrue(evaluate(x, y, self.mapping)['inside'])
+
+    def test_current_user_expansion_keeps_near_edge_inset_and_original_calibration(self):
+        update = self.new['acceptance_update']
+        self.assertEqual(update['date'], '2026-11-03')
+        self.assertEqual(update['previous_allowed'],
+                         self.new['coordinate_reexpression']['base_allowed'])
+        self.assertEqual(update['allowed'], {'longitudinal':[0,.6],'lateral':[-.6,.6]})
+        self.assertFalse(update['new_physical_calibration'])
+        self.assertEqual(update['inset_mm'], 10)
+        for axis in ('longitudinal','lateral'):
+            self.assertEqual(self.new['normalized_window'][axis]['allowed'],update['allowed'][axis])
+        old_x = bounds_mm(self.mapping)['Base_X_mm']
+        new_x = bounds_mm(self.new)['Base_X_mm']
+        self.assertEqual(new_x[0],old_x[0])
+        self.assertAlmostEqual(new_x[1]-old_x[1],8.408520826837741)
+        x = target_x(self.new)
+        old_y,new_y = (bounds_mm(workspace,x)['Base_Y_mm'] for workspace in (self.mapping,self.new))
+        self.assertAlmostEqual(new_y[0],old_y[0]-5.41192948522876)
+        self.assertAlmostEqual(new_y[1],old_y[1]+5.41192948522876)
+        self.assertTrue(evaluate(old_x[1]+1,sum(new_y)/2,self.new)['inside'])
+        self.assertFalse(evaluate(old_x[1]+1,sum(new_y)/2,self.mapping)['inside'])
+        self.assertFalse(evaluate(new_x[0]-.1,sum(new_y)/2,self.new)['inside'])
+        self.assertAlmostEqual(x,250.32437432138943)
+        historical_target = self.new['coordinate_reexpression']['configured_near_quarter_target_new_Base_mm']
+        self.assertAlmostEqual(historical_target[0],target_x(self.mapping))
+        self.assertNotEqual(historical_target[0],x)
 
     def test_axis_approximation_records_its_actual_boundary_displacement(self):
         mapped = [self.mapped(self.point(x, y, self.old_loc))
                   for x, y in polygon_mm(self.old)]
-        current = polygon_mm(self.new)
+        current = polygon_mm(self.mapping)
         x_error = max(abs(a[0]-b[0]) for a, b in zip(mapped, current))
         corner_error = max(math.hypot(a[0]-b[0], a[1]-b[1])
                            for a, b in zip(mapped, current))
@@ -101,23 +131,23 @@ class CalibrationPairingTests(unittest.TestCase):
             'max_corresponding_corner_XY_deviation_mm'], places=9)
         # Measure the transformed left/right side edges at the same new X.
         # Opposite corner Y differences are not the width of this slanted cap.
-        mid_x = sum(bounds_mm(self.new)['Base_X_mm'])/2
+        mid_x = sum(bounds_mm(self.mapping)['Base_X_mm'])/2
         def at_x(a, b):
             return a[1]+(mid_x-a[0])*(b[1]-a[1])/(b[0]-a[0])
         width = at_x(mapped[0], mapped[3])-at_x(mapped[1], mapped[2])
-        limits = bounds_mm(self.new, mid_x)['Base_Y_mm']
+        limits = bounds_mm(self.mapping, mid_x)['Base_Y_mm']
         self.assertAlmostEqual(limits[1]-limits[0], width, places=9)
 
-    def test_target_preserves_near_quarter_choice_and_camera_midline(self):
+    def test_historical_target_preserves_near_quarter_choice_and_camera_midline(self):
         self.assertEqual(self.approach['preferred_stop_fraction_of_inset_depth'], .25)
         expected = self.mapped(self.center(self.old, target_x(self.old), self.old_loc))
-        actual = self.center(self.new, target_x(self.new), self.new_loc)
+        actual = self.center(self.mapping, target_x(self.mapping), self.new_loc)
         self.assertAlmostEqual(actual[0], expected[0], places=9)
         self.assertLess(abs(actual[1]-expected[1]), .001)
         self.assertAlmostEqual(actual[0], 248.22224411468, places=8)
-        lo, hi = bounds_mm(self.new)['Base_X_mm']
+        lo, hi = bounds_mm(self.mapping)['Base_X_mm']
         for i in range(21):
-            p = self.center(self.new, lo+(hi-lo)*i/20, self.new_loc)
+            p = self.center(self.mapping, lo+(hi-lo)*i/20, self.new_loc)
             self.assertLess(abs(self.new_projection.base_to_pixel(p)[0]-640), .001)
 
     def test_coarse_triggers_keep_the_image_ray_on_the_new_runtime_table(self):

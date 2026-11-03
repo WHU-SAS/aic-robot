@@ -265,12 +265,14 @@ class NearControlTests(unittest.TestCase):
         self.assertLess(abs(result['image_error_px']), .02)
         self.assertEqual(result['cube_center_Base_mm'], observation['cube_center_Base_mm'])
         self.assertEqual(self.workspace['normalized_window']['inset_mm'], 10)
-        self.assertAlmostEqual(result['target_Base_X_mm'], 248.2222441147)
+        self.assertAlmostEqual(result['target_Base_X_mm'], 250.3243743214)
         far_inside = self.verify(self.observation(self.center(self.far-.1)))
         self.assertEqual(far_inside['status'], 'parked')
         self.assertTrue(far_inside['accepted'])
         self.assertTrue(far_inside['preferred'])
-        for point in (self.center(self.far+.1), self.center(self.target,20)):
+        y_limits = bounds_mm(self.workspace,self.target)['Base_Y_mm']
+        outside_offset = (y_limits[1]-y_limits[0])/2+.1
+        for point in (self.center(self.far+.1), self.center(self.target,outside_offset)):
             outside = self.verify(self.observation(point))
             self.assertFalse(outside['accepted'])
             self.assertFalse(outside['preferred'])
@@ -413,7 +415,10 @@ class NearControlTests(unittest.TestCase):
     def test_single_arc_can_reverse_one_wheel_and_hold_the_other(self):
         # The old forward TURN,-5 used up the available depth. A signed wheel
         # arc moves toward the same destination instead of accepting a1mm rim.
-        point = [243.9062, -14.30987, -55.05993]
+        # Keep this synthetic case outside the current expanded right edge.
+        x = self.target-6
+        lo,hi = bounds_mm(self.workspace,x)['Base_Y_mm']
+        point = self.center(x,-(hi-lo)/2-2)
         verdict = self.verify(self.observation(point))
         travel = self.config['track_width_mm']*math.radians(5)
         old = predict_center(point, [(travel, 0)], self.config['track_width_mm'],
@@ -428,7 +433,9 @@ class NearControlTests(unittest.TestCase):
         self.assertTrue(plan['nominal_predicted_window']['inside'])
 
     def test_lateral_error_at_the_right_depth_can_use_opposite_wheel_distances(self):
-        point = [247.2403, -13.36438, -54.8549]
+        x = self.target-1
+        lo,hi = bounds_mm(self.workspace,x)['Base_Y_mm']
+        point = self.center(x,-(hi-lo)/2-.1)
         plan = self.correction(self.verify(self.observation(point)))
         self.assertLess(plan['left_mm']*plan['right_mm'], 0)
         self.assertLess(plan['nominal_target_error_mm'], 1.)

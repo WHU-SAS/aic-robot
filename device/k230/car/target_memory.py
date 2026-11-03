@@ -290,6 +290,26 @@ class TargetMemory:
         bbox = evidence.get('bbox_px', [])
         visual = ({'center_pixel':list(center), 'bbox_px':list(bbox)}
                   if _point(center,2) and _point(bbox,4) and min(bbox[2:]) > 0 else None)
+        unconfirmed_reacquisition = False
+        if (unique and self._distance_valid and self._gap and visual is not None and
+                self._identity_visual is not None and
+                not self._held_match(visual,self._identity_visual)):
+            if not self._precise_candidate:
+                # Native acquisition after a gap starts at one even though
+                # its fresh tabletop geometry is measurable. It cannot make
+                # another region inherit the previous target's fine result.
+                unique = self._associated = False
+                unconfirmed_reacquisition = True
+            else:
+                # The existing native confirmation has acquired a different
+                # candidate. Preserve the old fine as evidence, but revoke its
+                # version before this new region owns navigation/history.
+                self.invalidate('reacquired_different_candidate')
+                self._identity_visual = visual
+                self._visual_previous = None
+                self._motion_visual = self._motion_reference = None
+                self._expected = self._last_center = None
+                self._exit_direction = None
         if unique and not self._distance_valid:
             # A colour detector's unique/associated flag is not target proof:
             # after loss it may have acquired a tiny unrelated blue edge.
@@ -319,7 +339,7 @@ class TargetMemory:
             self._visual_previous = None
             self._moving_jump_candidate = self._moving_jump_origin = None
             self._moving_jump_count = 0
-            if self._visible:
+            if self._visible and not unconfirmed_reacquisition:
                 # Unrelated or ambiguous blue between the edge observation
                 # and a blank frame does not prove the target left the view.
                 self._exit_direction = None
@@ -453,14 +473,56 @@ class TargetMemory:
             self._gap_ended_at = None
         return self.snapshot()
 
+    def precise_consistency(self, observation, coarse, wheel_deltas=None):
+        """Compare a completed capability with the current native input only.
+
+        This does not assert physical target motion or change any history.
+        Unknown/ambiguous input cannot disprove a retained distance. Both full
+        poses and range-only results can nevertheless be stale when a current
+        unique same-size region contradicts their original native image ray.
+        wheel_deltas ends at that current image's capture, never clock-now.
+        """
+        stamp = observation.get('capture_timestamp_ms')
+        if (stamp is None or self._last_stamp is None or self._query_visual is None or
+                observation.get('frame_id') != coarse.get('frame_id') or
+                coarse.get('capture_timestamp_ms') != stamp or
+                age_ms(self._last_stamp,stamp) < 0):
+            return 'unknown'
+        evidence = self._evidence(coarse)
+        pixel, box = evidence.get('center_pixel'), evidence.get('bbox_px')
+        if not _point(pixel,2) or not _point(box,4) or min(box[2:]) <= 0:
+            return 'unknown'
+        ratios = [self._query_visual['bbox_px'][k]/box[k] for k in (2,3)]
+        limit = self.config.get('tracking',{}).get('max_size_ratio',3)
+        if not all(1/limit <= ratio <= limit for ratio in ratios):
+            # A tiny foreign patch is not contradictory target evidence.
+            return 'unknown'
+        try:
+            unused, point, unused = distance_anchor(observation)
+            height = (sum(a*b for a,b in zip(self.projection.normal,point))-self.projection.offset
+                if observation.get('status') == 'localized' else self._motion_height)
+            reference = self.projection.pixel_to_plane(pixel,height)
+            if wheel_deltas is not None:
+                reference = self._propagate(reference,wheel_deltas)
+            elif stamp != self._last_stamp:
+                return 'unknown'
+            expected = self.projection.base_to_pixel(reference)
+            paired = {'center_pixel':pixel,'bbox_px':box}
+            shift = self._common_translation(self._query_visual,paired,expected)
+            residual = math.sqrt(sum(value*value for value in shift))
+        except (ValueError, TypeError):
+            return 'unknown'
+        return 'changed' if residual > self._pixel_limit(evidence) else 'consistent'
+
     def bind_precise(self, observation, coarse, version, wheel_deltas=None):
         """Bind only the original same-frame coarse/fine pair, in this version.
 
         A result after temporary occlusion can retain historical drive range;
         only a pair captured after reappearance clears needs_precise. Parking
         and grasp authority remain the coordinator's fresh static verification.
-        For a delayed result, wheel_deltas is capture-to-now motion (unlike
-        update's per-call increments), used to rebase the paired coarse point.
+        For a delayed result, wheel_deltas is capture-to-current-image motion
+        (unlike update's per-call increments), used to rebase the paired coarse
+        point. Driving separately propagates its remaining distance to now.
         A fresh matched full pose can seed an invalidated current epoch;
         current-image identity is established by the following update.
         """
@@ -492,28 +554,11 @@ class TargetMemory:
             not self._associated and not self._full_anchor())
         seed_visual = None
         if seeding:
-            pixel, box = evidence.get('center_pixel'), evidence.get('bbox_px')
-            if (self._query_visual is None or not _point(pixel,2) or
-                    not _point(box,4) or min(box[2:]) <= 0 or
-                    age_ms(self._last_stamp,coarse['capture_timestamp_ms']) < 0):
-                return False
             # Query-only colour was deliberately excluded from target motion
             # history. Before this delayed pose can seed identity, check its
             # original ray against the current query input without turning
             # that input into target/exit evidence.
-            height = sum(a*b for a,b in zip(self.projection.normal,fine_point))-self.projection.offset
-            try:
-                reference = self.projection.pixel_to_plane(pixel,height)
-                if wheel_deltas is not None:
-                    reference = self._propagate(reference,wheel_deltas)
-                elif coarse['capture_timestamp_ms'] != self._last_stamp:
-                    return False
-                expected = self.projection.base_to_pixel(reference)
-                paired = {'center_pixel':pixel,'bbox_px':box}
-                shift = self._common_translation(self._query_visual,paired,expected)
-                if math.sqrt(sum(value*value for value in shift)) > self._pixel_limit(evidence):
-                    return False
-            except (ValueError, TypeError):
+            if self.precise_consistency(observation,coarse,wheel_deltas) != 'consistent':
                 return False
             seed_visual = self._query_visual
         self.last_precise, self.paired_coarse = dict(observation), dict(coarse)

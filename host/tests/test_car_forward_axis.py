@@ -136,7 +136,7 @@ class ForwardAxisTests(unittest.TestCase):
         workspace, _, _ = load()
         config = json.loads((ROOT / 'configs/car/near_parking.json').read_text())
         for lateral in (-30, 30):
-            old_point = [250, lateral, -55]
+            old_point = [300, lateral, -55]
             verdict = {'status': 'not_parked', 'accepted': False,
                 'window': {'lateral_allowed': False},
                 'cube_center_Base_mm': self.mapped(old_point)}

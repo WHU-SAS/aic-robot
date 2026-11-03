@@ -54,7 +54,22 @@
     "existing_far_reference_role": "longitudinal normalization endpoint 1 and approach distance reference; not desired final parking location",
     "remaining_work": "revalidate the promoted calibration on the complete car-to-arm physical run; no new boundary capture was taken"
   },
-  "acceptance_updated_date": "2026-10-31",
+  "acceptance_updated_date": "2026-11-03",
+  "acceptance_update": {
+    "date": "2026-11-03",
+    "basis": "user-selected runtime acceptance expansion",
+    "previous_allowed": {
+      "longitudinal": [0, 0.5],
+      "lateral": [-0.5, 0.5]
+    },
+    "allowed": {
+      "longitudinal": [0, 0.6],
+      "lateral": [-0.6, 0.6]
+    },
+    "inset_mm": 10,
+    "new_physical_calibration": false,
+    "note": "Near edge, calibration and normalization endpoints are unchanged. Runtime bounds and near-quarter target follow normalized_window; coordinate_reexpression polygon and target retain the historical 2026-10-31 mapping."
+  },
   "normalized_window": {
     "method": "camera_centered_local_linear_window_v1_coordinate_reexpression",
     "status": "user_approved_temporary_rule",
@@ -66,7 +81,7 @@
       "far_normalized": 1,
       "allowed": [
         0,
-        0.5
+        0.6
       ],
       "formula": "(X - near_X) / (far_X - near_X)"
     },
@@ -76,11 +91,11 @@
       "left_normalized": -1,
       "right_normalized": 1,
       "allowed": [
-        -0.5,
-        0.5
+        -0.6,
+        0.6
       ],
       "formula": "2 * (Y - camera_midline_Base_Y_at_X) / (right_Y - left_Y)",
-      "sample_reference_role": "derived normalization endpoints preserve the mapped inset width; they are not new left/right physical captures"
+      "sample_reference_role": "derived normalization endpoints retain the historical mapped width scale; they are not new left/right physical captures"
     },
     "acceptance": "cube center must lie inside both inclusive intervals after a 10mm inward offset of each rectangle edge",
     "clamp_normalized_values": false,
@@ -97,13 +112,18 @@
     "provenance_note": "Original photos and references remain unchanged in workspace_definition.json. These numerical endpoints are reparameterized from the rigidly mapped 10mm-inset window, not new measurements; no local data files are required at runtime.",
     "inset_mm": 10,
     "inset_basis": "User 2026-10-24: convert the approved normalized rectangle to Base mm, then shrink all four edges inward by 10mm for the 20mm cube volume.",
-    "recenter_policy": "preserve mapped near/far edge midpoint X and mapped constant-X lateral width; retain 10mm inset and center each X on the new paired camera image midline",
+    "recenter_policy": "retain reexpressed normalization endpoints, 10mm inset and camera-midline centering; runtime allowed intervals follow acceptance_update",
     "reference_frames_coordinate_frame": "historical fixed_tip_top_20261022 Base; retained only as original physical-boundary provenance"
   },
   "position_classifier": "device/k230/car/parking_window.py",
   "coordinate_calibration": "configs/vision/trials/model_alignment_20261030.json",
   "coordinate_reexpression": {
     "date": "2026-10-31",
+    "scope": "Historical mapping of the base allowed intervals; later runtime acceptance updates do not change these mapped polygon or target records.",
+    "base_allowed": {
+      "longitudinal": [0, 0.5],
+      "lateral": [-0.5, 0.5]
+    },
     "purpose": "pair the previously accepted physical parking region with the promoted arm model/camera calibration; no new physical survey",
     "source_workspace": "configs/car/workspace_definition.json",
     "source_workspace_sha256": "55b6ff86d86bb31bcf16fae834f9a9fb96555ca62db9489a43c23270a8e4fa60",

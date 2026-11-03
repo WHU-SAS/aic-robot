@@ -299,7 +299,8 @@ class NearRuntimeTests(unittest.TestCase):
 
     def test_near_start_solves_before_first_follow_and_uses_remaining_distance(self):
         self.coarse_x = [480]
-        self.static_offsets = [20, 0]
+        outside = bounds_mm(self.workspace)['Base_X_mm'][1]-self.target+1
+        self.static_offsets = [outside, 0]
         result = self.run_task()
         self.assertEqual(result['status'], 'parked')
         self.assertEqual(self.names().count('FOLLOW'), 1)
@@ -375,7 +376,8 @@ class NearRuntimeTests(unittest.TestCase):
 
     def test_near_start_forward_motion_requires_new_verdict_and_allows_one_correction(self):
         self.coarse_x = [480]
-        self.static_offsets = [20, 20, 0]
+        outside = bounds_mm(self.workspace)['Base_X_mm'][1]-self.target+1
+        self.static_offsets = [outside, outside, 0]
         result = self.run_task()
         self.assertEqual(result['status'], 'parked')
         self.assertEqual(self.names().count('FOLLOW'), 1)
@@ -513,7 +515,8 @@ class NearRuntimeTests(unittest.TestCase):
         self.assertFalse(self.link.run)
 
     def test_depth_correction_is_one_signed_arc_then_a_new_verification(self):
-        for offset in (-20,20):
+        outside = max(20,bounds_mm(self.workspace)['Base_X_mm'][1]-self.target+1)
+        for offset in (-outside,outside):
             with self.subTest(offset=offset):
                 self.setUp()
                 self.static_offsets=[offset,0]
@@ -665,7 +668,7 @@ class NearRuntimeTests(unittest.TestCase):
         self.assertFalse(self.link.run)
 
     def test_correction_ack_failure_stops_without_retry(self):
-        self.static_offsets=[20]
+        self.static_offsets=[bounds_mm(self.workspace)['Base_X_mm'][1]-self.target+1]
         self.link.fail_correction=True
         with self.assertRaisesRegex(RuntimeError,'correction ACK absent'):
             self.run_task()
@@ -709,7 +712,8 @@ class NearRuntimeTests(unittest.TestCase):
             json.dumps(self.evidence)
 
     def test_evidence_one_correction_has_exactly_three_distinct_original_frames(self):
-        self.static_offsets=[20,0]
+        outside = bounds_mm(self.workspace)['Base_X_mm'][1]-self.target+1
+        self.static_offsets=[outside,0]
         result=self.run_task()
         self.assertEqual(result['status'],'parked')
         self.assertEqual([x['label'] for x in self.evidence],
@@ -775,6 +779,19 @@ class OdometryTests(unittest.TestCase):
         odom.add(self.state(-2147483636,2147483636),1100,1100)
         odom.add(self.state(-2147483626,2147483616),1200,1200)
         self.assertEqual(odom.since(1050,1200),[(5.,5.),(5.,10.)])
+
+    def test_comparing_a_photo_excludes_UART_motion_after_its_capture(self):
+        odom = near_runtime.Odometry(.1)
+        odom.add(self.state(0,0),1000,1000)
+        odom.add(self.state(100,-100),1100,1100)
+        odom.add(self.state(200,-300),1200,1200)
+        # The latest STATUS can be later than the photo being compared. Clip
+        # BOTH interval ends, rather than including the entire later sample.
+        self.assertEqual(odom.since(1050,1075),[(2.5,2.5)])
+        self.assertEqual(odom.since(1050,1150),[(5.,5.),(5.,10.)])
+        self.assertEqual(odom.since(1150,1150),[])
+        # Driving-to-now still includes the final extrapolated interval.
+        self.assertEqual(odom.since(1050,1250),[(5.,5.),(10.,20.),(5.,10.)])
 
     def test_k230_ticks_wrap_uses_ticks_diff_and_ticks_add(self):
         modulus = 1 << 30

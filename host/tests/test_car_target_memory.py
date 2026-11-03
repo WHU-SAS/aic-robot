@@ -1,4 +1,5 @@
 """Target changes tested against independent world-frame vehicle motion."""
+import copy
 import math
 import unittest
 
@@ -808,7 +809,7 @@ class TargetMemoryTests(unittest.TestCase):
                 fine=self.precise(source);fine['target_association']={'status':'matched'}
                 if deltas:
                     # The same image change would be stale target geometry
-                    # without the capture-to-now wheel evidence.
+                    # without capture-to-current-image wheel evidence.
                     self.assertFalse(self.memory.bind_precise(fine,source,0,[]))
                 self.assertTrue(self.memory.bind_precise(fine,source,0,deltas))
                 self.assertFalse(self.memory.snapshot()['associated'])
@@ -832,6 +833,96 @@ class TargetMemoryTests(unittest.TestCase):
                 self.assertFalse(self.memory.bind_precise(fine,source,0,[]))
                 self.assertIsNone(self.memory.last_precise)
                 self.assertIsNone(self.memory._identity_visual)
+
+    def test_completed_full_and_range_compare_current_input_without_mutating_target_history(self):
+        for capability in ('full','range'):
+            with self.subTest(capability=capability):
+                self.setUp();self.seed()
+                source=self.visual(association_confirmations=3)
+                self.memory.update(source)
+                fine=self.precise(source)
+                if capability=='range':
+                    point=fine.pop('cube_center_Base_mm')
+                    fine.update(status='no_complete_face',range_candidate={
+                        'schema':'aic.car.side_range.v1','status':'range_candidate',
+                        'coordinate_frame':'Base','units':'mm','Base_X_mm':point[0],
+                        'raw_center_Base_mm':point,'not_arm_or_parking_authority':True})
+                # During a running fine pause this moderate shift remains
+                # model uncertainty under movement policy, not a two-frame
+                # target-version change. Its stale input is still detectable.
+                self.stamp+=600
+                state=self.memory.update(self.visual((500,100,0),
+                    association_confirmations=1,navigation_confirmed=False),
+                    motion_state={'run':1})
+                self.assertTrue(state['associated'])
+                self.assertEqual(state['version'],0)
+                before=copy.deepcopy(self.memory.snapshot())
+                self.assertEqual(self.memory.precise_consistency(fine,source,[]),'changed')
+                self.assertEqual(self.memory.snapshot(),before)
+                self.memory.update(self.absent())
+                self.assertEqual(self.memory.precise_consistency(fine,source,[]),'unknown')
+                self.memory.update(self.visual(distance_valid=False,
+                    bbox_px=[0,915,11,5],center_pixel=[6,917],reason='clipped_blob',
+                    association_confirmations=3))
+                self.assertEqual(self.memory.precise_consistency(fine,source,[]),'unknown')
+
+    def test_gap_reacquisition_needs_native_confirmation_and_cannot_inherit_old_full_or_range(self):
+        for capability in ('full','range'):
+            with self.subTest(capability=capability):
+                self.setUp()
+                original=self.visual(association_confirmations=3,navigation_confirmed=True)
+                self.memory.update(original)
+                fine=self.precise(original)
+                if capability=='range':
+                    point=fine.pop('cube_center_Base_mm')
+                    fine.update(status='no_complete_face',range_candidate={
+                        'schema':'aic.car.side_range.v1','status':'range_candidate',
+                        'coordinate_frame':'Base','units':'mm','Base_X_mm':point[0],
+                        'raw_center_Base_mm':point,'not_arm_or_parking_authority':True})
+                self.assertTrue(self.memory.bind_precise(fine,original,0))
+                self.memory.last_disappearance_direction='left'
+                identity=copy.deepcopy(self.memory._identity_visual)
+                center=list(self.memory._last_center)
+                self.memory.update(self.absent())
+                self.stamp+=600  # Native tracker identity has expired too.
+                for count in (1,2):
+                    candidate=self.visual((500,230,0),association_confirmations=count,
+                        navigation_confirmed=False)
+                    self.assertEqual(candidate['visual_evidence']['center_pixel'],[870.,520.])
+                    state=self.memory.update(candidate,motion_state={'run':1})
+                    self.assertFalse(state['associated'])
+                    self.assertEqual(state['visibility'],'unknown')
+                    self.assertFalse(state['table_distance_valid'])
+                    self.assertEqual(state['version'],0)
+                    self.assertTrue(state['anchor_valid'])
+                    self.assertEqual(state['last_seen'],original)
+                    self.assertEqual(self.memory._identity_visual,identity)
+                    self.assertEqual(self.memory._last_center,center)
+                    self.assertEqual(state['last_disappearance_direction'],'left')
+                candidate=self.visual((500,230,0),association_confirmations=3,
+                    navigation_confirmed=True)
+                state=self.memory.update(candidate,motion_state={'run':1})
+                self.assertEqual(state['version'],1)
+                self.assertFalse(state['anchor_valid'])
+                self.assertFalse(state['target_valid'])
+                self.assertTrue(state['needs_precise'])
+                self.assertEqual(state['last_precise'],fine)
+                self.assertEqual(state['paired_coarse'],original)
+                self.assertEqual(state['last_seen'],candidate)
+                self.assertEqual(state['last_disappearance_direction'],'left')
+                self.assertFalse(self.memory.bind_precise(fine,original,0))
+                self.assertFalse(self.memory.bind_precise(fine,original,1))
+                premature=self.precise(candidate)
+                premature['target_association']={'status':'matched'}
+                self.assertFalse(self.memory.bind_precise(premature,candidate,1))
+                current=self.visual((500,230,0),association_confirmations=4,
+                    navigation_confirmed=True)
+                self.memory.update(current)
+                fresh=self.precise(current)
+                fresh['target_association']={'status':'matched'}
+                self.assertTrue(self.memory.bind_precise(fresh,current,1))
+                self.assertTrue(self.memory.snapshot()['anchor_valid'])
+                self.assertEqual(self.memory.last_precise,fresh)
 
     def test_ambiguous_targets_do_not_fall_back_to_legacy_largest_blob(self):
         self.seed()

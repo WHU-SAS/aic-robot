@@ -4,6 +4,8 @@
   "period_ms": 100,
   "stationary_period_ms": 250,
   "stationary_status_period_ms": 500,
+  "motion_refresh_ms": 250,
+  "grasp_chassis_tolerance_mm": 1.0,
   "static_localization_policy": "shared_side_only",
   "fine_budget_ms": 20,
   "movement_pixel_tolerance_px": 12,
@@ -13,5 +15,6 @@
   "search_speed_mm_s": 20,
   "reobserve_angle_deg": 5,
   "reobserve_reverse_mm": 10,
-  "notes": "User-approved startup-priority scheduling: moving observation100ms; stopped full precise localization and arm planning observation250ms; stopped chassis STATUS500ms independently, with fresh checks at handoff. Tracking static localization uses shared_side_only: complete physical-side verification or a new viewpoint, without legacy single-image exhaustive recovery. Background20ms is a soft slice, not a hard real-time guarantee. Continuous coarse estimates bearing/distance; precise corrects both on demand. Recovery thresholds remain initial candidates; no correction/attempt limit or new task-terminal condition. Existing calibration, inset window, near-quarter target and drive speeds remain. Hardware activation awaits commissioning."
+  "recovery_reverse_mm_s": 15,
+  "notes": "Coarse observation targets100ms while moving or executing arm,250ms during stopped planning. Per user choice, all fine solves pause coarse capture until ready; moving solves retain real HB/encoder feedback refreshed250ms, stopped solves retain STATUS500ms. Resume with a fresh coarse frame and STATUS before consuming a result. Background20ms is a soft slice, not a real-time bound. shared_side_only retains physical-side validation. Bottom-view recovery reverses continuously15mm/s within the original100mm budget. Active grasp cumulative wheel tolerance1mm; static verification and unsent planning remain0.1mm. No attempt limit or new final failure condition. Calibration unchanged; parking acceptance separately expanded by user. Offline candidate awaits hardware verification and activation."
 }

@@ -41,9 +41,11 @@ class Odometry:
         result = []
         for a, b in zip(self.rows, self.rows[1:]):
             duration = age_ms(b[0], a[0])
-            if duration <= 0 or age_ms(b[0], stamp) <= 0:
+            start = max(0, age_ms(stamp, a[0]))
+            end = min(duration, age_ms(now, a[0]))
+            if duration <= 0 or end <= start:
                 continue
-            fraction = min(1., age_ms(b[0], stamp)/duration)
+            fraction = (end-start)/duration
             result.append((count_delta(a[1], b[1])*self.scale*fraction,
                            -count_delta(a[2], b[2])*self.scale*fraction))
         if len(self.rows) >= 2:

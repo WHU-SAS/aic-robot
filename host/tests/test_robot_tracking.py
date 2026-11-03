@@ -45,6 +45,7 @@ class Motor:
         self.left_speed = self.right_speed = 0
         self.last_at = clock.now()
         self.request_cost_ms = 0
+        self.replies = []
     def advance(self):
         seconds=(self.clock.now()-self.last_at)/1000
         self.last_at=self.clock.now()
@@ -74,6 +75,7 @@ class Motor:
             self.reason = 8
         self.clock.advance(self.request_cost_ms)
         state = self.sync()
+        self.replies.append((command,self.clock.now(),dict(state)))
         return state
 
 
@@ -131,6 +133,7 @@ class RobotTrackingTests(unittest.TestCase):
                 self.latest = self.latest_ready_ms = None
                 self.ticks = 0
                 self.events = []
+                self.progress = []
                 self.index = len(parent.created_fines)
                 parent.created_fines.append(self)
             def start(self, image, frame, bbox):
@@ -139,6 +142,9 @@ class RobotTrackingTests(unittest.TestCase):
             def advance(self):
                 self.ticks += 1
                 parent.clock.advance(parent.fine_cost_ms)
+                self.progress.append(dict(at=parent.clock.now(),frame=parent.frame,
+                    coarse_stamp=parent.task.coarse['capture_timestamp_ms'],
+                    motor=dict(parent.task.state)))
                 if self.ticks >= parent.fine_slices:
                     self.latest = parent.precise(self.point,self.frame)
                     if parent.fail_every_fine or (parent.fail_first_fine and self.index == 0):
@@ -236,12 +242,37 @@ class RobotTrackingTests(unittest.TestCase):
             if self.task.status == 'succeeded': return self.task.snapshot()
         self.fail(self.task.snapshot())
 
-    def test_normal_flow_keeps_observing_during_fine_and_grasp(self):
+    def assert_coarse_paused_during_fine(self):
+        for fine in self.created_fines:
+            self.assertTrue(fine.progress)
+            self.assertTrue(all(row['frame']==fine.frame['frame_id'] and
+                row['coarse_stamp']==fine.frame['capture_timestamp_ms'] for row in fine.progress))
+
+    def assert_observation_cadence_outside_fine(self,limit=275):
+        intervals=[(fine.frame['capture_timestamp_ms'],fine.latest_ready_ms)
+            for fine in self.created_fines if fine.latest_ready_ms is not None]
+        gaps=[b['at']-a['at'] for a,b in zip(self.observation_rows,self.observation_rows[1:])
+            if not any(a['at']<end and b['at']>start for start,end in intervals)]
+        self.assertTrue(gaps)
+        self.assertLessEqual(max(gaps),limit)
+
+    def move_in_fine_callback(self,after_ticks=3,amount=40):
+        advance=self.Fine.advance
+        def move(session):
+            advance(session)
+            if not self.moved and session.ticks>=after_ticks:
+                self.y+=amount
+                self.moved=True
+                self.moved_at=self.clock.now()
+        self.Fine.advance=move
+
+    def test_normal_flow_pauses_coarse_for_fine_and_keeps_observing_grasp(self):
         result = self.finish()
         self.assertEqual(result['status'],'succeeded')
         self.assertEqual(len(self.arms),1)
-        self.assertGreater(result['metrics']['observations'],10)
-        self.assertLessEqual(result['metrics']['max_observation_gap_ms'],275)
+        self.assert_coarse_paused_during_fine()
+        self.assert_observation_cadence_outside_fine()
+        self.assertGreater(len([row for row in self.observation_rows if row['phase']=='arm']),3)
         self.assertTrue(result['grasp_confirmed'])
         self.assertEqual(result['parking']['verification_observation']['frame_id'],
                          self.handoffs[0][1]['frame_id'])
@@ -262,7 +293,8 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertTrue(any(c.startswith('FOLLOW,') for t,c in self.motor.commands))
         self.assertEqual(result['metrics']['fine_started'],2)
         self.assertEqual(result['metrics']['arm_attempts'],1)
-        self.assertLessEqual(result['metrics']['max_observation_gap_ms'],275)
+        self.assert_coarse_paused_during_fine()
+        self.assert_observation_cadence_outside_fine()
         self.assertLessEqual(len(self.task.evidence),2)
         moving = next(item['frame'] for item in self.task.evidence
                       if item['frame']['tracking_purpose']=='moving')
@@ -440,20 +472,20 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertEqual(self.task.metrics['target_changes'], 0)
         self.assertNotEqual(self.task.target['movement_state'], 'suspected')
 
-    def test_brief_unknown_during_static_compute_reuses_original_image(self):
-        original=self.task.track
+    def test_brief_unknown_after_paused_static_compute_reuses_original_image(self):
+        advance=self.Fine.advance
         hidden=[]
-        def track(point,frame):
-            if (self.task.job is not None and self.task.job['purpose']=='static' and
-                    self.task.job['session'].ticks>3 and not hidden):
+        def hide(session):
+            advance(session)
+            if session.ticks>3 and not hidden:
                 self.hide_frames=1
-                hidden.append(frame['frame_id'])
-            return original(point,frame)
-        self.task.track=track
+                hidden.append(self.clock.now())
+        self.Fine.advance=hide
         result=self.finish()
         self.assertTrue(hidden)
         self.assertEqual(result['metrics']['fine_started'],1)
         self.assertEqual(len(self.arms),1)
+        self.assert_coarse_paused_during_fine()
         self.assertFalse(any(c.startswith(('FOLLOW','ARC')) for t,c in self.motor.commands))
 
     def test_completed_static_unknown_defers_without_busy_capture_or_rephotograph(self):
@@ -489,14 +521,14 @@ class RobotTrackingTests(unittest.TestCase):
     def test_failed_moving_fine_and_one_missing_coarse_frame_do_not_split_approach(self):
         self.x=650
         self.fail_first_fine=True
-        original=self.task.track
+        advance=self.Fine.advance
         hidden=[]
-        def track(point,frame):
+        def hide(session):
+            advance(session)
             if self.task.job is not None and self.task.job['purpose']=='moving' and not hidden:
                 self.hide_frames=1
-                hidden.append(frame['frame_id'])
-            return original(point,frame)
-        self.task.track=track
+                hidden.append(self.clock.now())
+        self.Fine.advance=hide
         result=self.finish()
         self.assertTrue(hidden)
         self.assertEqual(result['metrics']['target_changes'],0)
@@ -528,11 +560,13 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertEqual(result['arc_timeouts'], 1)
         self.assertEqual(result['last_arc_end'], ended)
 
-    def test_move_during_fine_cancels_old_image_and_never_hands_it_to_arm(self):
+    def test_move_during_paused_fine_rejects_old_image_and_never_hands_it_to_arm(self):
         self.fine_slices = 40
-        self.move_when = lambda:self.task.job is not None and self.task.job['session'].ticks>=3
+        self.move_in_fine_callback()
         self.finish()
-        self.assertGreaterEqual(self.task.metrics['fine_cancelled'],1)
+        self.assertTrue(self.moved)
+        self.assertTrue(any(event=='tracking_fine_current_mismatch' for event,details in self.events))
+        self.assertGreaterEqual(self.task.metrics['fine_started'],2)
         self.assertGreaterEqual(self.task.metrics['target_changes'],1)
         self.assertTrue(all(obs['capture_timestamp_ms'] >= self.moved_at and v>0
                             for t,obs,v in self.handoffs))
@@ -750,10 +784,10 @@ class RobotTrackingTests(unittest.TestCase):
 
     def test_weak_target_moving_during_first_fine_rejects_old_pose_and_rephotographs(self):
         self.geometry_invalid=True
-        self.move_when=lambda:self.task.job is not None and self.task.job['session'].ticks>=5
+        self.move_in_fine_callback(after_ticks=5,amount=20)
         for unused in range(500):
             self.tick()
-            rejected=any(event=='tracking_fine_binding_rejected' for event,details in self.events)
+            rejected=any(event=='tracking_fine_current_mismatch' for event,details in self.events)
             if rejected and self.task.metrics['fine_started']>=2:break
         else:self.fail(self.task.snapshot())
         self.assertFalse(self.arms)
@@ -859,7 +893,8 @@ class RobotTrackingTests(unittest.TestCase):
         self.task.begin_arm=plan
         result=self.finish()
         self.assertEqual(result['metrics']['planning_steps'],26)
-        self.assertLessEqual(result['metrics']['max_observation_gap_ms'],275)
+        self.assert_observation_cadence_outside_fine()
+        self.assertGreaterEqual(len([row for row in self.observation_rows if row['phase']=='planning']),2)
         self.assertEqual(result['metrics']['arm_attempts'],1)
 
     def test_target_move_cancels_old_planning_without_emitting_its_hover(self):
@@ -909,7 +944,7 @@ class RobotTrackingTests(unittest.TestCase):
         result=self.finish()
         self.assertLess(planning_time[0],1600)
         self.assertEqual(result['metrics']['planning_steps'],1001)
-        self.assertLessEqual(result['metrics']['max_observation_gap_ms'],275)
+        self.assert_observation_cadence_outside_fine()
 
     def _timed_prehover_run(self,stationary_period,status_period,adaptive_idle=False):
         self.setUp()
@@ -958,7 +993,7 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertEqual(new['target_changes'],0)
         self.costed_comparison={'old':old,'new':new}
 
-    def test_idle_delay_skips_only_progressing_stopped_background_work(self):
+    def test_idle_delay_skips_only_progressing_background_work(self):
         self.assertEqual(self.task.idle_delay_ms(),5)
         self.task.job={'purpose':'static'}
         self.task.target={'movement_state':'consistent'}
@@ -967,7 +1002,9 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertEqual(self.task.idle_delay_ms(),0)
         self.task.target['movement_state']='unknown'
         self.assertEqual(self.task.idle_delay_ms(),0)
-        for attribute,value in (('fault','IO wait'),('arm',object()),('state',{'run':1}),
+        self.task.state['run']=1
+        self.assertEqual(self.task.idle_delay_ms(),0)
+        for attribute,value in (('fault','IO wait'),('arm',object()),
                                 ('target',{'movement_state':'suspected'})):
             with self.subTest(attribute=attribute):
                 previous=getattr(self.task,attribute)
@@ -976,6 +1013,30 @@ class RobotTrackingTests(unittest.TestCase):
                 setattr(self.task,attribute,previous)
         self.task.planning=None;self.task.complete={'purpose':'static'}
         self.assertEqual(self.task.idle_delay_ms(),5)
+
+    def test_same_speed_reuses_real_status_but_status_does_not_renew_motion_lease(self):
+        self.task._command('FOLLOW,70,70')
+        self.clock.advance(100)
+        status=self.task._command('STATUS')
+        received=status['_k230_received_ms']
+        self.clock.advance(20)
+        reused=self.task._command('SPEED,70,70')
+        self.assertIs(reused,status)
+        self.assertEqual(reused['_k230_received_ms'],received)
+        self.assertEqual([c for t,c in self.motor.commands],['FOLLOW,70,70','STATUS'])
+        self.clock.advance(130)
+        self.task._command('HB')
+        self.assertEqual(self.motor.commands[-1][1],'HB')
+        self.assertEqual(self.task.metrics['commands_coalesced'],1)
+
+    def test_changed_signed_speed_and_stop_are_never_delayed_by_refresh(self):
+        self.task._command('FOLLOW,-20,20')
+        self.task._command('SPEED,20,-20')
+        self.task._command('STOP')
+        self.task._command('STOP')
+        self.assertEqual([c for t,c in self.motor.commands],
+                         ['FOLLOW,-20,20','SPEED,20,-20','STOP','STOP'])
+        self.assertEqual(self.motor.run,0)
 
     def test_stopped_compute_skips_slice_sleeps_but_keeps_both_fresh_checks(self):
         fixed=self._timed_prehover_run(250,500)
@@ -1028,23 +1089,61 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertFalse(any(event[0]=='goals' for event in self.arms[0].io.events))
         self.assertTrue(any(version>0 for stamp,observation,version in self.handoffs))
 
-    def test_motion_and_moving_fine_keep_original_camera_and_status_cadence(self):
+    def test_pending_moving_fine_pauses_coarse_and_keeps_real_heartbeat_feedback(self):
         self.x=650
         self.coarse_cost_ms=35
         self.motor.request_cost_ms=23
+        self.fine_slices=50
         result=self.finish()
+        self.assert_coarse_paused_during_fine()
+        self.assert_observation_cadence_outside_fine()
         moving=[row for row in self.observation_rows if row['run'] or row['phase']=='moving']
         self.assertGreater(len(moving),10)
         self.assertTrue(all(row['motor_received']>=row['at'] for row in moving))
-        gaps=[b['at']-a['at'] for a,b in zip(self.observation_rows,self.observation_rows[1:])
-              if (a['run'] or a['phase']=='moving') and (b['run'] or b['phase']=='moving')]
-        self.assertTrue(gaps)
-        self.assertLessEqual(max(gaps),135)
+        fine=self.created_fines[0]
+        replies=[(at,state) for command,at,state in self.motor.replies if command=='HB' and
+            fine.frame['capture_timestamp_ms']<at<fine.latest_ready_ms]
+        self.assertGreaterEqual(len(replies),2)
+        self.assertTrue(all(state['run'] for at,state in replies))
+        self.assertTrue(all(b[0]-a[0]>=self.config['heartbeat_interval_ms']
+            for a,b in zip(replies,replies[1:])))
+        self.assertGreater(replies[-1][1]['encoder_a'],replies[0][1]['encoder_a'])
+        for at,state in replies:
+            samples=[row['motor'] for row in fine.progress
+                if row['motor'].get('_k230_received_ms')==at]
+            self.assertTrue(samples)
+            self.assertTrue(all(sample['ms']==state['ms'] and
+                sample['encoder_a']==state['encoder_a'] and sample['encoder_b']==state['encoder_b']
+                for sample in samples))
+        fresh=[row for row in self.observation_rows if row['completing']]
+        self.assertTrue(fresh)
+        self.assertTrue(all(row['motor_received']>=row['at'] for row in fresh))
         arm=[row for row in self.observation_rows if row['phase']=='arm']
         self.assertGreater(len(arm),3)
         self.assertLessEqual(max(b['at']-a['at'] for a,b in zip(arm,arm[1:])),110)
         self.assertTrue(any(row['motor_received']<row['at'] for row in arm))
         self.assertEqual(result['status'],'succeeded')
+
+    def test_pending_static_fine_has_no_capture_but_keeps_status_and_fresh_handoff(self):
+        self.fine_slices=80
+        while self.task.job is None:self.tick()
+        fine=self.task.job['session']
+        frame=self.frame
+        while self.task.job is not None:self.tick()
+        self.assertEqual(self.frame,frame)
+        self.assertFalse(self.arms)
+        self.assert_coarse_paused_during_fine()
+        replies=[(at,state) for command,at,state in self.motor.replies if command=='STATUS' and
+            fine.frame['capture_timestamp_ms']<at<fine.latest_ready_ms]
+        self.assertGreaterEqual(len(replies),2)
+        self.assertTrue(all(not state['run'] for at,state in replies))
+        self.assertTrue(all(b[0]-a[0]>=self.task.stationary_status_period
+            for a,b in zip(replies,replies[1:])))
+        self.tick()
+        self.assertGreater(self.frame,frame)
+        fresh=self.observation_rows[-1]
+        self.assertTrue(fresh['completing'])
+        self.assertGreaterEqual(fresh['motor_received'],fresh['at'])
 
     def test_stationary_background_deadline_uses_250ms_instead_of_100ms(self):
         while self.task.job is None:self.tick()
@@ -1063,13 +1162,47 @@ class RobotTrackingTests(unittest.TestCase):
         self.task._last_capture=self.clock.now()
         self.task._last_motor_reply=self.clock.now()-500
         self.task._fresh_before_arm=False
-        self.motor.a+=round(.2/self.config['mm_per_count'])
+        self.motor.a+=round(1.2/self.config['mm_per_count'])
         frame=self.frame
         self.task.step()
         self.assertEqual(self.frame,frame)
         self.assertEqual(len([event for event in arm.io.events if event[0]=='goals']),before_goals)
         self.assertEqual(len([event for event in arm.io.events if event[0]=='ready2']),1)
         self.assertEqual(arm.status,'recovering')
+
+    def test_passive_submillimetre_drift_during_grasp_does_not_retract_arm(self):
+        while not self.arms:self.tick()
+        self.tick()
+        arm=self.arms[0]
+        arm.pending_stage='descend'
+        self.task._last_capture=self.clock.now()
+        self.task._last_motor_reply=self.clock.now()-500
+        self.task._fresh_before_arm=False
+        self.motor.a+=40  # Later sample in the reported run: nominal0.292mm.
+        version=self.task.memory.version
+        self.task.step()
+        self.assertEqual(self.task.memory.version,version)
+        self.assertEqual(arm.status,'running')
+        self.assertFalse(any(event[0]=='ready2' for event in arm.io.events))
+
+    def test_grasp_motion_tolerance_is_cumulative_from_original_reference(self):
+        while not self.arms:self.tick()
+        self.tick()
+        original=dict(self.task._arm_motor_reference)
+        increment=round(.4/self.config['mm_per_count'])
+        for index in (1,2):
+            self.motor.a+=increment
+            self.task._command('STATUS')
+            self.task._check_chassis_reference()
+            self.assertEqual(self.task.memory.version,0)
+            self.assertEqual(self.task._arm_motor_reference,original)
+        self.motor.a+=increment
+        self.task._command('STATUS')
+        self.task._check_chassis_reference()
+        self.assertEqual(self.task.memory.version,1)
+        diagnostic=self.task.metrics['last_chassis_invalidation']
+        self.assertEqual(diagnostic['tolerance_mm'],1.)
+        self.assertGreater(abs(diagnostic['wheel_displacement_mm']['encoder_a']),1.)
 
     def test_initial_busy_far_motor_is_not_adopted_from_sync_or_first_status(self):
         for running_at_sync in (False,True):
