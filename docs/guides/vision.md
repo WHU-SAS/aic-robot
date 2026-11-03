@@ -43,7 +43,7 @@ PC单图入口、独立抓取及小车`observations.py`已接入该协议。部�
 
 ## 分步精定位与追踪候选
 
-已安装的追踪版`0d5e760691b3ba45`整车试验未通过并已STOP；以下同帧搜索提示、候选权限及异常诊断修复属于当前离线候选，尚未安装，不能当作现场通过。整车状态与成对固件要求见[全流程追踪](full-process-tracking.md)。
+上版`0d5e760691b3ba45`整车试验未通过并已STOP；以下同帧搜索提示、候选权限及异常诊断修复已随`c26879c5391f9f87`与配套MCU固件成对安装。文件回读、板端纯逻辑、零目标通信及重启监听核验通过，整车视觉与动作效果仍待实测。安装不等于现场通过，状态及固件要求见[全流程追踪](full-process-tracking.md)。
 
 `CooperativeStaticPickSession(config, clock_ms)`使用同一张JPEG95，`start(image, frame, bbox=None)`后每次`advance()`只解码或推进一个检测步骤。`phase=None`表示结束，只有已正常发布的`latest`是观测；`latest_ready_ms`是处理完成时间，不替换原采集时刻，相机仍由整车唯一持有。
 
