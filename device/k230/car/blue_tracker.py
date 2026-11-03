@@ -16,6 +16,9 @@ def age_ms(now, then):
 class BlueTracker:
     def __init__(self, config, projection):
         self.config, self.projection = config, projection
+        self._thresholds = [tuple(value) for value in config['lab_thresholds']]
+        width, height = config['image_size_px']
+        self._roi = (0, 0, width, height)
         self.previous = None
         # Navigation confirmation resets on a gap. Keep the short-lived
         # identity reference separately, so the next weak patch is not a new
@@ -98,20 +101,21 @@ class BlueTracker:
 
     def detect_frame(self, image, timestamp_ms):
         c = self.config; width, height = c['image_size_px']
-        blobs = image.find_blobs([tuple(v) for v in c['lab_thresholds']],
-            roi=(0, 0, width, height), pixels_threshold=c['min_pixels'],
+        blobs = image.find_blobs(self._thresholds,
+            roi=self._roi, pixels_threshold=c['min_pixels'],
             area_threshold=c['min_area_px2'], merge=False)
         candidates, rejected, cues = [], [], []
         for blob in blobs:
             bbox = list(blob.rect()); x, y, w, h = bbox
+            pixels = blob.pixels()
             reason = None
-            if min(w, h) < 3 or not 0 <= blob.pixels() <= w * h:
+            if min(w, h) < 3 or not 0 <= pixels <= w * h:
                 reason = 'invalid_or_tiny_blob'
             elif min(x, y) <= 1 or x + w >= width - 1 or y + h >= height - 1:
                 reason = 'clipped_blob'
             elif max(w / h, h / w) > c['max_aspect_ratio']:
                 reason = 'implausible_aspect_ratio'
-            elif blob.pixels() / (w * h) < c['min_fill_ratio']:
+            elif pixels / (w * h) < c['min_fill_ratio']:
                 reason = 'sparse_blob'
             geometry = None
             if reason is None:
@@ -132,7 +136,7 @@ class BlueTracker:
                 if y <= 1: edges.append('top')
                 if y+h >= height-1: edges.append('bottom')
                 cue = {'bbox_px': bbox, 'center_pixel': [float(blob.cx()), float(blob.cy())],
-                    'pixels': blob.pixels(), 'timestamp_ms': timestamp_ms,
+                    'pixels': pixels, 'timestamp_ms': timestamp_ms,
                     'edge_directions': edges, 'distance_valid': reason is None,
                     'measurement_reason': reason}
                 if reason is None:

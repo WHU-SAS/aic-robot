@@ -25,6 +25,7 @@ class TargetMemory:
         self.pixel_tolerance = task.get('movement_pixel_tolerance_px', 12)
         self.distance_fraction = task.get('movement_distance_fraction', .10)
         self.confirmation_frames = task.get('movement_confirmation_frames', 2)
+        self.acquisition_frames = task.get('candidate_confirmation_frames', self.confirmation_frames)
         self.track_width = config.get('track_width_mm',
             config.get('near_parking', {}).get('track_width_mm', 119.2))
         self.version = 0
@@ -458,7 +459,7 @@ class TargetMemory:
         self.last_seen = dict(observation)
         self._acquire_count = self._acquire_count+1 if same_visual else 1
         recovering = (arm_state or {}).get('status') == 'recovering'
-        if self._invalidated and self._acquire_count >= self.confirmation_frames and not recovering:
+        if self._invalidated and self._acquire_count >= self.acquisition_frames and not recovering:
             self._invalidated = False
             self._associated = True
             self._event = 'reappeared' if self._gap else 'acquired'

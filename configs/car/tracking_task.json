@@ -1,6 +1,8 @@
 {
   "schema": "aic.robot.tracking.v1",
   "enabled": true,
+  "candidate_confirmation_frames": 1,
+  "loss_confirmation_frames": 3,
   "period_ms": 100,
   "stationary_period_ms": 250,
   "stationary_status_period_ms": 500,

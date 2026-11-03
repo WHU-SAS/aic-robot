@@ -104,6 +104,10 @@ class TrackingReacquisitionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.config = build_bundle(tracking=True)[0]['car']
+        # These historical counterexamples explicitly exercise the configurable
+        # three-frame policy. Default one-frame behavior has its own suite.
+        cls.config['tracking']['confirmation_frames']=3
+        cls.config['tracking_task']['candidate_confirmation_frames']=3
 
     def setUp(self): self.chain = Chain(copy.deepcopy(self.config))
 

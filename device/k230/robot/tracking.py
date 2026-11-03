@@ -37,6 +37,8 @@ class TrackingTask:
         self.arm_context = None
         self.memory, self.drive = TargetMemory(projection, config), DriveController(projection, config)
         timing = config.get('tracking_task', {})
+        self.loss_confirmation_frames = timing.get('loss_confirmation_frames',
+            config['tracking'].get('confirmation_frames', 3))
         self.period = timing.get('period_ms', 100)
         self.stationary_period = timing.get('stationary_period_ms', 250)
         self.stationary_status_period = timing.get('stationary_status_period_ms', 500)
@@ -358,7 +360,7 @@ class TrackingTask:
             self.target['visible'] and self.target['associated'] or
             self.target.get('precise_candidate')) else 0)
         unsent_hover = self.arm is not None and self.arm.snapshot().get('pending_stage') == 'hover'
-        if (self._missing >= self.config['tracking'].get('confirmation_frames', 3) and
+        if (self._missing >= self.loss_confirmation_frames and
                 (self.planning is not None or unsent_hover)):
             # A brief gap preserves work. When the existing search policy is
             # due, drop only unsent work so its ownership cannot block searching.
@@ -372,6 +374,12 @@ class TrackingTask:
         return image, frame
 
     def _start_job(self, purpose, image, frame):
+        epoch = self.memory._epoch_start_stamp
+        if epoch is not None and age_ms(frame['capture_timestamp_ms'], epoch) <= 0:
+            # A version-changing frame cannot pass the original fine timestamp
+            # rule. Take a new frame first instead of computing a doomed pose.
+            self._force_observe = True
+            return
         fine_config = dict(self.config)
         fine_config['near_parking'] = dict(self.config['near_parking'],
             fine_budget_ms=self.config.get('tracking_task', {}).get('fine_budget_ms', 20))
@@ -546,7 +554,7 @@ class TrackingTask:
                 if (self.arm is None and self.planning is None and not self.state['run'] and self.job is None and
                         self.complete is None and (not event['anchor_valid'] or
                         self.drive.phase in ('settling', 'observing', 'observe')) and self._missing >=
-                        self.config['tracking'].get('confirmation_frames', 3)):
+                        self.loss_confirmation_frames):
                     event['search'] = True
                 eligible = self.complete if (self.target.get('target_valid') or
                                               self.target.get('precise_candidate')) else None

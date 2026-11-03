@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import Mock, mock_open, patch
 from host.project_paths import ROOT
 from tools.deploy.k230_robot import build_bundle
+from tools.deploy.k230_pick import encoded
 
 
 def board_app():
@@ -18,14 +19,28 @@ def board_app():
 
 
 class TrackingBundleTests(unittest.TestCase):
+    def test_tracking_configuration_is_compact_without_losing_any_fields(self):
+        config,files,unused=build_bundle(tracking=True)
+        self.assertEqual(json.loads(files['config.json']),config)
+        self.assertEqual(files['config.json'],(json.dumps(config,ensure_ascii=False,
+            sort_keys=True,separators=(',',':'))+'\n').encode())
+        self.assertLess(len(files['config.json']),len(encoded(config)))
+        legacy,legacy_files,unused=build_bundle()
+        self.assertEqual(legacy_files['config.json'],encoded(legacy))
+
     def test_candidate_has_full_runtime_with_no_counter_limit_or_calibration_change(self):
         baseline=build_bundle()
         config,files,manifest=build_bundle(tracking=True)
         expected=dict(baseline[0]['car'])
         expected['tracking_task']=json.loads((ROOT/'configs/car/tracking_task.json').read_text())
+        expected['tracking']=dict(expected['tracking'],confirmation_frames=1)
         self.assertEqual(config['car'],expected)
         self.assertEqual(config['arm'],baseline[0]['arm'])
         self.assertTrue(config['car']['tracking_task']['enabled'])
+        self.assertEqual(config['car']['tracking_task']['candidate_confirmation_frames'],1)
+        self.assertEqual(config['car']['tracking_task']['loss_confirmation_frames'],3)
+        self.assertEqual(config['car']['tracking_task']['movement_confirmation_frames'],2)
+        self.assertEqual(baseline[0]['car']['tracking']['confirmation_frames'],3)
         self.assertEqual(manifest['mode'],'continuous_tracking')
         self.assertTrue(manifest['continuous_observation'])
         self.assertTrue(manifest['requires_mspm0_signed_follow'])

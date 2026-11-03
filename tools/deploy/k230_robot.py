@@ -70,6 +70,8 @@ def build_bundle(pick_config=None, tracking=False):
         files[name] = data
     if tracking:
         car['tracking_task'] = json.loads((ROOT / 'configs/car/tracking_task.json').read_text())
+        car['tracking'] = dict(car['tracking'], confirmation_frames=
+            car['tracking_task']['candidate_confirmation_frames'])
         for name, path in (
                 ('target_memory.py', 'device/k230/car/target_memory.py'),
                 ('tracking_drive.py', 'device/k230/car/tracking_drive.py'),
@@ -77,7 +79,8 @@ def build_bundle(pick_config=None, tracking=False):
                 ('candidate_association.py', 'device/k230/vision/candidate_association.py'),
                 ('cooperative_static_session.py', 'device/k230/vision/cooperative_static_session.py')):
             files[name] = (ROOT / path).read_bytes()
-    files['config.json'] = encoded(config)
+    files['config.json'] = ((json.dumps(config, ensure_ascii=False, sort_keys=True,
+        separators=(',', ':'))+'\n').encode() if tracking else encoded(config))
     manifest = {'schema':'aic.robot.v1', 'trigger':'思达思达',
         'startup_motion':False, 'pc_runtime_required':False,
         'completion':'arm_stage_completed_with_encoder_grip_confirmation',
