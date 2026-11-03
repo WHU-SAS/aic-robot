@@ -47,9 +47,8 @@ class TrackingPreparationTests(unittest.TestCase):
         modules['app'].run_ready.assert_not_called()
         modules['app'].begin_from_observation_steps.assert_not_called()
         modules['ground_projection'].GroundProjection.assert_called_once()
-        modules['kinematics'].Geometry.assert_called_once_with(
-            config['arm']['model'],config['arm']['pick'],0)
-        self.assertIs(prepared['held_geometry'],modules['kinematics'].Geometry.return_value)
+        modules['kinematics'].Geometry.assert_not_called()
+        self.assertNotIn('held_geometry', prepared)
         self.assertEqual(prepared['prepare_ms'],0)
 
     def test_preparation_steps_leave_audio_turns_and_separate_elapsed_time(self):
@@ -77,8 +76,8 @@ class TrackingPreparationTests(unittest.TestCase):
                 clock.advance(160)  # A separate synthetic audio read between groups.
         self.assertEqual([event['stage'] for event in events[:-1]],
             ['vision_loaded','coarse_loaded','fine_loaded','control_loaded'])
-        self.assertEqual(events[-1]['prepared']['prepare_ms'],18)
-        self.assertEqual(events[-1]['prepared']['prepare_elapsed_ms'],658)
+        self.assertEqual(events[-1]['prepared']['prepare_ms'],7)
+        self.assertEqual(events[-1]['prepared']['prepare_elapsed_ms'],647)
         self.assertEqual(trace,[])
         modules['motor_link'].MotorLink.assert_not_called()
         modules['camera'].CameraSession.assert_not_called()
@@ -182,7 +181,7 @@ class TrackingPreparationTests(unittest.TestCase):
         self.assertEqual(tasks[0].metrics['fine_started'],0)
         self.assertEqual(tasks[1].metrics['fine_started'],1)
         modules['ground_projection'].GroundProjection.assert_called_once()
-        modules['kinematics'].Geometry.assert_called_once()
+        modules['kinematics'].Geometry.assert_not_called()
         modules['app'].begin_from_observation_steps.assert_not_called()
         camera.close.assert_not_called()
 

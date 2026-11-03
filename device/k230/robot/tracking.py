@@ -731,10 +731,41 @@ class TrackingTask:
         self._release_evidence(self.memory.version)
         return True
 
+    def _vision_paused_for_grip(self, state):
+        return bool(state and state.get('status') in ('running','succeeded') and
+                    state.get('phase') in ('close','lift','complete'))
+
+    def _arm_target_context(self, before):
+        """Snapshot existing revocation inputs, without acquiring new feedback."""
+        def fields(source, names):
+            source = source or {}
+            return {key:source.get(key) for key in names}
+        memory = self.memory.snapshot()
+        coarse = self.coarse or {}
+        motor_keys = ('encoder_a','encoder_b','run','ms','_k230_sent_ms','_k230_received_ms')
+        return dict(reason=memory.get('reason'),
+            old_target_version=before.get('target_version'),new_target_version=memory.get('version'),
+            target_valid=memory.get('target_valid'),phase=before.get('phase'),
+            movement_state=memory.get('movement_state'),confirmed_moved=memory.get('confirmed_moved'),
+            last_sample=before.get('last_sample'),
+            grip_confirmation=fields(before.get('grip_confirmation'),
+                ('axis','goal','position','delta_counts','threshold_counts','grasp_confirmed','sample_time_ms')),
+            vision_paused_for_grip=self._vision_paused_for_grip(before),
+            coarse=dict(frame_id=coarse.get('frame_id'),
+                capture_timestamp_ms=coarse.get('capture_timestamp_ms'),
+                visual_evidence=fields(coarse.get('visual_evidence'),
+                    ('timestamp_ms','visible','associated','ambiguous','candidate_count','reason',
+                     'bbox_px','center_pixel','pixels','distance_valid','navigation_confirmed',
+                     'cube_shape_compatible','edge_directions'))),
+            chassis=dict(reference=fields(self._arm_motor_reference,motor_keys),
+                current=fields(self.state,motor_keys),
+                last_invalidation=self.metrics.get('last_chassis_invalidation')))
+
     def _step_arm(self):
         if self.arm is None or self._fresh_before_arm:
             return
         before = self.arm.snapshot()
+        vision_paused = self._vision_paused_for_grip(before)
         if before['target_version'] == self.memory.version and before.get('target_valid', True):
             if before.get('pending_stage') == 'hover':
                 if (not self.target.get('associated') or not self.target.get('visible') or
@@ -752,14 +783,15 @@ class TrackingTask:
                 self.drive.restart_observation()
                 self._force_observe = True
                 return
-            if (self.target.get('movement_state') == 'suspected' and
+            if (not vision_paused and self.target.get('movement_state') == 'suspected' and
                     (before.get('pending_stage') is not None or before['phase'] == 'descend_lead')):
                 return
         dispatching_first = (before.get('pending_stage') == 'hover' and
             before['target_version'] == self.memory.version and before.get('target_valid', True))
-        allow_success = self.target.get('movement_state') != 'suspected'
+        allow_success = vision_paused or self.target.get('movement_state') != 'suspected'
         if before['target_version'] != self.memory.version or not before.get('target_valid', True):
-            state = self.arm.step(target_version=self.memory.version, allow_success=allow_success)
+            state = self.arm.step(target_version=self.memory.version, allow_success=allow_success,
+                target_context=self._arm_target_context(before) if before.get('status')=='running' else None)
         elif before.get('next_poll_in_ms', 0) <= 0:
             state = self.arm.step(target_version=self.memory.version, allow_success=allow_success)
         else:
@@ -830,6 +862,8 @@ class TrackingTask:
         if self.fault is not None:
             return self.snapshot()
         started = self.clock()
+        vision_paused = self._vision_paused_for_grip(
+            self.arm.snapshot() if self.arm is not None else None)
         if (self.state.get('run') and
                 ((self.drive._fine_request or {}).get('stopped_for_verification') or
                  self.drive._motion_hold) and
@@ -846,7 +880,7 @@ class TrackingTask:
             except Exception as exc:
                 self._fault('fine_motor_feedback',exc)
             return self.snapshot()
-        observed = self.job is None and (self._last_capture is None or self._fresh_before_arm or self._force_observe or
+        observed = not vision_paused and self.job is None and (self._last_capture is None or self._fresh_before_arm or self._force_observe or
                     (self.complete is not None and
                      not (self.decision or {}).get('precise_deferred')) or
                     age_ms(started, self._last_capture) >= self._observation_period())
@@ -1051,6 +1085,7 @@ class TrackingTask:
             'planning_pending':self.planning is not None, 'fine_pending':self.job is not None,
             'arm_started': self.metrics['arm_attempts'] > 0, 'arm_state': state,
             'parking': self.last_parking or (self.decision or {}).get('parking'),
+            'vision_paused_for_grip':self._vision_paused_for_grip(state),
             'grasp_confirmed': (state or {}).get('grasp_confirmed'),
             'grip_confirmation': (state or {}).get('grip_confirmation'),
             'physical_grasp_confirmed': False, 'fault_wait': self.fault,

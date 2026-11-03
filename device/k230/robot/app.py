@@ -104,7 +104,6 @@ def prepare_tracking_steps(config):
     yield {'stage':'fine_loaded','ms':duration}
     step_started = time.ticks_ms()
     from robot_tracking import TrackingTask, ReobserveRequired
-    from kinematics import Geometry
     duration = elapsed(time.ticks_ms(), step_started)
     work_ms += duration
     yield {'stage':'control_loaded','ms':duration}
@@ -112,8 +111,7 @@ def prepare_tracking_steps(config):
     model = config['car']['projection']
     projection = GroundProjection(model['K'], model['D'], model['T'], model['plane'],
         model.get('forward_axis_Base'), model.get('motion_origin_Base_mm'))
-    held_geometry = Geometry(config['arm']['model'], config['arm']['pick'], 0)
-    prepared = dict(arm=arm, projection=projection, held_geometry=held_geometry,
+    prepared = dict(arm=arm, projection=projection,
         MotorLink=MotorLink, CameraSession=CameraSession, BlueTracker=BlueTracker,
         TrackingTask=TrackingTask, ReobserveRequired=ReobserveRequired,
         FineSession=FineSession, StaticSession=CooperativeStaticPickSession,
@@ -146,7 +144,7 @@ def tracking_task(config, ready_dispatched=False, camera=None, prepared=None, wa
     preparation_done = time.ticks_ms()
     age_ms = prepared['age_ms']
     car = config['car']
-    projection, geometry = prepared['projection'], prepared['held_geometry']
+    projection = prepared['projection']
     tracker = prepared['BlueTracker'](car['tracking'], projection)
     owns_camera = camera is None
     if owns_camera:
@@ -165,18 +163,6 @@ def tracking_task(config, ready_dispatched=False, camera=None, prepared=None, wa
             except arm.PickPlanUnavailable as exc:
                 raise prepared['ReobserveRequired'](str(exc))
         return steps()
-    def held_context(state):
-        sample = state.get('last_sample') or {}
-        if (state.get('phase') not in ('lift', 'complete') or
-                state.get('grasp_confirmed') is not True or
-                sample.get('axes') != [1,2,3,4,5,6] or
-                not 0 <= age_ms(time.ticks_ms(), sample.get('timestamp_ms', -10000)) <=
-                2*car['tracking_task']['period_ms']):
-            return state
-        # This FK point is a broad visual association reference, never a new
-        # measured cube centre or parking/grasp authority.
-        midpoint = geometry.metrics(geometry.angles(sample['positions']))[0]
-        return dict(state, held_center_pixel=projection.base_to_pixel([p*1000 for p in midpoint]))
     try:
         link_started_at = time.ticks_ms()
         link = prepared['MotorLink']()
@@ -208,7 +194,6 @@ def tracking_task(config, ready_dispatched=False, camera=None, prepared=None, wa
             task_setup_ms=age_ms(time.ticks_ms(), entered_at))
         if wake_timing is not None:
             task.metrics['wake_timing'] = dict(wake_timing)
-        task.arm_context = held_context
         while task.status != 'succeeded':
             task.step()
             if task.status == 'succeeded' and fill_light is not None:
@@ -221,34 +206,38 @@ def tracking_task(config, ready_dispatched=False, camera=None, prepared=None, wa
         return result
     finally:
         try:
-            if fill_light is not None:
-                fill_light.off()
-        finally:
             try:
-                if task is not None:
-                    task.close()
+                if fill_light is not None:
+                    fill_light.off()
             finally:
                 try:
-                    if owns_camera:
-                        camera.close()
+                    if task is not None:
+                        task.close()
                 finally:
-                    if link is not None:
-                        link.close()
-        record = result or (task.snapshot() if task is not None else
-                            {'status':'tracking_initialization_interrupted'})
-        record.update(ready_pose2_goal_sent=True,ready_pose2_arrival_checked=False,
-            arm_started_scope='grasp_after_parking')
-        try:
-            record['evidence'] = archive(config, frames, record['status'])
-        except Exception as exc:
-            record['archive_error'] = str(exc)
-            emit('vision_archive_error', {'error':str(exc)})
-        frames.clear()
-        try:
-            with open('/sdcard/aic/robot/runs.jsonl','a') as stream:
-                stream.write(json.dumps(record)+'\n')
-        except OSError as exc:
-            emit('log_error',{'error':str(exc)})
+                    try:
+                        if owns_camera:
+                            camera.close()
+                    finally:
+                        if link is not None:
+                            link.close()
+        finally:
+            # An interrupt can arrive inside close(), not only the task loop.
+            # Persist this run before the same cleanup exception propagates.
+            record = result or (task.snapshot() if task is not None else
+                                {'status':'tracking_initialization_interrupted'})
+            record.update(ready_pose2_goal_sent=True,ready_pose2_arrival_checked=False,
+                arm_started_scope='grasp_after_parking')
+            try:
+                record['evidence'] = archive(config, frames, record['status'])
+            except Exception as exc:
+                record['archive_error'] = str(exc)
+                emit('vision_archive_error', {'error':str(exc)})
+            frames.clear()
+            try:
+                with open('/sdcard/aic/robot/runs.jsonl','a') as stream:
+                    stream.write(json.dumps(record)+'\n')
+            except OSError as exc:
+                emit('log_error',{'error':str(exc)})
 
 
 def dispatch(action, config, ready_dispatched=False, camera=None, prepared=None, wake_timing=None,

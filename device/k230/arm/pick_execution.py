@@ -8,6 +8,19 @@ recovery explicitly overwrites their goals with the approved ready pose2.
 _UNSET_TARGET_VERSION = object()
 
 
+def _diagnostic_copy(value):
+    """Detach JSON-like diagnostic data without importing board IO helpers."""
+    if isinstance(value, dict):
+        if any(type(key) is not str for key in value):
+            raise TypeError('Diagnostic context keys must be strings')
+        return {key: _diagnostic_copy(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_diagnostic_copy(item) for item in value]
+    if value is None or type(value) in (bool, int, float, str):
+        return value
+    raise TypeError('Unsupported diagnostic context value')
+
+
 class PickExecution:
     def __init__(self, plan, policy, io, target_version, clock_ms,
                  ticks_diff=None, emit=None):
@@ -49,6 +62,7 @@ class PickExecution:
         self.grasp_confirmed = None
         self._success_ready = False
         self.recovery_reason = None
+        self._recovery_target_context = None
         self.recovery_goal_sent_ms = None
         self._invalidated = False
         self._last_poll_ms = None
@@ -95,10 +109,13 @@ class PickExecution:
         self.recovery_goal_sent_ms = (result or {}).get('goal_sent_ticks_ms')
         if self.recovery_goal_sent_ms is None:
             self.recovery_goal_sent_ms = self.clock_ms()
-        self._event('recovery_goal_sent', {'reason': reason,
-                    'goal_sent_ticks_ms': self.recovery_goal_sent_ms,
-                    'observation_delay_ms': self.policy['recovery_observation_delay_ms'],
-                    'arrival_checked': False, 'gripper_opens': True})
+        details = {'reason': reason,
+                   'goal_sent_ticks_ms': self.recovery_goal_sent_ms,
+                   'observation_delay_ms': self.policy['recovery_observation_delay_ms'],
+                   'arrival_checked': False, 'gripper_opens': True}
+        if self._recovery_target_context is not None:
+            details['target_context'] = self._recovery_target_context
+        self._event('recovery_goal_sent', details)
 
     def _refresh_recovery(self, now):
         if (self.status == 'recovering' and self.recovery_goal_sent_ms is not None and
@@ -262,19 +279,30 @@ class PickExecution:
             self._event('stage_complete', {'name': 'lift'})
             self._event('pick_succeeded', {'grip_confirmation': dict(self.grip_confirmation)})
 
-    def step(self, target_version=_UNSET_TARGET_VERSION, allow_success=True):
+    def step(self, target_version=_UNSET_TARGET_VERSION, allow_success=True, target_context=None):
         """At most one dispatch/feedback turn; empty/lost grip dispatches recovery now.
 
         allow_success=False defers only final commit for pending task evidence;
         feedback and empty-grip recovery continue without changing thresholds.
         Failure is a reported arm fault for the task owner, not a new task-level
         give-up rule. No retries, camera actions, PID or torque-OFF writes occur.
+        target_context is diagnostic only: on a version mismatch or an existing
+        invalidation, snapshot its JSON-like dict into the existing recovery event;
+        never use it to decide IO.
         """
         now = self.clock_ms()
         self._refresh_recovery(now)
         if self.status != 'running':
             return self.snapshot()
-        if target_version is not _UNSET_TARGET_VERSION and target_version != self.target_version:
+        version_changed = (target_version is not _UNSET_TARGET_VERSION and
+                           target_version != self.target_version)
+        if (version_changed or self._invalidated) and isinstance(target_context, dict):
+            try:
+                self._recovery_target_context = _diagnostic_copy(target_context)
+            except Exception:
+                # Bad diagnostics cannot suppress the original recovery.
+                self._recovery_target_context = {'capture_error': 'context_not_json_compatible'}
+        if version_changed:
             self.invalidate_target('target_version_changed')
         try:
             if self._invalidated:

@@ -264,6 +264,13 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertTrue(gaps)
         self.assertLessEqual(max(gaps),limit)
 
+    def assert_no_observation_after_first_close(self):
+        closed_at=next(event[1] for event in self.arms[0].io.events
+            if event[0]=='goals' and event[2]==[1,2,3,4,5,6] and event[3]==PLAN['close'])
+        # A frame at the same fake-clock tick may precede the close dispatch.
+        self.assertFalse(any(row['at']>closed_at for row in self.observation_rows))
+        return closed_at
+
     def move_in_fine_callback(self,after_ticks=3,amount=40):
         advance=self.Fine.advance
         def move(session):
@@ -274,13 +281,14 @@ class RobotTrackingTests(unittest.TestCase):
                 self.moved_at=self.clock.now()
         self.Fine.advance=move
 
-    def test_normal_flow_pauses_coarse_for_fine_and_keeps_observing_grasp(self):
+    def test_normal_flow_observes_until_close_then_finishes_without_more_vision(self):
         result = self.finish()
         self.assertEqual(result['status'],'succeeded')
         self.assertEqual(len(self.arms),1)
         self.assert_coarse_paused_during_fine()
         self.assert_observation_cadence_outside_fine()
-        self.assertGreater(len([row for row in self.observation_rows if row['phase']=='arm']),3)
+        self.assertGreaterEqual(len([row for row in self.observation_rows if row['phase']=='arm']),2)
+        self.assert_no_observation_after_first_close()
         self.assertTrue(result['grasp_confirmed'])
         self.assertEqual(result['parking']['verification_observation']['frame_id'],
                          self.handoffs[0][1]['frame_id'])
@@ -599,13 +607,14 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertGreaterEqual(self.handoffs[1][0]-ready[0][1],500)
         self.assertEqual(result['metrics']['recoveries'],1)
 
-    def test_normal_held_object_image_motion_does_not_open_jaw(self):
+    def test_normal_held_object_is_not_observed_or_reopened_after_close(self):
         self.lift_changes = True
         self.finish()
+        self.assert_no_observation_after_first_close()
         self.assertFalse(any(e[0]=='ready2' for e in self.arms[0].io.events))
         self.assertEqual(self.task.metrics['target_changes'],0)
 
-    def test_closing_contact_moves_blue_region_before_five_stable_samples_without_reopening(self):
+    def test_closing_contact_vision_is_paused_while_five_grip_samples_still_complete(self):
         original=self.task.track
         contact_frames=[]
         def track(point,frame):
@@ -618,7 +627,9 @@ class RobotTrackingTests(unittest.TestCase):
             return result
         self.task.track=track
         result=self.finish()
-        self.assertGreaterEqual(len(contact_frames),2)
+        self.assertEqual(contact_frames,[])
+        self.assertGreaterEqual(sum(event[0]=='read' and event[2]==[6]
+            for event in self.arms[0].io.events),5)
         self.assertEqual(result['metrics']['target_changes'],0)
         self.assertEqual(result['metrics']['arm_attempts'],1)
         self.assertTrue(result['grasp_confirmed'])
@@ -627,17 +638,23 @@ class RobotTrackingTests(unittest.TestCase):
     def test_empty_grip_still_recovers_with_contact_visual_motion(self):
         self.empty_first=True
         original=self.task.track
+        closed_frames,recovery_frames=[],[]
         def track(point,frame):
             result=original(point,frame)
             if self.task.arm is not None and self.task.arm.phase=='close':
+                closed_frames.append(frame['frame_id'])
                 result['center_pixel'][0]+=40
                 result['bbox_px'][0]+=40
+            if self.task.arm is not None and self.task.arm.phase=='recovery':
+                recovery_frames.append(frame['frame_id'])
             return result
         self.task.track=track
         result=self.finish()
         self.assertEqual(len([e for e in self.arms[0].io.events if e[0]=='ready2']),1)
         self.assertEqual(result['metrics']['recoveries'],1)
         self.assertGreaterEqual(result['metrics']['arm_attempts'],2)
+        self.assertEqual(closed_frames,[])
+        self.assertTrue(recovery_frames)
 
     def test_successful_task_cleanup_preserves_grip_without_ready_or_open_goal(self):
         self.finish()
@@ -1142,7 +1159,8 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertTrue(fresh)
         self.assertTrue(all(row['motor_received']>=row['at'] for row in fresh))
         arm=[row for row in self.observation_rows if row['phase']=='arm']
-        self.assertGreater(len(arm),3)
+        self.assertGreaterEqual(len(arm),2)
+        self.assert_no_observation_after_first_close()
         self.assertLessEqual(max(b['at']-a['at'] for a,b in zip(arm,arm[1:])),110)
         self.assertTrue(any(row['motor_received']<row['at'] for row in arm))
         self.assertEqual(result['status'],'succeeded')
@@ -1311,7 +1329,7 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertFalse(self.handoffs)
         self.assertEqual(self.task.metrics['plans_cancelled'],1)
 
-    def test_pending_visual_suspicion_does_not_finish_before_next_evidence(self):
+    def test_closed_grip_ignores_stale_visual_suspicion_and_late_invalidation(self):
         while self.task.arm is None or self.task.arm._lift_stable_since is None:self.tick()
         engine=self.task.arm
         self.task.target['movement_state']='suspected'
@@ -1320,24 +1338,25 @@ class RobotTrackingTests(unittest.TestCase):
             self.clock.advance(50)
             self.task._step_arm()
         self.assertGreater(len(engine.io.events),before)
-        self.assertEqual(engine.status,'running')
+        self.assertEqual(engine.status,'succeeded')
         self.assertTrue(engine.snapshot()['success_ready'])
-        self.assertEqual(self.task.status,'running')
-        self.task.memory.invalidate('confirmed_outside_claw')
+        self.assertEqual(self.task.status,'succeeded')
+        self.assertFalse(any(e[0]=='ready2' for e in engine.io.events))
+        # Vision is paused, so this direct injection cannot occur in the real
+        # loop. A completed Task must not reopen if stale work arrives anyway.
+        self.task.memory.invalidate('synthetic_late_visual_invalidation')
         self.clock.advance(50)
-        self.task._step_arm()
-        self.assertTrue(any(e[0]=='ready2' for e in engine.io.events))
-        self.assertNotEqual(self.task.status,'succeeded')
+        self.task.step()
+        self.assertFalse(any(e[0]=='ready2' for e in engine.io.events))
+        self.assertEqual(self.task.status,'succeeded')
 
-    def test_resolved_suspicion_releases_success_without_an_extra_fixed_wait(self):
+    def test_closed_grip_success_does_not_wait_for_visual_resolution(self):
         while self.task.arm is None or self.task.arm._lift_stable_since is None:self.tick()
         self.task.target['movement_state']='suspected'
         for unused in range(4):
             self.clock.advance(50)
             self.task._step_arm()
-        self.task.target['movement_state']='holding'
-        self.clock.advance(50)
-        self.task._step_arm()
+        self.assertEqual(self.task.target['movement_state'],'suspected')
         self.assertEqual(self.task.status,'succeeded')
 
 
