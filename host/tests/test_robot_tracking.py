@@ -1102,7 +1102,10 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertGreater(len(moving),10)
         self.assertTrue(all(row['motor_received']>=row['at'] for row in moving))
         fine=self.created_fines[0]
-        replies=[(at,state) for command,at,state in self.motor.replies if command=='HB' and
+        # Pending-fine control can replace the original HB with one SPEED at
+        # the same renewal slot; every retained sample must still be real IO.
+        replies=[(at,state) for command,at,state in self.motor.replies
+            if command.split(',')[0] in ('HB','SPEED') and
             fine.frame['capture_timestamp_ms']<at<fine.latest_ready_ms]
         self.assertGreaterEqual(len(replies),2)
         self.assertTrue(all(state['run'] for at,state in replies))

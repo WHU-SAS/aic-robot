@@ -530,12 +530,55 @@ class DriveController:
             plan['heading_source'] = 'fine_with_paired_coarse_change'
         return plan
 
+    def pending_fine_motion(self, motor_state, now_ms):
+        """Propagate an owned approach while its original fine image computes.
+
+        No new visual authority is invented here. Existing distance/coast and
+        speed profiles still bound the remaining travel between camera frames.
+        The owner sends this intention instead of its ordinary heartbeat.
+        """
+        request = self._fine_request
+        if (request is not None and request['purpose']=='moving' and
+                request.get('stopped_for_verification') and motor_state.get('run')):
+            return dict(phase='settling',status='fine_distance_exhausted',command='STOP')
+        if (request is None or request['purpose']!='moving' or
+                self._active_action!='follow' or not motor_state.get('run') or
+                self._motion_hold or self._searching or self._search_inspecting):
+            return None
+        self._observe_motor(motor_state,now_ms)
+        if motor_state.get('result',0) not in (0,1):
+            self._motion_hold = 'motor_reply_rejected'
+            return dict(phase=self.phase,status='motion_wait',command='STOP',
+                        motion_wait_reason=self._motion_hold)
+        plan = (self._near_plan(None,now_ms) if self.anchor is not None else
+                self._coarse_prediction(None,now_ms,False))
+        if plan is not None:
+            if plan['status']!='follow':
+                request['stopped_for_verification'] = True
+                self._active_action = None
+                self.phase = 'settling'
+                return dict(phase=self.phase,status='fine_distance_exhausted',
+                            command='STOP',plan=plan)
+            return dict(phase='fine_moving',status='localizing_moving',plan=plan,
+                command='SPEED,%d,%d' % (plan['left_mm_s'],plan['right_mm_s']))
+        # A current direction without trustworthy range cannot supply forward
+        # travel. Retain the original bearing-only, zero-mean pointing mode.
+        bearing = (self._coarse_direction(request.get('coarse'),now_ms)
+                   if self._bearing_only else None)
+        turn = (int(max(-self.options.get('search_speed_mm_s',20),
+            min(self.options.get('search_speed_mm_s',20),
+                self.near['heading_gain_per_s']*math.radians(bearing)*
+                self.near['track_width_mm']/2))) if bearing is not None else 0)
+        return dict(phase='fine_moving',status='localizing_without_range',
+                    command='SPEED,%d,%d' % (-turn,turn))
+
     def _request(self, purpose, coarse, state, now, decision, pending):
         self.phase = 'fine_'+purpose
         if self._fine_request is None:
             if purpose == 'static' and not self._searching:
                 self._remember_near(now)
             self._fine_request = {'purpose': purpose, 'motor': dict(state),
+                'coarse':coarse,
                 'capture_timestamp_ms': (coarse or {}).get('capture_timestamp_ms', now),
                 'request_id': (self.version, self.fine_requests+1),
                 'stopped_at_ms': self.stopped_at_ms,
@@ -617,6 +660,12 @@ class DriveController:
         decision['precise_consumed'] = True
         self._fine_request = None
         if purpose == 'moving':
+            if request.get('stopped_for_verification'):
+                # A moving frame taken before this stop remains historical.
+                # Demand the normal NEW stopped verification before moving on.
+                decision['moving_fine_stopped'] = True
+                self.phase = 'settling'
+                return None
             try:
                 self._bind_anchor(observation, paired)
                 self.phase = 'following'

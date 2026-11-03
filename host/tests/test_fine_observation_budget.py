@@ -152,16 +152,19 @@ class FineObservationBudgetTests(unittest.TestCase):
                 fine=f.created_fines[0]
                 started,ready=scene.starts[0]['at'],fine.latest_ready_ms
                 summary=f.task.metrics['fine_observation_jobs'][0]
-                heartbeats=sum(command=='HB' and started<=at<ready
+                renewals=sum(command.split(',')[0] in ('HB','SPEED') and started<=at<ready
                     for at,command in f.motor.commands)
+                renewal_types={kind:sum(command.split(',')[0]==kind and started<=at<ready
+                    for at,command in f.motor.commands) for kind in ('HB','SPEED')}
                 other=[command for at,command in f.motor.commands
-                       if started<=at<ready and command!='HB']
+                       if started<=at<ready and command.split(',')[0] not in ('HB','SPEED')]
                 self.assertEqual(other,[])
                 pair.append(dict(ratio=ratio,wall_ms=ready-started,
                     fine_ms=summary['fine_compute_ms'],
                     coarse_ms=summary['observation_ms'],
                     observation_count=summary['observation_count'],
-                    hb_count=heartbeats,hb_ms=heartbeats*24))
+                    renewal_count=renewals,renewal_ms=renewals*24,
+                    renewal_types=renewal_types))
             pure,observed=pair
             self.assertEqual(pure['fine_ms'],observed['fine_ms'])
             self.assertEqual(pure['coarse_ms'],0)
@@ -173,27 +176,29 @@ class FineObservationBudgetTests(unittest.TestCase):
                 pure=pure,observed=observed,wall_delta_ms=delta,
                 wall_overhead_fraction=delta/pure['wall_ms'],
                 accounted_fraction=observed['coarse_ms']/observed['fine_ms'],
-                extra_hb_ms=observed['hb_ms']-pure['hb_ms'],
+                extra_renewal_ms=observed['renewal_ms']-pure['renewal_ms'],
                 remaining_delta_ms=delta-observed['coarse_ms']-
-                    (observed['hb_ms']-pure['hb_ms'])))
+                    (observed['renewal_ms']-pure['renewal_ms'])))
         return rows
 
-    def test_paired_synthetic_wall_benchmark_accounts_for_normal_24ms_heartbeat_cost(self):
+    def test_paired_synthetic_wall_benchmark_accounts_for_normal_24ms_renewal_cost(self):
         rows=self.synthetic_benchmark()
         self.assertEqual([row['coarse_cost_ms'] for row in rows],[20,40,50,60])
         for row in rows:
-            self.assertGreater(row['pure']['hb_count'],0)
-            self.assertGreater(row['observed']['hb_count'],0)
+            self.assertGreater(row['pure']['renewal_count'],0)
+            self.assertGreater(row['observed']['renewal_count'],0)
+            self.assertEqual(row['pure']['renewal_count'],sum(row['pure']['renewal_types'].values()))
+            self.assertEqual(row['observed']['renewal_count'],sum(row['observed']['renewal_types'].values()))
             self.assertGreaterEqual(row['wall_delta_ms'],0)
 
-    def test_heartbeat_phase_cost_is_visible_even_when_coarse_accounting_is_under_ten_percent(self):
+    def test_renewal_phase_cost_is_visible_even_when_coarse_accounting_is_under_ten_percent(self):
         row=self.synthetic_benchmark(costs=(60,),start_ms=20,slices=90)[0]
         self.assertLessEqual(row['accounted_fraction'],.1)
         self.assertEqual(row['remaining_delta_ms'],0)
-        self.assertEqual(row['wall_delta_ms'],row['observed']['coarse_ms']+row['extra_hb_ms'])
-        self.assertGreater(row['extra_hb_ms'],0)
-        # Current fixture:1820ms fine,175ms extra observation and one more24ms
-        # original HB;1988→2187ms is10.0101% wall overhead despite9.6154% C/F.
+        self.assertEqual(row['wall_delta_ms'],row['observed']['coarse_ms']+row['extra_renewal_ms'])
+        self.assertGreater(row['extra_renewal_ms'],0)
+        # One more original renewal slot costs24ms, whether it carries HB or
+        # the pending-fine SPEED. Include it in the paired wall-clock result.
         # Deliberately no <=10% wall assertion: this is the documented soft
         # budget boundary, not a native-call or whole-pipeline latency SLA.
 

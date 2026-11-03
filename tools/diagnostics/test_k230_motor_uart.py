@@ -19,6 +19,7 @@ from tools.diagnostics.replay_k230_car_tracker import restore_listener
 
 
 def stop_previous_script(link):
+    """Request one interrupt, then let the script's normal finally finish."""
     try:
         version, flags = link.capabilities()
     except TimeoutError:
@@ -26,10 +27,26 @@ def stop_previous_script(link):
         link.port.reset_input_buffer()
         version, flags = 0, 0
     status_command = 0xA4 if version == 2 else 0x87
-    link.command(0x06)
+    if version == 2:
+        link.command(status_command, 4)
+        running = struct.unpack('<I', link.read(4))[0] != 0
+        if running:
+            if flags & (1 << 9):
+                # Official v2 distinguishes overall busy (0xA4, including
+                # REPL) from the narrower IDE-script lifecycle (0x87):
+                # kendryte/canmv-vscode-extension, boardprotocol/v2.go.
+                link.command(0x87, 4)
+                ide_script = struct.unpack('<I', link.read(4))[0] != 0
+                if ide_script:
+                    link.command(0x06)
+                else:
+                    link.terminal_input(b'\x03')
+            else:
+                link.command(0x06)
+    else:
+        link.command(0x06)
     deadline = time.monotonic() + 12
     idle_since = None
-    interrupted = False
     while True:
         time.sleep(.1)
         link.output()
@@ -40,11 +57,8 @@ def stop_previous_script(link):
             if time.monotonic() - idle_since >= .6: return
         else:
             idle_since = None
-            # New firmware can report legacy SCRIPT_RUNNING=0 while a REPL
-            # listener is active; use its real status and interrupt that script.
-            if version == 2 and flags & (1 << 9) and not interrupted:
-                link.terminal_input(b'\x03')
-                interrupted = True
+            # Running can now mean archive/cleanup in finally. A second
+            # interrupt would abort that work and discard this run's evidence.
         if time.monotonic() > deadline:
             raise TimeoutError('Previous K230 script did not stop')
 

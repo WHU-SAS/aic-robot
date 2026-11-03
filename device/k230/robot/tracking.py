@@ -144,6 +144,9 @@ class TrackingTask:
 
     def idle_delay_ms(self):
         """Background calculation can use time before the next camera deadline."""
+        if self.state.get('run') and ((self.drive._fine_request or {}).get('stopped_for_verification') or
+                                     self.drive._motion_hold):
+            return 0
         if (self.fault is None and self.arm is None and
                 (self.job is not None or self.planning is not None) and
                 (self.target or {}).get('movement_state') != 'suspected'):
@@ -553,6 +556,18 @@ class TrackingTask:
             job['fine_compute_ms'] += age_ms(self.clock(),started)
         if error is not None:
             self._fault('fine_start',error)
+        else:
+            self._pending_fine_stop()
+
+    def _pending_fine_stop(self):
+        if (self.job is None or self.job['purpose']!='moving' or
+                not self.state.get('run')):
+            return False
+        decision = self.drive.pending_fine_motion(self.state,self.clock())
+        if decision is not None and decision['command']=='STOP':
+            self.decision = decision
+            return True
+        return False
 
     def _advance_job(self):
         if self.job is None:
@@ -568,6 +583,7 @@ class TrackingTask:
         if error is not None:
             self._fault('fine_compute',error)
             return
+        exhausted = self._pending_fine_stop()
         if not job['session'].phase:
             # A pending light frame never substitutes for the final fresh
             # coarse+STATUS handoff. Unbracketed feedback remains unknown.
@@ -601,6 +617,8 @@ class TrackingTask:
             self._save_job()
             self.job = None
         else:
+            if exhausted:
+                return True
             return self._light_fine_observation(job)
 
     def _match_fine(self, coarse, observation):
@@ -688,6 +706,10 @@ class TrackingTask:
         Hundreds of algebraic progress events should not each cost5ms of idle
         time. Stop at the next observation deadline or the soft work budget.
         """
+        if self._pending_fine_stop():
+            # JPEG/native work has just yielded with no remaining travel.
+            # Return to the original command slot before another solve/light.
+            return
         started = self.clock()
         budget = self.config.get('tracking_task', {}).get('fine_budget_ms', 20)
         progressed = False
@@ -718,6 +740,22 @@ class TrackingTask:
         if self.fault is not None:
             return self.snapshot()
         started = self.clock()
+        if (self.state.get('run') and
+                ((self.drive._fine_request or {}).get('stopped_for_verification') or
+                 self.drive._motion_hold) and
+                ((self.job is not None and self.job['purpose']=='moving') or
+                 (self.complete is not None and self.complete['purpose']=='moving'))):
+            # Consume a stop discovered at the last JPEG/native yield before
+            # any new solve, optional observation or final fresh camera check.
+            try:
+                self._command('STOP')
+                self._record('tracking_fine_motion_stop',dict(
+                    reason=(self.decision or {}).get('status'),
+                    frame_id=((self.job or self.complete).get('paired_coarse') or {}).get('frame_id'),
+                    plan=(self.decision or {}).get('plan'),motor_state=dict(self.state)))
+            except Exception as exc:
+                self._fault('fine_motor_feedback',exc)
+            return self.snapshot()
         observed = self.job is None and (self._last_capture is None or self._fresh_before_arm or self._force_observe or
                     (self.complete is not None and
                      not (self.decision or {}).get('precise_deferred')) or
@@ -797,7 +835,8 @@ class TrackingTask:
                         encoder_a=self.state.get('encoder_a'), encoder_b=self.state.get('encoder_b')))
                 if self.complete is not None and self.decision.get('precise_consumed'):
                     done = self.complete
-                    if done['observation'].get('target_association', {}).get('status') == 'matched':
+                    if (not self.decision.get('moving_fine_stopped') and
+                            done['observation'].get('target_association', {}).get('status') == 'matched'):
                         bound=self.memory.bind_precise(done['observation'], done['paired_coarse'],
                             done['target_version'], self.drive.odometry.since(
                                 done['observation'].get('capture_timestamp_ms', self.clock()),
@@ -862,7 +901,18 @@ class TrackingTask:
                         self._start_job(self.decision['request_fine'], image, frame)
         elif self.fault is None and self.job is not None and self.state.get('run'):
             try:
-                self._command('HB' if self.job['purpose']=='moving' else 'STOP')
+                command = 'STOP'
+                if self.job['purpose']=='moving':
+                    pending = self.drive.pending_fine_motion(self.state,self.clock())
+                    command = 'HB' if pending is None else pending['command']
+                    if pending is not None:
+                        self.decision = pending
+                    if (command.startswith('SPEED,') and self._motion_sent_at is not None and
+                            0 <= age_ms(self.clock(),self._motion_sent_at) < self.motion_refresh):
+                        # Reuse the original lease-refresh slots. A changed
+                        # speed replaces HB; exhausted travel stops immediately.
+                        command = 'HB'
+                self._command(command)
             except Exception as exc:
                 self._fault('fine_motor_feedback',exc)
         elif self.fault is None and self._status_due():
