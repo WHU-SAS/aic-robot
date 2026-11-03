@@ -87,6 +87,7 @@ class TrackingBundleTests(unittest.TestCase):
                             PickPlanUnavailable=ValueError)
         modules={
             'app':arm,'ground_projection':SimpleNamespace(GroundProjection=Mock()),
+            'vision':SimpleNamespace(),
             'camera':SimpleNamespace(CameraSession=Mock(return_value=camera)),
             'motor_link':SimpleNamespace(MotorLink=Mock(return_value=link)),
             'blue_tracker':SimpleNamespace(BlueTracker=Mock(),age_ms=lambda a,b:a-b),

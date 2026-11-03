@@ -17,8 +17,19 @@ class CameraSession:
         self.display_ready = False
         self.media_ready = False
         self.stopped = False
+        self._warmed = False
+        self._warmup_frames_done = 0
 
     def open(self):
+        """Original blocking open: stream setup and all exposure warmup."""
+        try:
+            return self.start().warmup()
+        except BaseException:
+            self.close()
+            raise
+
+    def start(self):
+        """Start the sole stream; the caller must finish warmup before use."""
         if CameraSession._owner is not None:
             raise RuntimeError('Camera already owned; reuse the active session')
         CameraSession._owner = self
@@ -37,15 +48,35 @@ class CameraSession:
             MediaManager.init()
             self.media_ready = True
             self.sensor.run()
-            sampling = self.config['sampling']
-            for _ in range(sampling['warmup_frames']):
-                os.exitpoint()
-                self.snapshot()
-                time.sleep_ms(sampling['warmup_delay_ms'])
+            self._warmed = False
+            self._warmup_frames_done = 0
             return self
         except BaseException:
             self.close()
             raise
+
+    def warmup(self):
+        """Preserve all frames/delays; a split-start owner handles rollback.
+
+        Do not tear down shared MediaManager here: an audio stream may now be
+        active. The caller closes audio before releasing this camera on error.
+        """
+        while not self.warmup_step():
+            pass
+        return self
+
+    def warmup_step(self):
+        """One original snapshot/delay; True only after every configured frame."""
+        if self._warmed:
+            return True
+        sampling = self.config['sampling']
+        if self._warmup_frames_done < sampling['warmup_frames']:
+            os.exitpoint()
+            self.snapshot()
+            time.sleep_ms(sampling['warmup_delay_ms'])
+            self._warmup_frames_done += 1
+        self._warmed = self._warmup_frames_done >= sampling['warmup_frames']
+        return self._warmed
 
     def snapshot(self):
         if CameraSession._owner is not self or self.stopped:
@@ -98,4 +129,6 @@ class CameraSession:
         finally:
             self.display_ready = False
             self.media_ready = False
+            self._warmed = False
+            self._warmup_frames_done = 0
             CameraSession._owner = None

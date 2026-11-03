@@ -1,6 +1,7 @@
 {
   "schema": "aic.robot.tracking.v1",
   "enabled": true,
+  "cold_start_audio_warmup_chunks": 32,
   "candidate_confirmation_frames": 1,
   "loss_confirmation_frames": 3,
   "period_ms": 100,

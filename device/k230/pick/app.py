@@ -4,12 +4,22 @@ commands, PID writes, automatic return, release or queued extra pick actions.
 """
 import os,gc,json,time,math
 from camera import CameraSession
-from vision import localize
 from vision_runtime import localize_precise
 import kinematics as _kinematics
 from kinematics import Geometry
 from control import run_pick_stage_direct,run_ready_direct
 from voice_commands import registered_commands,resolve_events
+
+
+def localize(*args,**kwargs):
+    # The tracking boot explicitly preloads this during audio warmup. Ready
+    # and voice imports alone need not load the complete OpenCV face pipeline.
+    from vision import localize as solve
+    return solve(*args,**kwargs)
+
+
+def preload_localization():
+    import vision
 
 
 class PickPlanUnavailable(ValueError):
@@ -36,7 +46,7 @@ def log(event,details=None,persist=True):
     except OSError as exc:print('LOG_ERROR '+str(exc))
 
 
-def wait_for_wake(config,warmup_chunks=32,on_command=None):
+def wait_for_wake(config,warmup_chunks=32,on_command=None,on_warmup=None):
     # Release this round's audio/KWS; a fresh engine avoids old audio/queued wakes.
     # Standalone opens the camera after return; tracking may keep it open.
     from wake_word import engine,CHUNK
@@ -56,9 +66,26 @@ def wait_for_wake(config,warmup_chunks=32,on_command=None):
         audio=PyAudio();stream=audio.open(format=paInt16,channels=1,rate=16000,
              input=True,frames_per_buffer=CHUNK)
         stream.volume(vol=volume)
-        # Full microphone warmup only on boot; resume has no discard delay.
-        for unused in range(warmup_chunks):os.exitpoint();stream.read()
-        eng.reset();log('voice_ready',{'words':[c['word'] for c in commands]})
+        # First discard a real microphone chunk, then let tracking prepare its
+        # already-running camera and pure modules while audio is accumulating.
+        # Keep the complete discard count. Queue depth/read blocking is native
+        # behavior, so measure wall time rather than assuming overlap savings.
+        warmup_started=time.ticks_ms();prepare_ms=0;read_ms=0;discarded=0;discarded_bytes=0
+        prepare_pending=on_warmup is not None
+        while discarded<warmup_chunks or prepare_pending:
+            os.exitpoint();started=time.ticks_ms();pcm=stream.read()
+            discarded+=1
+            discarded_bytes+=len(pcm) if pcm is not None else 0
+            read_ms+=time.ticks_diff(time.ticks_ms(),started)
+            if prepare_pending:
+                started=time.ticks_ms();prepare_pending=on_warmup() is False
+                prepare_ms+=time.ticks_diff(time.ticks_ms(),started)
+        eng.reset();log('voice_ready',{'words':[c['word'] for c in commands],
+            'configured_warmup_chunks':warmup_chunks,'warmup_chunks':discarded,
+            'configured_nominal_audio_ms':warmup_chunks*CHUNK*1000//16000,
+            'discarded_audio_bytes':discarded_bytes,'discarded_audio_ms':discarded_bytes*1000//32000,
+            'warmup_read_ms':read_ms,'startup_prepare_ms':prepare_ms,
+            'warmup_wall_ms':time.ticks_diff(time.ticks_ms(),warmup_started)})
         last_status=time.ticks_ms();chunks=0
         while True:
             os.exitpoint();pcm=stream.read()
@@ -440,11 +467,14 @@ def run_ready(config,pose=1,immediate=False):
 
 def make_wake_response(config):
     """Dispatch the selected ready target before voice cleanup; retain failures."""
-    response={'sent':False,'error':None}
+    response={'sent':False,'error':None,'recognized_at_ms':None,'ready_goal_sent_at_ms':None}
     def respond(action):
         if action not in ('pick','ready'):return
+        response['recognized_at_ms']=time.ticks_ms()
         try:
-            run_ready(config,pose=2 if action=='pick' else 1,immediate=True)
+            result=run_ready(config,pose=2 if action=='pick' else 1,immediate=True)
+            if isinstance(result,dict):
+                response['ready_goal_sent_at_ms']=result.get('goal_sent_ticks_ms')
             response['sent']=True
         except Exception as exc:
             # Let the listener release audio normally. Never start the task
@@ -454,6 +484,9 @@ def make_wake_response(config):
 
 
 def run_forever(root):
+    # Preserve standalone boot preparation. Tracking instead preloads this
+    # pipeline during its microphone warmup, before announcing voice_ready.
+    preload_localization()
     config=load(root)
     log('startup_waiting_for_wake',{'fixed_jaw_offset_mm':-config['pick']['cube_offset_toward_moving_finger_mm']})
     warmup_chunks=32

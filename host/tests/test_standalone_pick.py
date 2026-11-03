@@ -12,7 +12,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch,mock_open
+from unittest.mock import Mock,patch,mock_open
 from host.project_paths import ROOT
 from tools.deploy import k230_pick as deploy
 
@@ -116,7 +116,23 @@ class VoiceDispatchTests(unittest.TestCase):
                'control':SimpleNamespace(run_pick_stage_direct=None,run_ready_direct=None),
                'vision_runtime':__import__('device.k230.vision.runtime',fromlist=['localize_precise'])}
         with patch.dict(sys.modules,mocks):spec.loader.exec_module(module)
+        # These tests own orchestration/voice fixtures, not native OpenCV.
+        # Real lazy-preload behavior has separate boot lifecycle coverage.
+        module.preload_localization=Mock()
         return module
+
+    def test_standalone_preloads_localization_before_entering_voice_wait(self):
+        app=self.app();trace=[]
+        config={'pick':{'cube_offset_toward_moving_finger_mm':0},'voice':{}}
+        def wait(*args,**kwargs):
+            trace.append('voice_wait');raise KeyboardInterrupt()
+        with patch.object(app,'load',return_value=config),patch.object(app,'log'),\
+             patch.object(app,'preload_localization',side_effect=lambda:trace.append('preload')) as preload,\
+             patch.object(app,'wait_for_wake',side_effect=wait),patch.object(app,'run_once') as pick,\
+             patch.object(app,'run_ready') as ready:
+            with self.assertRaises(KeyboardInterrupt):app.run_forever('/fake')
+        preload.assert_called_once_with();pick.assert_not_called();ready.assert_not_called()
+        self.assertEqual(trace,['preload','voice_wait'])
     def test_log_serializes_once_and_reuses_identical_stdout_and_sd_text(self):
         app=self.app();details={'phase':'悬停','goals':[2048]*6}
         record={'event':'planned','ticks_ms':0,'details':details}
@@ -233,7 +249,7 @@ class VoiceDispatchTests(unittest.TestCase):
             pick.assert_not_called();log.assert_any_call('voice_failed','microphone unavailable')
 
     def test_audio_resources_close_before_wake_returns(self):
-        app=self.app();calls=[]
+        app=self.app();calls=[];clock={'ms':0,'reads':0}
         class Engine:
             def add_keyword(self,r):pass
             def reset(self):pass
@@ -244,7 +260,12 @@ class VoiceDispatchTests(unittest.TestCase):
             def terminate(self):calls.append('audio_closed')
         class Stream:
             def volume(self,**kw):pass
-            def read(self):return bytes(5120)
+            def read(self):
+                clock['reads']+=1
+                # Keep a persistent sample clock regardless of diagnostic
+                # ticks_ms calls; recognition wins even when heartbeat is due.
+                clock['ms']+=160 if clock['reads']<=32 else 5000
+                return bytes(5120)
             def stop_stream(self):calls.append('stream_stopped')
             def close(self):calls.append('stream_closed')
         with tempfile.TemporaryDirectory() as folder:
@@ -252,9 +273,10 @@ class VoiceDispatchTests(unittest.TestCase):
             with patch.dict(sys.modules,{'wake_word':SimpleNamespace(engine=lambda s:Engine(),CHUNK=2560),
                                          'media':SimpleNamespace(),'media.pyaudio':SimpleNamespace(PyAudio=Audio,paInt16=0)}),\
                  patch.object(app.os,'exitpoint',lambda:None,create=True),patch.object(app,'log') as log,\
-                 patch.object(app.time,'ticks_ms',side_effect=[0,5000]):
+                 patch.object(app.time,'ticks_ms',side_effect=lambda:clock['ms']):
                 event=app.wait_for_wake({'enrollment_file':str(file),'detection_sensitivity':'sensitive','wake_word':'思达思达'})
         self.assertEqual(event,'pick')
+        self.assertEqual(clock['reads'],33)
         self.assertNotIn('voice_listening',[call.args[0] for call in log.call_args_list])
         self.assertEqual(calls,['stream_stopped','stream_closed','audio_closed','engine_closed'])
 
@@ -439,7 +461,13 @@ class ReadyCommandTests(unittest.TestCase):
                     'media':SimpleNamespace(),'media.pyaudio':SimpleNamespace(PyAudio=Audio,paInt16=0)}),\
                  patch.object(app.os,'exitpoint',lambda:None,create=True),patch.object(app,'log') as log:
                 self.assertEqual(app.wait_for_wake(config,warmup_chunks=warmup_chunks),'ready')
-            log.assert_any_call('voice_ready',{'words':['思达思达','回准备位']})
+            ready=[call.args[1] for call in log.call_args_list if call.args[0]=='voice_ready']
+            self.assertEqual(len(ready),1)
+            self.assertEqual(ready[0]['words'],['思达思达','回准备位'])
+            self.assertEqual(ready[0]['warmup_chunks'],warmup_chunks)
+            self.assertEqual(ready[0]['configured_warmup_chunks'],warmup_chunks)
+            self.assertEqual(ready[0]['discarded_audio_bytes'],warmup_chunks*5120)
+            self.assertEqual(ready[0]['discarded_audio_ms'],warmup_chunks*160)
         self.assertEqual(added,['sida','ready']);self.assertEqual(closed,['stream','audio','engine'])
         self.assertEqual(len(reads),warmup_chunks+1)
 
