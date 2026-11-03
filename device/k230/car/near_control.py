@@ -151,6 +151,7 @@ def near_plan(observation, projection, workspace, config, now_ms,
         config['track_width_mm'], projection.normal, axis, origin)
     stopped = _geometry(coast, projection, workspace)
     target = target_x(workspace)
+    remaining = max(0, (point[0]-target)/forward_x_per_mm(projection))
     result = {'status': 'follow', 'frame_id': observation['frame_id'],
               'capture_timestamp_ms': observation['capture_timestamp_ms'],
               'image_age_ms': age, 'source_capture_age_ms': age,
@@ -159,6 +160,7 @@ def near_plan(observation, projection, workspace, config, now_ms,
               'odometry_predicted': propagated, 'raw_center_Base_mm': list(raw),
               'predicted_center_Base_mm': point, 'predicted_stop_center_Base_mm': coast,
               'target_Base_X_mm': target,
+              'remaining_mm': remaining,
               'predicted_stop_window': stopped['window'],
               'prediction_basis': 'nominal encoder integration; uncalibrated axle lever arm',
               'automatic_arm_action': False}
@@ -171,7 +173,7 @@ def near_plan(observation, projection, workspace, config, now_ms,
     if coast[0] <= target:
         result['status'] = 'stop_for_verification'
     else:
-        targets = wheel_targets(bearing, max(0, (point[0]-target)/forward_x_per_mm(projection)),
+        targets = wheel_targets(bearing, remaining,
                                 config, config['track_width_mm'])
         result.update(left_mm_s=int(targets['left_mm_s']+.5),
                       right_mm_s=int(targets['right_mm_s']+.5))

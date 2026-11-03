@@ -36,6 +36,11 @@ class Clock:
 
 
 class Motor:
+    """Protocol plant; optional MCU distance caps are ignored in this double.
+
+    Real autonomous endpoint behavior is covered by the native C bridge tests.
+    This fixture retains its original K230-driven motion model.
+    """
     def __init__(self, clock, scale):
         self.clock, self.scale, self.commands = clock, scale, []
         self.a = self.b = 0
@@ -64,7 +69,7 @@ class Motor:
         name = command.split(',')[0]
         if name in ('FOLLOW', 'SPEED'):
             self.run,self.reason = 1,0
-            self.left_speed,self.right_speed=map(float,command.split(',')[1:])
+            self.left_speed,self.right_speed=map(float,command.split(',')[1:3])
         if name == 'STOP': self.run,self.reason = 0,1
         if name == 'ARC':
             left,right = map(int,command.split(',')[1:])
@@ -77,6 +82,9 @@ class Motor:
         state = self.sync()
         self.replies.append((command,self.clock.now(),dict(state)))
         return state
+
+    def request(self, command):
+        return self.expect(command)
 
 
 PLAN = {'hover':[2000]*5+[2332], 'descend':[2100]*5+[2332],

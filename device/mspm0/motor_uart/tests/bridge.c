@@ -23,13 +23,30 @@ void bridge_tick(void)
     if (state.left_pwm) a += state.left_pwm > 0 ? 1 : -1;
     if (state.right_pwm) b -= state.right_pwm > 0 ? 1 : -1;
 }
+/* Native integration can supply an encoder plant while K230 is blocked. */
+void bridge_tick_counts(int32_t delta_a, int32_t delta_b)
+{
+    a=(int32_t)((uint32_t)a+(uint32_t)delta_a);
+    b=(int32_t)((uint32_t)b+(uint32_t)delta_b);
+    remote_step(&state,button);
+    follow_step(&follow,&state,(uint32_t)a,(uint32_t)b);
+    milliseconds+=10;
+}
+int bridge_follow_cap_active(void) { return state.follow_cap_active; }
+int bridge_follow_cap_completed(void) { return state.follow_cap_completed; }
+int bridge_running(void) { return state.running; }
+double bridge_reference_left(void) { return follow.reference_left; }
+double bridge_reference_right(void) { return follow.reference_right; }
 const char *bridge_feed(uint8_t byte)
 {
     if (!motor_feed(&parser, byte)) return "";
     static const char *const names[] = {"STATUS", "START", "STOP", "HB", "DRIVE", "MOVE", "TURN", "FOLLOW", "SPEED", "ARC"};
     MotorResult result = remote_request(&state, &parser);
-    if (parser.command == CMD_FOLLOW && result == RES_OK)
+    if (parser.command == CMD_FOLLOW && result == RES_OK && state.running)
         follow_begin(&follow, (uint32_t)a, (uint32_t)b);
+    if ((parser.command==CMD_FOLLOW || parser.command==CMD_SPEED) &&
+        parser.follow_bounded && result==RES_OK && state.running)
+        follow_set_limit(&follow,&state,(uint32_t)a,(uint32_t)b);
     char body[150];
     snprintf(body, sizeof(body), "R,%08X,%s,%u,%u,%u,%u,%d,%d,%u,%08X,2,%d,%d,%d,%d,%u",
         (unsigned)parser.sequence, names[parser.command], (unsigned)result,

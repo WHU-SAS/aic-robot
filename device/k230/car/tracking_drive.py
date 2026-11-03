@@ -257,7 +257,15 @@ class DriveController:
             return None
         try:
             plan = coarse_drive_plan(coarse, self.projection, self.config, now, self._speeds())
-            return plan if plan['status'] == 'follow' else None
+            if plan['status'] != 'follow':
+                return None
+            point = predict_center(coarse['ground_contact_proxy_Base_mm'],
+                self.odometry.since(coarse['capture_timestamp_ms'],now),
+                self.near['track_width_mm'],self.projection.normal,
+                self.projection.forward_axis_Base,self.projection.motion_origin_Base_mm)
+            plan['remaining_mm'] = max(0,(point[0]-target_x(self.config['workspace']))/
+                                      forward_x_per_mm(self.projection))
+            return plan
         except (ValueError, TypeError, KeyError):
             return None
 
@@ -488,14 +496,35 @@ class DriveController:
         coast = propagate(point, [(speeds['left_mm_s']*self.near['coast_s'],
                                     speeds['right_mm_s']*self.near['coast_s'])])
         destination = target_x(self.config['workspace'])
-        targets = wheel_targets(bearing, max(0, (point[0]-destination)/forward_x_per_mm(
-            self.projection)), self.near, self.near['track_width_mm'])
+        remaining = max(0, (point[0]-destination)/forward_x_per_mm(self.projection))
+        targets = wheel_targets(bearing, remaining, self.near, self.near['track_width_mm'])
         return {'status': 'follow' if coast[0] > destination else 'stop_for_observation',
             'mode': 'coarse_prediction', 'heading_source': source,
             'capture_timestamp_ms': reference['capture_timestamp_ms'],
             'coarse_Base_X_mm': point[0], 'predicted_bearing_deg': bearing,
+            'remaining_mm': remaining,
             'left_mm_s': int(targets['left_mm_s']+.5),
             'right_mm_s': int(targets['right_mm_s']+.5)}
+
+    def _follow_command(self, name, plan):
+        command = '%s,%d,%d' % (name,plan['left_mm_s'],plan['right_mm_s'])
+        if 'remaining_mm' in plan:
+            # This is uncoasted nominal forward travel. The paired MCU applies
+            # the existing speed curve/coast every10ms while Python computes.
+            command += ',%d' % int(max(0,plan['remaining_mm'])+.5)
+        return command
+
+    def bounded_follow_completed(self, state, now):
+        """Latch an ACKed owned endpoint; a moving image stays historical."""
+        self._observe_motor(state,now)
+        request = self._fine_request
+        if request is not None and request['purpose']=='moving':
+            request['stopped_for_verification'] = True
+            self.anchor = self.parking = self._paired_point = None
+            self.phase = 'settling'
+        else:
+            self.restart_observation()
+        self._active_action = None
 
     def _bind_anchor(self, observation, paired):
         distance_anchor(observation)
@@ -560,7 +589,7 @@ class DriveController:
                 return dict(phase=self.phase,status='fine_distance_exhausted',
                             command='STOP',plan=plan)
             return dict(phase='fine_moving',status='localizing_moving',plan=plan,
-                command='SPEED,%d,%d' % (plan['left_mm_s'],plan['right_mm_s']))
+                command=self._follow_command('SPEED',plan))
         # A current direction without trustworthy range cannot supply forward
         # travel. Retain the original bearing-only, zero-mean pointing mode.
         bearing = (self._coarse_direction(request.get('coarse'),now_ms)
@@ -1207,8 +1236,7 @@ class DriveController:
             if coarse_plan is None or coarse_plan['coarse_Base_X_mm'] <= self.near['capture_Base_X_mm']:
                 return finish('STOP' if running else None, 'reacquiring')
             name = 'SPEED' if running else 'FOLLOW'
-            return finish('%s,%d,%d' % (name, coarse_plan['left_mm_s'],
-                                       coarse_plan['right_mm_s']), 'reacquiring')
+            return finish(self._follow_command(name,coarse_plan), 'reacquiring')
         if (self._near_recovery is None and self.anchor is None and coarse_plan is None and
                 visible and not fine_pending and
                 evidence.get('reason') == 'clipped_blob'):
@@ -1246,7 +1274,7 @@ class DriveController:
                 return finish('STOP' if running else None, 'settling')
             self.phase = 'following'
             name = 'SPEED' if running else 'FOLLOW'
-            return finish('%s,%d,%d' % (name, plan['left_mm_s'], plan['right_mm_s']))
+            return finish(self._follow_command(name,plan))
         if coarse_plan is None:
             if visible and evidence.get('distance_valid') is True:
                 self.phase = 'observing'
@@ -1288,4 +1316,4 @@ class DriveController:
             self._request('moving', coarse, state, now_ms, decision, fine_pending)
         self.phase = 'fine_moving' if self._fine_request else 'following'
         name = 'SPEED' if running else 'FOLLOW'
-        return finish('%s,%d,%d' % (name, coarse_plan['left_mm_s'], coarse_plan['right_mm_s']))
+        return finish(self._follow_command(name,coarse_plan))

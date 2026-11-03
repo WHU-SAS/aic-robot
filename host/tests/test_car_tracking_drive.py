@@ -103,6 +103,32 @@ class TrackingDriveTests(unittest.TestCase):
         self.update(now,x)
         return self.update(now+50,x)
 
+    def assert_bounded_follow(self, result, name, left=None, right=None):
+        """Wheel targets plus raw travel to the inset-window quarter point."""
+        fields=result['command'].split(',')
+        self.assertEqual(fields[0],name)
+        self.assertEqual(len(fields),4,result)
+        actual_left,actual_right,distance=map(int,fields[1:])
+        if left is not None:self.assertEqual(actual_left,left)
+        if right is not None:self.assertEqual(actual_right,right)
+        self.assertTrue(0<=actual_left<=80 and 0<=actual_right<=80)
+        plan=result['plan']
+        x=(plan['predicted_center_Base_mm'][0] if 'predicted_center_Base_mm' in plan
+           else plan['coarse_Base_X_mm'])
+        near,far=bounds_mm(self.workspace)['Base_X_mm']
+        destination=near+(far-near)/4
+        self.assertAlmostEqual(destination,250.32437432138943)
+        normal=self.projection.normal
+        axis=self.projection.forward_axis_Base
+        along=sum(a*b for a,b in zip(axis,normal))
+        forward=[axis[k]-along*normal[k] for k in range(3)]
+        x_per_mm=forward[0]/math.sqrt(sum(value*value for value in forward))
+        expected=max(0,(x-destination)/x_per_mm)
+        # Compare to the current geometric point, not predicted_stop/coast,
+        # coarse handoff317mm or the fine-trigger470mm threshold.
+        self.assertAlmostEqual(distance,expected,delta=.500001)
+        return actual_left,actual_right,distance
+
     def failed_static_after_late_moving_fine(self, bottom=False, moving_point=None):
         """Incident ordering with retained frame-21 geometry, synthetic replies.
 
@@ -174,6 +200,30 @@ class TrackingDriveTests(unittest.TestCase):
         self.assertEqual(result['phase'],'following')
         self.assertFalse(result['allow_arm'])
 
+    def test_near_static_start_atomically_carries_the_finite_remaining_distance(self):
+        x=self.target+80
+        self.request_static(x=x)
+        result=self.update(1150,x,precise=self.precise(1050,x))
+        left,right,distance=self.assert_bounded_follow(result,'FOLLOW',70,70)
+        self.assertEqual((left,right,distance),(70,70,80))
+        self.assertEqual(result['phase'],'following')
+        self.assertTrue(result['precise_consumed'])
+        self.assertIsNone(result['request_fine'])
+        self.assertFalse(result['allow_arm'])
+
+    def test_known_far_retarget_replaces_the_old_endpoint_without_stopping(self):
+        self.update(1000)
+        near=self.update(1100,450,run=True)
+        old_distance=self.assert_bounded_follow(near,'SPEED',70,70)[2]
+        result=self.update(1200,900,run=True,travel=7,target_version=2,
+            precise=self.precise(1100,400,'moving',version=1))
+        distance=self.assert_bounded_follow(result,'SPEED',70,70)[2]
+        self.assertAlmostEqual(distance-old_distance,900-450,delta=1)
+        self.assertEqual(result['phase'],'following')
+        self.assertIsNone(result['request_fine'])
+        self.assertIsNone(self.drive.anchor)
+        self.assertFalse(result['allow_arm'])
+
     def test_stopped_recheck_with_forward_gap_resumes_the_continuous_curve(self):
         self.update(1000)
         self.update(1100,450,run=True)
@@ -189,7 +239,7 @@ class TrackingDriveTests(unittest.TestCase):
         # stopped early. The new real image, not that old prediction, owns it.
         result=self.update(1550,self.target+80,travel=160,reason=1,
             precise=self.precise(1450,self.target+80))
-        self.assertEqual(result['command'],'FOLLOW,70,70')
+        self.assert_bounded_follow(result,'FOLLOW',70,70)
         self.assertEqual(result['corrections'],1)
         self.assertFalse(result['allow_arm'])
 
@@ -231,7 +281,7 @@ class TrackingDriveTests(unittest.TestCase):
                 fields=command.split(',');name=fields[0]
                 self.assertIn(name,('FOLLOW','SPEED','STOP'),result)
                 if name in ('FOLLOW','SPEED'):
-                    desired=tuple(map(int,fields[1:]));running=True;reason=0
+                    desired=self.assert_bounded_follow(result,name)[:2];running=True;reason=0
                     if point[0]-self.target>36:
                         self.assertAlmostEqual(sum(desired)/2,70,delta=1)
                         cruise_samples+=1
@@ -295,11 +345,11 @@ class TrackingDriveTests(unittest.TestCase):
         self.update(1000)
         result = self.update(1100,450,run=True)
         self.assertEqual(result['request_fine'],'moving')
-        self.assertEqual(result['command'],'SPEED,70,70')
+        self.assert_bounded_follow(result,'SPEED',70,70)
         result = self.update(1200,443,run=True,travel=7,
                              precise=self.precise(1100,400,'moving'))
         self.assertEqual(result['plan']['heading_source'],'fine_with_paired_coarse_change')
-        self.assertEqual(result['command'],'SPEED,70,70')
+        self.assert_bounded_follow(result,'SPEED',70,70)
         self.assertAlmostEqual(result['plan']['predicted_center_Base_mm'][0],393,delta=.1)
 
     def test_reliable_distance_survives_unknown_visibility_until_stop(self):
@@ -307,7 +357,7 @@ class TrackingDriveTests(unittest.TestCase):
         self.update(1100,450,run=True)
         self.update(1200,443,run=True,travel=7,precise=self.precise(1100,400,'moving'))
         result = self.update(1300,run=True,travel=14,coarse=self.missing(1300))
-        self.assertEqual(result['command'],'SPEED,70,70')
+        self.assert_bounded_follow(result,'SPEED',70,70)
         self.assertEqual(result['plan']['heading_source'],'fine_odometry')
         result = self.update(1400,run=True,travel=151,coarse=self.missing(1400))
         self.assertEqual(result['command'],'STOP')
@@ -319,7 +369,7 @@ class TrackingDriveTests(unittest.TestCase):
         result = self.update(1200,650,run=True,travel=7,target_version=2,
             precise=self.precise(1100,250,'moving',version=1))
         self.assertIsNone(self.drive.anchor)
-        self.assertEqual(result['command'],'SPEED,70,70')
+        self.assert_bounded_follow(result,'SPEED',70,70)
         self.assertFalse(result['allow_arm'])
 
     def test_changed_visible_target_inside_fine_region_remeasures_without_stopping(self):
@@ -327,7 +377,7 @@ class TrackingDriveTests(unittest.TestCase):
         self.update(1100,450,run=True)
         result=self.update(1200,300,run=True,travel=7,target_version=2,
             precise=self.precise(1100,400,'moving',version=1))
-        self.assertEqual(result['command'],'SPEED,70,70')
+        self.assert_bounded_follow(result,'SPEED',70,70)
         self.assertEqual(result['request_fine'],'moving')
         self.assertNotEqual(result['phase'],'settling')
         self.assertIsNone(self.drive.anchor)
@@ -439,7 +489,7 @@ class TrackingDriveTests(unittest.TestCase):
         result=self.update(1200,443,run=True,travel=7,
             coarse=self.coarse(1200,443,offset=20),precise=precise)
         self.assertLess(abs(result['plan']['steering_bearing_deg']),.1)
-        self.assertEqual(result['command'],'SPEED,70,70')
+        self.assert_bounded_follow(result,'SPEED',70,70)
 
     def test_new_static_complete_frame_is_only_parking_authority(self):
         self.request_static()
@@ -604,12 +654,12 @@ class TrackingDriveTests(unittest.TestCase):
     def test_unknown_coarse_before_fine_keeps_its_encoder_propagated_course(self):
         self.update(1000)
         result=self.update(1100,run=True,travel=7,coarse=self.missing(1100))
-        self.assertEqual(result['command'],'SPEED,70,70')
+        self.assert_bounded_follow(result,'SPEED',70,70)
         self.assertEqual(result['plan']['mode'],'coarse_prediction')
         self.assertLess(result['plan']['coarse_Base_X_mm'],650)
         self.assertFalse(result['allow_arm'])
         result=self.update(1200,636,run=True,travel=14)
-        self.assertEqual(result['command'],'SPEED,70,70')
+        self.assert_bounded_follow(result,'SPEED',70,70)
         self.assertEqual(result['plan']['mode'],'coarse')
 
     def test_visible_invalid_geometry_keeps_current_pixel_steering_and_prior_range(self):
@@ -622,7 +672,7 @@ class TrackingDriveTests(unittest.TestCase):
         result=self.update(1100,run=True,travel=7,coarse=cue)
         self.assertTrue(result['command'].startswith('SPEED,'),result)
         self.assertEqual(result['plan']['heading_source'],'current_coarse_pixel')
-        left,right=map(int,result['command'].split(',')[1:])
+        left,right,unused=self.assert_bounded_follow(result,'SPEED')
         self.assertNotEqual(left,right)
         self.assertAlmostEqual((left+right)/2,70,delta=4)
         self.assertFalse(result['allow_arm'])
@@ -665,14 +715,14 @@ class TrackingDriveTests(unittest.TestCase):
         failed=self.precise(1100,400,'moving',status='no_complete_face')
         result=self.update(1200,443,run=True,travel=7,precise=failed)
         self.assertTrue(result['precise_consumed'])
-        self.assertEqual(result['command'],'SPEED,70,70')
+        self.assert_bounded_follow(result,'SPEED',70,70)
         self.assertIsNone(result['request_fine'])
         result=self.update(1300,436,run=True,travel=14)
-        self.assertEqual(result['command'],'SPEED,70,70')
+        self.assert_bounded_follow(result,'SPEED',70,70)
         self.assertEqual(result['request_fine'],'moving')
         request=self.drive._fine_request['request_id']
         result=self.update(1400,run=True,travel=21,coarse=self.missing(1400),fine_pending=True)
-        self.assertEqual(result['command'],'SPEED,70,70')
+        self.assert_bounded_follow(result,'SPEED',70,70)
         self.assertIsNone(result['request_fine'])
         self.assertEqual(self.drive._fine_request['request_id'],request)
 
@@ -1614,7 +1664,7 @@ class TrackingDriveTests(unittest.TestCase):
             cue[key]=candidate_b[key]
         result=self.update(1000,coarse=cue)
         self.assertTrue(result['command'].startswith('FOLLOW,'),result)
-        left,right=map(int,result['command'].split(',')[1:])
+        left,right,unused=self.assert_bounded_follow(result,'FOLLOW')
         self.assertLess(left,right)
         self.assertEqual(self.drive._coarse_reference['point'],
                          cue['visual_evidence']['ground_contact_proxy_Base_mm'])
@@ -1628,7 +1678,7 @@ class TrackingDriveTests(unittest.TestCase):
             result=self.update(now,coarse=cue)
             self.assertIsNone(result['request_fine'])
             if count<3:self.assertIsNone(result['command'])
-            else:self.assertEqual(result['command'],'FOLLOW,70,70')
+            else:self.assert_bounded_follow(result,'FOLLOW',70,70)
 
     def test_canonical_normalization_preserves_failed_coarse_status(self):
         for status in ('lost','no_target'):
@@ -1804,7 +1854,7 @@ class TrackingDriveTests(unittest.TestCase):
         self.update(1150,x,precise=self.precise(1050,x))
         self.update(6150,x,travel=-2,right=-3,reason=3)
         result=self.update(6250,650,travel=-2,right=-3,reason=3,target_version=2)
-        self.assertEqual(result['command'],'FOLLOW,70,70')
+        self.assert_bounded_follow(result,'FOLLOW',70,70)
         self.assertEqual(result['arc_timeouts'],1)
         self.assertFalse(result['allow_arm'])
         self.assertIsNone(self.drive.anchor)
@@ -1907,7 +1957,7 @@ class TrackingDriveTests(unittest.TestCase):
             if command:
                 pieces=command.split(',');name=pieces[0]
                 if name in ('FOLLOW','SPEED'):
-                    desired=tuple(map(int,pieces[1:]));running=True;reason=0
+                    desired=self.assert_bounded_follow(result,name)[:2];running=True;reason=0
                 elif name=='STOP':
                     desired=(0,0);running=False;reason=1;stopped_ms=0
                 elif name=='ARC':

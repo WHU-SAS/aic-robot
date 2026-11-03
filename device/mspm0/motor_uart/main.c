@@ -131,8 +131,11 @@ static void respond(const MotorParser *request)
             request->arc_left_mm, request->arc_right_mm);
     if (request->command == CMD_TURN && result == RES_OK)
         turn_begin(&turn, encoder_a_total, encoder_b_total);
-    if (request->command == CMD_FOLLOW && result == RES_OK)
+    if (request->command == CMD_FOLLOW && result == RES_OK && control.running)
         follow_begin(&follow, encoder_a_total, encoder_b_total);
+    if ((request->command == CMD_FOLLOW || request->command == CMD_SPEED) &&
+        request->follow_bounded && result == RES_OK && control.running)
+        follow_set_limit(&follow, &control, encoder_a_total, encoder_b_total);
     motor_output(control.running, control.left_pwm, control.right_pwm); /* STOP before ACK. */
     snapshot = control;
     ms = elapsed_ms; a = encoder_a_total; b = encoder_b_total;

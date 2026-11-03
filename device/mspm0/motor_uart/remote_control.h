@@ -25,6 +25,8 @@ typedef struct {
     bool reverse_move, last_reverse_move;
     int16_t angle_deg, last_angle_deg;
     int16_t left_speed, right_speed, last_left_speed, last_right_speed;
+    bool follow_cap_active, follow_cap_completed, last_follow_bounded;
+    uint16_t follow_remaining_mm, last_follow_remaining_mm;
     int16_t arc_left_mm, arc_right_mm, last_arc_left_mm, last_arc_right_mm;
 } RemoteControl;
 
@@ -35,6 +37,7 @@ static inline uint16_t remote_magnitude(int16_t value)
 
 static inline void remote_stop(RemoteControl *s, uint8_t reason)
 {
+    bool cap_completed = reason == 6 && s->follow_cap_active;
     s->running = false;
     s->pwm = 0;
     s->left_pwm = s->right_pwm = s->target_left = s->target_right = 0;
@@ -45,6 +48,9 @@ static inline void remote_stop(RemoteControl *s, uint8_t reason)
     s->arc_mode = false;
     s->arc_left_mm = s->arc_right_mm = 0;
     s->left_speed = s->right_speed = 0;
+    s->follow_cap_active = false;
+    s->follow_cap_completed = cap_completed;
+    s->follow_remaining_mm = 0;
     s->stop_reason = reason;
 }
 static inline MotorResult remote_request(RemoteControl *s, const MotorParser *request)
@@ -56,7 +62,8 @@ static inline MotorResult remote_request(RemoteControl *s, const MotorParser *re
         !request->duration_ticks || request->duration_ticks > REMOTE_RUN_TICKS)) return RES_INVALID;
     if ((cmd == CMD_FOLLOW || cmd == CMD_SPEED) &&
         (remote_magnitude(request->left_speed) > 80 ||
-         remote_magnitude(request->right_speed) > 80)) return RES_INVALID;
+         remote_magnitude(request->right_speed) > 80 ||
+         (request->follow_bounded && (request->left_speed < 0 || request->right_speed < 0)))) return RES_INVALID;
     if (cmd == CMD_STATUS) return RES_OK; /* Does not renew the run lease. */
     if (s->has_sequence && (int32_t)(sequence - s->last_sequence) <= 0) {
         /* Even a delayed STOP removes drive. Never restart or renew on replay. */
@@ -70,7 +77,9 @@ static inline MotorResult remote_request(RemoteControl *s, const MotorParser *re
         if (cmd == CMD_ARC) same = same && request->arc_left_mm == s->last_arc_left_mm &&
             request->arc_right_mm == s->last_arc_right_mm;
         if (cmd == CMD_FOLLOW || cmd == CMD_SPEED) same = same &&
-            request->left_speed == s->last_left_speed && request->right_speed == s->last_right_speed;
+            request->left_speed == s->last_left_speed && request->right_speed == s->last_right_speed &&
+            request->follow_bounded == s->last_follow_bounded &&
+            request->follow_remaining_mm == s->last_follow_remaining_mm;
         return same ? RES_DUPLICATE : RES_STALE;
     }
     s->has_sequence = true;
@@ -82,14 +91,25 @@ static inline MotorResult remote_request(RemoteControl *s, const MotorParser *re
     s->last_reverse_move = request->reverse_move;
     s->last_angle_deg = request->angle_deg;
     s->last_left_speed = request->left_speed; s->last_right_speed = request->right_speed;
+    s->last_follow_bounded = request->follow_bounded;
+    s->last_follow_remaining_mm = request->follow_remaining_mm;
     s->last_arc_left_mm = request->arc_left_mm; s->last_arc_right_mm = request->arc_right_mm;
-    if (cmd == CMD_STOP) remote_stop(s, 1);
+    if (cmd == CMD_SPEED && !s->running && s->follow_cap_completed && request->follow_bounded)
+        return RES_OK; /* A completed cap ACKs updates without restarting. */
+    if ((cmd == CMD_FOLLOW || cmd == CMD_SPEED) && request->follow_bounded &&
+        !s->running && !request->follow_remaining_mm && !request->left_speed && !request->right_speed) {
+        /* Capability query never creates a completed running cap. */
+        remote_stop(s, 6);
+    } else if (cmd == CMD_STOP) remote_stop(s, 1);
     else if (cmd == CMD_HEARTBEAT) {
         if (s->running) s->lease_ticks = 0;
     } else if (cmd == CMD_SPEED) {
         /* An update never starts or restarts a stopped task. */
         if (!s->running || !s->follow_mode) return RES_BUSY;
         s->left_speed = request->left_speed; s->right_speed = request->right_speed;
+        s->follow_cap_active = request->follow_bounded;
+        s->follow_cap_completed = false;
+        s->follow_remaining_mm = request->follow_remaining_mm;
         s->lease_ticks = 0;
     } else if (cmd == CMD_START || cmd == CMD_DRIVE || cmd == CMD_MOVE || cmd == CMD_TURN || cmd == CMD_FOLLOW || cmd == CMD_ARC) {
         if (cmd == CMD_DRIVE && !request->left_pwm && !request->right_pwm) {
@@ -108,6 +128,9 @@ static inline MotorResult remote_request(RemoteControl *s, const MotorParser *re
         s->target_left = cmd == CMD_START ? REMOTE_PWM_TARGET : request->left_pwm;
         s->target_right = cmd == CMD_START ? REMOTE_PWM_TARGET : request->right_pwm;
         s->follow_mode = cmd == CMD_FOLLOW;
+        s->follow_cap_active = s->follow_mode && request->follow_bounded;
+        s->follow_cap_completed = false;
+        s->follow_remaining_mm = s->follow_cap_active ? request->follow_remaining_mm : 0;
         s->arc_mode = cmd == CMD_ARC;
         s->arc_left_mm = s->arc_mode ? request->arc_left_mm : 0;
         s->arc_right_mm = s->arc_mode ? request->arc_right_mm : 0;

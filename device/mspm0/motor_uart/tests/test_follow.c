@@ -15,7 +15,7 @@ static void parser_frames(void)
         "FOLLOW,-80,80","FOLLOW,80,-80","SPEED,-80,-80","SPEED,0,-1"};
     const int16_t left[]={0,0,80,80,-80,80,-80,0}, right[]={0,80,0,80,80,-80,-80,-1};
     const char *invalid[]={"FOLLOW,-81,0","FOLLOW,0,81","SPEED,81,0","SPEED,0,-81",
-        "FOLLOW,1,1,1","FOLLOW,,0","SPEED,0,","FOLLOW,+1,0","SPEED,1.0,0",
+        "FOLLOW,1,1,1,1","FOLLOW,,0","SPEED,0,","FOLLOW,+1,0","SPEED,1.0,0",
         "FOLLOW,-32768,0","SPEED,0,65535","FOLLOW,--1,0","FOLLOW,-,0"};
     MotorParser p={0};
     for(unsigned pass=0;pass<2;++pass){
@@ -364,11 +364,14 @@ static void signed_feedback_model(uint32_t origin)
     printf("signed model: %.2f/%.2fmm; spin, independent zero, reversal; origin %08X\n",left,right,origin);
 }
 
+#include "follow_cap_cases.h"
+
 int main(void)
 {
     parser_frames();state_transitions();model(0);model(0xFFFFFF00U);
     positive_bitwise_regression();signed_replay_and_limits();signed_wheel_symmetry();
     signed_direction_transitions();signed_stop_protections();
     signed_feedback_model(0);signed_feedback_model(0xFFFFFF00U);
+    finite_follow_cases();
     puts("PASS: signed FOLLOW/SPEED, forward bitwise, independent zero crossing, replay, STOP/B21/lease/20s");
 }

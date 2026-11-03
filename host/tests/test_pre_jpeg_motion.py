@@ -55,7 +55,9 @@ class PreJpegMotionTests(unittest.TestCase):
                 if row['command'].startswith('SPEED,')]
         self.assertTrue(speeds)
         for command in speeds:
-            a,b=map(int,command.split(',')[1:])
+            a,b=map(int,command.split(',')[1:3])
+            self.assertEqual(len(command.split(',')),4)
+            self.assertGreater(int(command.split(',')[3]),0)
             self.assertGreaterEqual((a+b)/2,f.config['near_parking']['finish_mm_s'])
             self.assertLess((a+b)/2,f.config['near_parking']['cruise_mm_s'])
 
@@ -116,7 +118,9 @@ class PreJpegMotionTests(unittest.TestCase):
         self.assertGreater(scene.starts[0]['point'][0],400)
         speed=next(row['command'] for row in reversed(scene.motion)
                    if row['command'].startswith(('SPEED,','FOLLOW,')))
-        a,b=map(int,speed.split(',')[1:])
+        a,b=map(int,speed.split(',')[1:3])
+        self.assertEqual(len(speed.split(',')),4)
+        self.assertGreater(int(speed.split(',')[3]),0)
         self.assertEqual((a+b)/2,f.config['near_parking']['cruise_mm_s'])
 
 

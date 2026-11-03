@@ -23,6 +23,8 @@ typedef struct {
     bool reverse_move;
     int16_t angle_deg; /* Positive left, negative right; single-wheel forward arc. */
     int16_t left_speed, right_speed; /* -80..80 mm/s, physical forward is positive. */
+    bool follow_bounded;
+    uint16_t follow_remaining_mm; /* Forward mean wheel travel, before coast. */
     int16_t arc_left_mm, arc_right_mm; /* Signed relative wheel travel. */
 } MotorParser;
 
@@ -82,6 +84,8 @@ static inline bool motor_parse(MotorParser *p)
     p->reverse_move = false;
     p->angle_deg = 0;
     p->left_speed = p->right_speed = 0;
+    p->follow_bounded = false;
+    p->follow_remaining_mm = 0;
     p->arc_left_mm = p->arc_right_mm = 0;
     if (!strcmp(name, "STATUS")) p->command = CMD_STATUS;
     else if (!strcmp(name, "START")) p->command = CMD_START;
@@ -126,11 +130,16 @@ static inline bool motor_parse(MotorParser *p)
     else if (!strncmp(name, "FOLLOW,", 7) || !strncmp(name, "SPEED,", 6)) {
         bool follow = name[0] == 'F';
         const char *left = name + (follow ? 7 : 6), *comma = strchr(left, ',');
-        int32_t l, r;
-        if (!comma || !motor_number(left, (size_t)(comma-left), 80, true, &l) ||
-            !motor_number(comma+1, strlen(comma+1), 80, true, &r)) return false;
+        if (!comma) return false;
+        const char *right = comma+1, *limit = strchr(right, ',');
+        int32_t l, r, remaining = 0;
+        if (!motor_number(left, (size_t)(comma-left), 80, !limit, &l) ||
+            !motor_number(right, limit ? (size_t)(limit-right) : strlen(right), 80, !limit, &r) ||
+            (limit && !motor_number(limit+1, strlen(limit+1), 65535, false, &remaining))) return false;
         p->command = follow ? CMD_FOLLOW : CMD_SPEED;
         p->left_speed = (int16_t)l; p->right_speed = (int16_t)r;
+        p->follow_bounded = limit != NULL;
+        p->follow_remaining_mm = (uint16_t)remaining;
     }
     else return false;
     return true;

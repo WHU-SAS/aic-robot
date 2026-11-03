@@ -136,7 +136,10 @@ class TrackingReacquisitionTests(unittest.TestCase):
         row = self.chain.sample([WHOLE_LEFT])
         self.assertTrue(row['coarse']['visual_evidence']['navigation_confirmed'])
         self.assertTrue(row['decision']['command'].startswith('FOLLOW,'))
-        left,right=map(int,row['decision']['command'].split(',')[1:])
+        parts=row['decision']['command'].split(',')
+        self.assertEqual(len(parts),4)
+        self.assertGreater(int(parts[3]),0)
+        left,right=map(int,parts[1:3])
         self.assertLess(left,right)
 
     def test_initial_far_confirmation_stays_coarse_without_opening_a_fine_job(self):
@@ -161,7 +164,10 @@ class TrackingReacquisitionTests(unittest.TestCase):
         self.assertEqual(evidence['bbox_px'],WHOLE_LEFT[0])
         self.assertEqual(evidence['confirmations'],3)
         self.assertTrue(row['decision']['command'].startswith('FOLLOW,'))
-        left,right=map(int,row['decision']['command'].split(',')[1:])
+        parts=row['decision']['command'].split(',')
+        self.assertEqual(len(parts),4)
+        self.assertGreater(int(parts[3]),0)
+        left,right=map(int,parts[1:3])
         self.assertLess(left,right)
         self.assertLess(row['decision']['plan']['image_error_px'],0)
 

@@ -44,6 +44,8 @@ class TrackingTask:
         self.stationary_status_period = timing.get('stationary_status_period_ms', 500)
         self.motion_refresh = timing.get('motion_refresh_ms', 250)
         self._motion_sent_at = self._motion_speeds = None
+        self._bounded_follow = False
+        self._bounded_context = None
         synced_at = self.clock()
         self.state = self.link.sync()
         self.state['_k230_sent_ms'], self.state['_k230_received_ms'] = synced_at, self.clock()
@@ -85,20 +87,51 @@ class TrackingTask:
         sent = self.clock()
         parts = command.split(',')
         name, speeds = parts[0], tuple(parts[1:])
+        bounded = name in ('FOLLOW','SPEED') and len(parts)==4
+        context = ((self.memory.version,(self.drive._fine_request or {}).get('request_id'))
+                   if bounded else None)
         if (self.state.get('run') and self._motion_sent_at is not None and
                 0 <= age_ms(sent, self._motion_sent_at) < self.motion_refresh and
-                (name == 'HB' or name == 'SPEED' and speeds == self._motion_speeds)):
+                (name == 'HB' or name == 'SPEED' and speeds == self._motion_speeds and
+                 context == self._bounded_context)):
             # STATUS never renews the MCU lease. Keep the original real reply
             # and timestamps; only an unchanged command can wait for refresh.
             self.metrics['commands_coalesced'] += 1
             return self.state
-        state = self.link.expect(command)
+        was_bounded = self._bounded_follow
+        owned_follow = (self.drive._active_action=='follow' and
+                        not self.drive._searching and not self.drive._search_inspecting)
+        if was_bounded and owned_follow and name=='SPEED' and not bounded:
+            # A zero-mean/unknown-range update can race the old endpoint. Keep
+            # the real rejected ACK, then read the normal completed state.
+            # No exception/old link.last value substitutes for this response.
+            state = self.link.request(command)
+            if (state.get('result')==3 and not state.get('run') and
+                    state.get('reason')==6 and state.get('command')=='SPEED' and
+                    state.get('seq')==self.link.sequence):
+                rejected = dict(state,_k230_sent_ms=sent,_k230_received_ms=self.clock())
+                self._record('tracking_bound_update_rejected_after_completion',dict(
+                    command=command,rejected_reply=rejected))
+                current = self._command('STATUS')
+                if current.get('run') or current.get('reason')!=6:
+                    raise RuntimeError('Completed bound changed before STATUS: '+str(current))
+                return current
+            if state.get('result')!=0:
+                raise RuntimeError('Unexpected command result: '+str(state))
+        else:
+            state = self.link.expect(command)
         if name in ('FOLLOW', 'SPEED', 'HB', 'ARC'):
             self._motion_sent_at = sent
             if name != 'HB':
                 self._motion_speeds = speeds if name in ('FOLLOW', 'SPEED') else None
         elif name == 'STOP':
             self._motion_sent_at = self._motion_speeds = None
+        if name in ('FOLLOW','SPEED'):
+            self._bounded_follow = bounded and bool(state.get('run'))
+            self._bounded_context = context if self._bounded_follow else None
+        elif name == 'STOP' or not state.get('run'):
+            self._bounded_follow = False
+            self._bounded_context = None
         if (self.metrics['first_motion_request'] is None and
                 command.split(',')[0] in ('FOLLOW', 'SPEED', 'ARC') and
                 any(value != '0' for value in command.split(',')[1:])):
@@ -115,6 +148,18 @@ class TrackingTask:
         if (self.drive._motor is not None and (name == 'STATUS' or
                 self.job is not None and self.job['purpose'] == 'moving')):
             self.drive._observe_motor(state, self._last_motor_reply)
+        if ((was_bounded or bounded) and owned_follow and not state.get('run') and
+                state.get('reason')==6):
+            self.drive.bounded_follow_completed(state,self._last_motor_reply)
+            if self.job is None and self.complete is None:
+                # The endpoint may finish before its first JPEG is allocated.
+                # The just-captured moving frame cannot become a static query.
+                self.drive.restart_observation()
+            self.last_parking = None
+            self._force_observe = True
+            self.decision = dict(phase='settling',status='mcu_distance_complete',command=None)
+            self._record('tracking_mcu_distance_stop',dict(command=command,
+                target_version=self.memory.version,motor_state=dict(state)))
         return state
 
     def _moving_observation(self):
@@ -550,6 +595,18 @@ class TrackingTask:
                 except Exception as exc:
                     self._fault('fine_motor_feedback',exc)
                 return
+            context = (self.memory.version,(self.drive._fine_request or {}).get('request_id'))
+            if (before_jpeg is not None and len(before_jpeg['command'].split(','))==4 and
+                    (not self._bounded_follow or self._bounded_context!=context)):
+                # Every moving image starts only after the MCU has ACKed its
+                # own endpoint, even if a previous plain speed was coalesced.
+                try:
+                    self._command(before_jpeg['command'])
+                except Exception as exc:
+                    self._fault('fine_motor_feedback',exc)
+                    return
+                if not self.state.get('run'):
+                    return
         epoch = self.memory._epoch_start_stamp
         if epoch is not None and age_ms(frame['capture_timestamp_ms'], epoch) <= 0:
             # A version-changing frame cannot pass the original fine timestamp

@@ -50,10 +50,38 @@ class VisibleRetargetTaskTests(unittest.TestCase):
         self.assertNotIn('STOP',commands)
         steering=next((command for command in commands if command.startswith('SPEED,')),None)
         self.assertIsNotNone(steering,commands)
-        left,right=map(int,steering.split(',')[1:])
+        parts=steering.split(',')
+        self.assertEqual(len(parts),4)
+        self.assertGreater(int(parts[3]),0)
+        left,right=map(int,parts[1:3])
         self.assertLess(left,right)  # Current native region moved to image-left.
         self.assertEqual(f.motor.run,1)
         self.assertFalse(f.task.drive._searching)
+        self.assertFalse(f.handoffs)
+
+    def test_visible_target_moved_farther_replaces_endpoint_with_a_new_bound(self):
+        unused,f,unused=self.fixture()
+        f.x=650
+        f.tick()
+        initial=next(command for unused,command in f.motor.commands
+                     if command.startswith('FOLLOW,'))
+        self.assertEqual(len(initial.split(',')),4)
+        old_remaining=int(initial.split(',')[3])
+        command_at=len(f.motor.commands)
+        f.x=900
+        f.clock.advance(f.task.period)
+        f.tick()
+        commands=[command for unused,command in f.motor.commands[command_at:]]
+        self.assertNotIn('STOP',commands)
+        current=next((command for command in commands if command.startswith('SPEED,')),None)
+        self.assertIsNotNone(current,commands)
+        parts=current.split(',')
+        self.assertEqual(len(parts),4)  # A known farther route never clears to plain SPEED.
+        self.assertGreater(int(parts[3]),old_remaining+150)
+        self.assertTrue(f.task.coarse['visual_evidence']['distance_valid'])
+        self.assertEqual(f.motor.run,1)
+        self.assertFalse(f.task.drive._searching)
+        self.assertFalse(f.created_fines)
         self.assertFalse(f.handoffs)
 
     def test_paused_moving_retarget_recomputes_in_motion_and_requires_new_static_handoff(self):
@@ -103,7 +131,8 @@ class VisibleRetargetTaskTests(unittest.TestCase):
         self.assertNotIn('STOP',commands)
         steering=next((command for command in commands if command.startswith('SPEED,')),None)
         self.assertIsNotNone(steering,commands)
-        left,right=map(int,steering.split(',')[1:])
+        self.assertEqual(len(steering.split(',')),3)
+        left,right=map(int,steering.split(',')[1:3])
         self.assertEqual(left+right,0)
         self.assertLess(left,right)
         self.assertFalse(f.task.coarse['visual_evidence']['distance_valid'])
@@ -166,7 +195,8 @@ class VisibleRetargetTaskTests(unittest.TestCase):
         self.assertNotIn('STOP',commands)
         speed=next((command for command in commands if command.startswith('SPEED,')),None)
         self.assertIsNotNone(speed,commands)
-        self.assertEqual(sum(map(int,speed.split(',')[1:])),0)
+        self.assertEqual(len(speed.split(',')),3)
+        self.assertEqual(sum(map(int,speed.split(',')[1:3])),0)
         self.assertEqual(f.motor.run,1)
         self.assertEqual(f.task.drive._active_action,'follow')
         self.assertIsNone(f.task.memory.last_precise)
