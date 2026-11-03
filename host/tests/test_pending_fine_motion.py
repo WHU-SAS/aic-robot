@@ -51,20 +51,23 @@ class PendingFineMotionTests(unittest.TestCase):
     def first_stop(self, scene):
         return next((row for row in scene.motion if row['command'] == 'STOP'), None)
 
-    def assert_stop_then_new_static(self, scene):
+    def assert_stop_then_new_static(self, scene, allow_pre_request_stop=False):
         f = scene.f
         self.until(scene, lambda: self.first_stop(scene) is not None)
         stop = self.first_stop(scene)
         near, far = bounds_mm(f.config['workspace'])['Base_X_mm']
         self.assertGreaterEqual(stop['x'], near)
         self.assertLessEqual(stop['x'], far)
-        self.assertEqual(stop['purpose'], 'moving')
+        if allow_pre_request_stop:
+            self.assertIn(stop['purpose'], (None, 'moving'))
+        else:
+            self.assertEqual(stop['purpose'], 'moving')
         self.assertFalse(f.handoffs)
         self.until(scene, lambda: bool(self.starts(scene, 'static')))
         static = self.starts(scene, 'static')[0]
         static_frame = static['frame']['frame_id']
         self.assertGreater(static['frame']['capture_timestamp_ms'], stop['at'])
-        self.assertGreater(static_frame, stop['source_frame'])
+        self.assertGreater(static_frame, stop['source_frame'] or stop['captured_frames'])
         start_state = next(row for row in f.fine_start_states if row['frame'] == static_frame)
         self.assertEqual(start_state['run'], 0)
         self.assertEqual(f.motor.run, 0)
@@ -120,8 +123,10 @@ class PendingFineMotionTests(unittest.TestCase):
                 moved.append(row['image_frame'])
 
         scene.on_extra = move_nearer
-        self.assert_stop_then_new_static(scene)
+        self.assert_stop_then_new_static(scene, allow_pre_request_stop=True)
         self.assertEqual(len(moved), 1)
+        self.assertEqual(len(self.starts(scene, 'moving')), 1)
+        self.assertEqual(len(f.created_fines), 2)  # Original moving, then NEW static.
         self.assertNotIn(moved[0], f.bind_attempts)
         self.assertTrue(any(event == 'tracking_fine_observation_changed' and
                             details.get('continued_follow') is True
@@ -225,7 +230,7 @@ class PendingFineMotionTests(unittest.TestCase):
                 self.assertFalse(f.handoffs)
                 self.assertFalse(f.arms)
 
-    def test_near_retarget_checks_travel_after_jpeg_before_more_native_work(self):
+    def test_near_retarget_stops_before_a_second_jpeg_or_native_call(self):
         scene = self.scene(.1, start_ms=235)
         f = scene.f
         moved, returned = [], []
@@ -251,13 +256,14 @@ class PendingFineMotionTests(unittest.TestCase):
         f.Fine.start, f.Fine.advance = jpeg_return, advance_return
         self.until(scene, lambda: self.first_stop(scene) is not None)
         stop = self.first_stop(scene)
-        jpeg_end = next(at for kind, index, at in returned if kind == 'jpeg' and index == 1)
-        # A native JPEG call cannot be interrupted. Once it returns with the
-        # known travel exhausted, another solver call must not precede STOP.
-        self.assertEqual(stop['at'], jpeg_end)
-        self.assertFalse(any(kind == 'advance' and index == 1 and at <= stop['at']
+        # The existing route is already exhausted at the new request. Stop
+        # before allocating or compressing another moving image at all.
+        self.assertEqual(len(f.created_fines), 1)
+        self.assertFalse(any(index == 1 and at <= stop['at']
                              for kind, index, at in returned))
         self.assertFalse(f.handoffs)
+        self.assert_stop_then_new_static(scene, allow_pre_request_stop=True)
+        self.assertEqual(len(self.starts(scene, 'moving')), 1)
 
     def test_exhausted_travel_stops_at_first_yield_of_long_native_advance(self):
         for ratio in (0, .1):

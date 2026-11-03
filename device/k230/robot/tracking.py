@@ -206,15 +206,29 @@ class TrackingTask:
             self.evidence.append(item)
 
     def _release_evidence(self, version, replaced_purpose=None):
-        """Keep the last moving/static diagnostic images, across target loss.
+        """Keep first/last moving and last static originals across target loss.
 
         They never grant control authority. Replacing the same purpose still
-        bounds RAM to two frames, without SD writes or a stop during motion.
+        bounds RAM to three frames, without SD writes or another JPEG copy.
         """
-        retained = [item for item in self.evidence
-            if replaced_purpose is None or item['frame'].get('tracking_purpose') != replaced_purpose]
+        moving = [item for item in self.evidence
+                  if item['frame'].get('tracking_purpose')=='moving']
+        static = [item for item in self.evidence
+                  if item['frame'].get('tracking_purpose')=='static']
+        keep = moving[:1]+([] if replaced_purpose=='moving' else moving[-1:])
+        if replaced_purpose!='static':
+            keep += static[-1:]
+        retained = [item for item in self.evidence if any(item is old for old in keep)]
         self.metrics['obsolete_frames_released'] += len(self.evidence)-len(retained)
         self.evidence[:] = retained
+
+    def _coarse_audit(self, coarse):
+        evidence = coarse.get('visual_evidence') or coarse
+        point = evidence.get('ground_contact_proxy_Base_mm')
+        return dict(frame_id=coarse.get('frame_id'),
+            capture_timestamp_ms=coarse.get('capture_timestamp_ms'),
+            bbox_px=evidence.get('bbox_px'),center_pixel=evidence.get('center_pixel'),
+            coarse_proxy_X_mm=point[0] if point is not None else None)
 
     def _cancel_job(self, reason):
         job = self.job
@@ -517,6 +531,25 @@ class TrackingTask:
         return image, frame
 
     def _start_job(self, purpose, image, frame):
+        if purpose=='moving' and self.state.get('run'):
+            before_jpeg = self.drive.pending_fine_motion(self.state,self.clock())
+            if before_jpeg is not None and before_jpeg['command']=='STOP':
+                # UART/dispatch time since Drive's decision can consume the
+                # last travel. Stop before constructing or compressing a job;
+                # this moving frame cannot be the stopped verification image.
+                self.decision = before_jpeg
+                try:
+                    self._command('STOP')
+                    self.drive.cancel_fine()
+                    self.drive.restart_observation()
+                    self.last_parking = None
+                    self._force_observe = True
+                    self._record('tracking_pre_jpeg_stop',dict(
+                        frame_id=frame['frame_id'],plan=before_jpeg.get('plan'),
+                        motor_state=dict(self.state)))
+                except Exception as exc:
+                    self._fault('fine_motor_feedback',exc)
+                return
         epoch = self.memory._epoch_start_stamp
         if epoch is not None and age_ms(frame['capture_timestamp_ms'], epoch) <= 0:
             # A version-changing frame cannot pass the original fine timestamp
@@ -780,17 +813,29 @@ class TrackingTask:
                                               self.target.get('precise_candidate')) else None
                 if eligible is not None:
                     source = eligible['observation']
-                    consistency = self.memory.precise_consistency(source, eligible['paired_coarse'],
-                        self.drive.odometry.since(source.get('capture_timestamp_ms',self.clock()),
-                                                  self.coarse['capture_timestamp_ms']))
+                    increments = self.drive.odometry.since(
+                        source.get('capture_timestamp_ms',self.clock()),
+                        self.coarse['capture_timestamp_ms'])
+                    consistency = self.memory.precise_consistency(source,
+                        eligible['paired_coarse'],increments)
                     eligible['current_consistency'] = consistency
                     if consistency == 'changed':
+                        fine_point = (source.get('cube_center_Base_mm') or
+                            (source.get('range_candidate') or {}).get('raw_center_Base_mm'))
+                        audit = dict(source=self._coarse_audit(eligible['paired_coarse']),
+                            current=self._coarse_audit(self.coarse),
+                            fine_status=source.get('status'),
+                            fine_association=(source.get('target_association') or {}).get('status'),
+                            fine_center_Base_mm=fine_point,
+                            wheel_delta_mm=[sum(row[k] for row in increments) for k in (0,1)],
+                            memory_residual_px=self.target.get('residual_px'),
+                            memory_residual_distance_fraction=self.target.get('residual_distance_fraction'))
                         purpose = eligible['purpose']
                         continued = purpose == 'moving' and self._continue_visible_tracking(
                             'fine_current_mismatch')
                         self._record('tracking_fine_current_mismatch',dict(
                             frame_id=source.get('frame_id'),purpose=purpose,
-                            continued_follow=continued))
+                            continued_follow=continued,audit=audit))
                         # This is a stale capability, not a failed face solve.
                         # Do not turn it into an automatic view-changing move.
                         self.complete = self.last_parking = None

@@ -28,6 +28,10 @@ OTHER = ([900,222,80,60],2400)
 FAR = ([620,222,54,55],1485)
 NEAR = ([523,546,177,274],24000)
 WEAK = ([333,222,84,35],100)
+# Independent whole-cube positives from the archived native far replay. The
+# historical FLAT/WEAK boxes above remain unchanged negative evidence.
+WHOLE_LEFT=([315,266,108,126],12164)
+WHOLE_RIGHT=([864,269,108,123],12053)
 
 
 class Blob:
@@ -116,23 +120,24 @@ class TrackingReacquisitionTests(unittest.TestCase):
         self.assertTrue(not command.startswith(('FOLLOW,','SPEED,')) or is_search_spin(command))
 
     def test_ambiguous_legacy_history_cannot_authorize_one_unique_frame(self):
-        smaller = ([900,222,40,35],700)
         for unused in range(3):
-            row = self.chain.sample([FLAT,smaller])
+            row = self.chain.sample([WHOLE_LEFT,WHOLE_RIGHT])
             self.assertTrue(row['coarse']['visual_evidence']['ambiguous'])
             self.assert_no_forward(row)
-        row = self.chain.sample([FLAT])
+        row = self.chain.sample([WHOLE_LEFT])
         evidence = row['coarse']['visual_evidence']
         self.assertEqual(evidence['confirmations'],1)
         self.assertFalse(evidence['navigation_confirmed'])
         self.assert_no_forward(row)
         self.assertIsNone(self.chain.drive._coarse_reference)
         self.assertIsNone(row['decision']['request_fine'])
-        row = self.chain.sample([FLAT])
+        row = self.chain.sample([WHOLE_LEFT])
         self.assert_no_forward(row)
-        row = self.chain.sample([FLAT])
+        row = self.chain.sample([WHOLE_LEFT])
         self.assertTrue(row['coarse']['visual_evidence']['navigation_confirmed'])
-        self.assertEqual(row['decision']['command'],'FOLLOW,51,80')
+        self.assertTrue(row['decision']['command'].startswith('FOLLOW,'))
+        left,right=map(int,row['decision']['command'].split(',')[1:])
+        self.assertLess(left,right)
 
     def test_initial_far_confirmation_stays_coarse_without_opening_a_fine_job(self):
         for unused in range(2):
@@ -146,14 +151,18 @@ class TrackingReacquisitionTests(unittest.TestCase):
     def test_visual_A_and_navigation_B_cannot_be_different_candidates(self):
         # Former bug: weak A established visual association, then legacy chose
         # larger B and accumulated tracking while visual still named left A.
-        self.chain.sample([WEAK])
-        for unused in range(3): row = self.chain.sample([FLAT,OTHER])
+        # A weak first colour mask shares A's actual whole-region pixels, not
+        # the historical physically incompatible flat print.
+        self.chain.sample([(WHOLE_LEFT[0],100)])
+        for unused in range(3): row = self.chain.sample([WHOLE_LEFT,WHOLE_RIGHT])
         coarse,evidence = row['coarse'],row['coarse']['visual_evidence']
         for key in ('bbox_px','center_pixel','ground_contact_proxy_Base_mm'):
             self.assertEqual(coarse[key],evidence[key])
-        self.assertEqual(evidence['bbox_px'],FLAT[0])
+        self.assertEqual(evidence['bbox_px'],WHOLE_LEFT[0])
         self.assertEqual(evidence['confirmations'],3)
-        self.assertEqual(row['decision']['command'],'FOLLOW,51,80')
+        self.assertTrue(row['decision']['command'].startswith('FOLLOW,'))
+        left,right=map(int,row['decision']['command'].split(',')[1:])
+        self.assertLess(left,right)
         self.assertLess(row['decision']['plan']['image_error_px'],0)
 
     def test_single_weak_or_unconfirmed_flash_cannot_create_a_new_route(self):
@@ -165,6 +174,18 @@ class TrackingReacquisitionTests(unittest.TestCase):
             row = self.chain.sample([])
             self.assert_no_forward(row)
         self.assertEqual(self.chain.memory.version,0)
+
+    def test_historical_flat_blue_record_never_becomes_a_measured_cube_after_repetition(self):
+        for unused in range(5):
+            row=self.chain.sample([FLAT])
+            evidence=row['coarse']['visual_evidence']
+            self.assertTrue(evidence['visible'])
+            self.assertEqual(evidence['bbox_px'],FLAT[0])
+            self.assertEqual(evidence['reason'],'inconsistent_with_20mm_cube_shape')
+            self.assertFalse(evidence['distance_valid'])
+            self.assertFalse(evidence['navigation_confirmed'])
+            self.assert_no_forward(row)
+            self.assertIsNone(self.chain.drive._coarse_reference)
 
     def test_reliable_coarse_route_survives_unknown_without_being_refreshed_by_a_flash(self):
         for unused in range(3): row = self.chain.sample([FAR])
@@ -348,7 +369,7 @@ class TrackingReacquisitionTests(unittest.TestCase):
             if number <= 3: return [FAR]
             if number == 4: return [([620,950,30,10],150)]
             if number <= 8: return []
-            return [FLAT] if (number-9)%4 == 0 else []
+            return [WHOLE_LEFT] if (number-9)%4 == 0 else []
         task,motor,observed = self.run_task(scene)
         self.assertIsNone(task.fault)
         commands = [command for stamp,command in motor.commands]

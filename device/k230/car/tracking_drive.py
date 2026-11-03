@@ -1265,6 +1265,18 @@ class DriveController:
             self.phase = 'settling'
             return finish('STOP' if running else None, 'waiting_for_target')
         capture_distance = self.near['capture_Base_X_mm']
+        if (owned_follow and measured_coarse_plan is not None and visible and
+                coarse_plan['coarse_Base_X_mm'] <= capture_distance):
+            # A retry/current near cue may already be at the destination.
+            # Bound THIS command before the owner enters blocking JPEG work.
+            bounded = self._coarse_prediction(coarse,now_ms,True)
+            if bounded is not None:
+                coarse_plan = bounded
+                decision['plan'] = bounded
+                if bounded['status']!='follow':
+                    self.cancel_fine()
+                    self.phase = 'settling'
+                    return finish('STOP','fine_distance_exhausted')
         if (measured_coarse_plan is not None and visible and
                 coarse_plan['coarse_Base_X_mm'] <= capture_distance and
                 (coarse or {}).get('frame_id') != self._moving_retry_frame):

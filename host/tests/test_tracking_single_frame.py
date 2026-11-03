@@ -39,7 +39,9 @@ class SingleFrameCandidateTests(unittest.TestCase):
         fixture=drive_fixtures.TrackingDriveTests()
         fixture.setUp()
         fixture.config['tracking']['confirmation_frames']=self.config['tracking']['confirmation_frames']
-        coarse=fixture.native_cue(100,Blob([528,233,69,35],870))
+        # Archived native20mm target; the old arbitrary69x35 patch is not a
+        # whole-cube silhouette under the calibrated projection.
+        coarse=fixture.native_cue(100,Blob([493,279,112,131],13030))
         self.assertEqual(coarse['visual_evidence']['association_confirmations'],1)
         self.assertTrue(coarse['visual_candidates'][0]['distance_valid'])
         # The native selected target is unavailable; a separate unique raw cue

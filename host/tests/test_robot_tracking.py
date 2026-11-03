@@ -295,7 +295,10 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertEqual(result['metrics']['arm_attempts'],1)
         self.assert_coarse_paused_during_fine()
         self.assert_observation_cadence_outside_fine()
-        self.assertLessEqual(len(self.task.evidence),2)
+        self.assertLessEqual(len(self.task.evidence),3)
+        purposes=[item['frame']['tracking_purpose'] for item in self.task.evidence]
+        self.assertLessEqual(purposes.count('moving'),2)
+        self.assertLessEqual(purposes.count('static'),1)
         moving = next(item['frame'] for item in self.task.evidence
                       if item['frame']['tracking_purpose']=='moving')
         self.assertEqual(moving['localization_bbox_px'],
@@ -852,10 +855,18 @@ class RobotTrackingTests(unittest.TestCase):
         self.tick(700)
         self.assertEqual(self.task.status,'running')
         self.assertGreaterEqual(self.task.metrics['fine_started'],5)
-        self.assertLessEqual(len(self.task.evidence),2)
+        self.assertLessEqual(len(self.task.evidence),3)
         self.assertGreaterEqual(self.task.metrics['obsolete_frames_released'],3)
-        self.assertEqual(len({item['frame']['tracking_purpose'] for item in self.task.evidence}),
+        purposes=[item['frame']['tracking_purpose'] for item in self.task.evidence]
+        self.assertLessEqual(purposes.count('moving'),2)
+        self.assertLessEqual(purposes.count('static'),1)
+        self.assertEqual(len({item['frame']['frame_id'] for item in self.task.evidence}),
                          len(self.task.evidence))
+        for item in self.task.evidence:
+            frame=item['frame']
+            self.assertEqual(frame['paired_coarse']['frame_id'],frame['frame_id'])
+            self.assertEqual(frame['paired_coarse']['capture_timestamp_ms'],
+                             frame['capture_timestamp_ms'])
 
     def test_target_loss_preserves_the_last_failed_static_image_for_diagnosis(self):
         self.fail_every_fine=True

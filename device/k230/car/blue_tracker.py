@@ -75,21 +75,33 @@ class BlueTracker:
                   any(cue is candidate for candidate in independent)]
         matched = [cue for cue in active if old is not None and self._match(cue, old) is not None]
         measured_matches = [cue for cue in matched if cue['distance_valid']]
-        if len(measured_matches) == 1:
-            matched = [cue for cue in matched if cue['distance_valid'] or
-                       not self._contains(measured_matches[0],cue)]
+        rejected_match = bool(matched) and all(cue.get('measurement_reason') ==
+            'inconsistent_with_20mm_cube_shape' for cue in matched)
+        if measured_matches:
+            # A matched measurable cube is not made ambiguous by unrelated
+            # weak blue print. Multiple measurable matches remain ambiguous.
+            matched = measured_matches
         # At acquisition, original tabletop checks can distinguish a unique
         # cube candidate from unrelated weak blue patches. Do not choose the
         # largest of multiple equally plausible targets.
-        pool = matched if matched else (independent if self.previous is None and independent else active)
+        replace_rejected = bool(rejected_match and independent)
+        pool = (independent if replace_rejected else matched if matched else
+                independent if self.previous is None and independent else active)
         if len(pool) != 1:
             evidence.update(ambiguous=True, reason='ambiguous_blue_candidates')
             return None, evidence
         selected = pool[0]
-        associated = (bool(matched) or old is None or
+        associated = (replace_rejected or bool(matched) or old is None or
                       (self.previous is None and selected['distance_valid']))
+        if replace_rejected:
+            # A rejected print did not establish a reliable identity. Acquire
+            # the new physical candidate now, with its own one-frame count.
+            self.confirmations = self.association_confirmations = 0
         for key in ('bbox_px', 'center_pixel', 'pixels', 'edge_directions'):
             evidence[key] = selected[key]
+        for key in ('cube_shape_compatible','cube_aspect_ratio_range',
+                    'expected_cube_width_range_px','expected_cube_height_range_px'):
+            if key in selected:evidence[key] = selected[key]
         width = self.config['image_size_px'][0]
         evidence.update(associated=associated,
             image_midline_error_px=selected['center_pixel'][0]-width/2,
@@ -117,7 +129,7 @@ class BlueTracker:
                 reason = 'implausible_aspect_ratio'
             elif pixels / (w * h) < c['min_fill_ratio']:
                 reason = 'sparse_blob'
-            geometry = None
+            geometry, shape = None, None
             if reason is None:
                 try:
                     geometry = self.projection.blob_geometry(bbox)
@@ -127,6 +139,10 @@ class BlueTracker:
                         reason = 'outside_approach_distance'
                     elif not c['height_ratio_range'][0] <= ratio <= c['height_ratio_range'][1]:
                         reason = 'inconsistent_with_20mm_height'
+                    else:
+                        shape = self.projection.cube_shape_geometry(bbox,geometry)
+                        if not shape['cube_shape_compatible']:
+                            reason = 'inconsistent_with_20mm_cube_shape'
                 except ValueError as exc:
                     reason = str(exc)
             if reason != 'invalid_or_tiny_blob':
@@ -139,6 +155,7 @@ class BlueTracker:
                     'pixels': pixels, 'timestamp_ms': timestamp_ms,
                     'edge_directions': edges, 'distance_valid': reason is None,
                     'measurement_reason': reason}
+                if shape is not None:cue.update(shape)
                 if reason is None:
                     cue.update(geometry)
                 cues.append(cue)

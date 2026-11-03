@@ -40,6 +40,11 @@ class Projection:
                 'expected_vertical_height_px': box[3]/self.ratio,
                 'observed_to_expected_height_ratio': self.ratio}
 
+    def cube_shape_geometry(self, box, geometry):
+        # Protocol fixture only; physical cube geometry uses the calibrated
+        # GroundProjection and recorded-image regressions in its own tests.
+        return {'cube_shape_compatible':True}
+
     def base_to_pixel(self, point): return list(point[:2])
     def pixel_to_plane(self, pixel, height_mm=0): return list(pixel)+[height_mm]
     def camera_table_foot(self): return [0.,0.,0.]

@@ -15,6 +15,15 @@ class GroundProjection:
         if not math.isfinite(length) or length < 1e-8:
             raise ValueError('Invalid table plane')
         self.normal = [v / length for v in normal]
+        seed = [1., 0., 0.] if abs(self.normal[0]) < .9 else [0., 1., 0.]
+        along = sum(a*b for a,b in zip(seed,self.normal))
+        tangent = [seed[k]-along*self.normal[k] for k in range(3)]
+        tangent_length = math.sqrt(sum(value*value for value in tangent))
+        tangent = [value/tangent_length for value in tangent]
+        n = self.normal
+        self._cube_tangents = (tangent,
+            [n[1]*tangent[2]-n[2]*tangent[1], n[2]*tangent[0]-n[0]*tangent[2],
+             n[0]*tangent[1]-n[1]*tangent[0]])
         self.offset = table_plane['offset_mm'] / length
         self.origin = [row[3] for row in self.T[:3]]
         self.forward_axis_Base = forward_axis_Base
@@ -52,7 +61,36 @@ class GroundProjection:
             raise ValueError('Projected cube height too small')
         return {'ground_contact_proxy_Base_mm': contact,
                 'expected_vertical_height_px': expected_height,
-                'observed_to_expected_height_ratio': h / expected_height}
+                'observed_to_expected_height_ratio': h / expected_height,
+                'projected_vertical_edge_px': [top_pixel[k]-bottom_pixel[k] for k in (0,1)]}
+
+    def cube_shape_geometry(self, bbox, geometry, edge_mm=20):
+        """Conservative whole-cube width/height compatibility, without PnP.
+
+        Two tabletop edge vectors span every cube yaw. Their projected sum
+        ranges from its Euclidean length to sqrt(2) times that length; include
+        the upright edge in each image axis. Four extra projections estimate
+        these local vectors only after the tracker's original cheap filters.
+        """
+        contact = geometry['ground_contact_proxy_Base_mm']
+        vectors = []
+        for tangent in self._cube_tangents:
+            a = self.base_to_pixel([contact[k]-edge_mm/2*tangent[k] for k in range(3)])
+            b = self.base_to_pixel([contact[k]+edge_mm/2*tangent[k] for k in range(3)])
+            vectors.append([b[k]-a[k] for k in (0,1)])
+        extents = []
+        for axis in (0,1):
+            planar = math.sqrt(sum(vector[axis]**2 for vector in vectors))
+            upright = abs(geometry['projected_vertical_edge_px'][axis])
+            extents.append([planar+upright, math.sqrt(2)*planar+upright])
+        width, height = extents
+        lo, hi = width[0]/height[1], width[1]/height[0]
+        w, h = bbox[2:]
+        # Each integer-pixel box edge can shift by one pixel. This preserves
+        # quantization uncertainty without a global image-aspect threshold.
+        compatible = ((w+2)/max(1,h-2) >= lo and max(1,w-2)/(h+2) <= hi)
+        return {'cube_shape_compatible':compatible, 'cube_aspect_ratio_range':[lo,hi],
+                'expected_cube_width_range_px':width, 'expected_cube_height_range_px':height}
 
     def camera_table_foot(self):
         """Orthogonal projection of calibrated camera optical center to table."""

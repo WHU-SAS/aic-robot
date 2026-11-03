@@ -38,6 +38,8 @@ class FineObservationPauseTests(unittest.TestCase):
                 return dict(ground_contact_proxy_Base_mm=self.proxy,
                     observed_to_expected_height_ratio=ratio,
                     expected_vertical_height_px=box[3]/ratio)
+            def cube_shape_geometry(self,box,geometry):
+                return {'cube_shape_compatible':True}  # Synthetic pose protocol.
         model=NativeProjection()
         tracker=BlueTracker(f.config['tracking'],model)
         class Blob:

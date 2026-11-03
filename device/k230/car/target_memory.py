@@ -191,7 +191,8 @@ class TargetMemory:
                 not _point(box,4) or min(box[2:]) < 3 or not _point(pixel,2) or
                 max(box[2]/box[3],box[3]/box[2]) >
                     self.config.get('tracking',{}).get('max_aspect_ratio',4) or
-                evidence.get('reason') in ('sparse_blob','implausible_aspect_ratio','invalid_or_tiny_blob')):
+                evidence.get('reason') in ('sparse_blob','implausible_aspect_ratio','invalid_or_tiny_blob',
+                                         'inconsistent_with_20mm_cube_shape')):
             return None
         visual = {'bbox_px':list(box),'center_pixel':list(pixel)}
         if not self._tracking_update:
@@ -382,7 +383,13 @@ class TargetMemory:
             # after loss it may have acquired a tiny unrelated blue edge.
             # Retain visibility, but keep its centre and edges out of motion,
             # exit and reacquisition history until the target supports it.
-            self._associated = self._held_match(visual,self._identity_visual)
+            rejected_shape = evidence.get('reason') == 'inconsistent_with_20mm_cube_shape'
+            self._associated = not rejected_shape and self._held_match(visual,self._identity_visual)
+            if rejected_shape:
+                # Native blue remains available for direction/a stopped query,
+                # but a physically rejected patch cannot rewrite identity or
+                # disprove an old fine pose using its unrelated image centre.
+                self._query_visual = None
             unique = self._associated
         if unique and visual is not None and (self._identity_visual is None or
                 self._held_match(visual,self._identity_visual)):

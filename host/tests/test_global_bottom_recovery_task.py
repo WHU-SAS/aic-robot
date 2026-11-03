@@ -51,13 +51,17 @@ class SegmentMotor(fixtures.Motor):
 
 class BottomScene:
     BOXES={
-        'whole_before':[600,730,100,220],
+        # These complete boxes satisfy the real calibrated20mm joint shape
+        # check. Preserve the original centres and bottom-exit trajectory.
+        'whole_before':[575,730,150,220],
         'partial':[600,760,100,200],
         'partial_lower':[600,800,100,160],
         'partial_left':[0,800,100,160],
         'partial_right':[1180,800,100,160],
-        'whole_far':[600,300,100,100],
-        'whole_weak':[600,300,100,30],
+        'whole_far':[610,300,80,100],
+        # Keep the original weak-height/scale failure after a fine-compute
+        # gap. It is visible/queryable, without a usable tabletop distance.
+        'whole_weak':[610,300,80,30],
     }
 
     def __init__(self,test,travel_scale=1.):
@@ -65,6 +69,15 @@ class BottomScene:
         helper=paused.FineObservationPauseTests()
         self.f,unused=helper.fixture('moving',move_during_fine=False)
         f=self.f
+        for name in ('whole_before','whole_far'):
+            box=self.BOXES[name]
+            geometry=f.projection.blob_geometry(box)
+            self.test.assertTrue(f.projection.cube_shape_geometry(
+                box,geometry)['cube_shape_compatible'],name)
+            low,high=f.config['tracking']['height_ratio_range']
+            self.test.assertTrue(low<=geometry['observed_to_expected_height_ratio']<=high,name)
+        self.test.assertLess(f.projection.blob_geometry(self.BOXES['whole_weak'])[
+            'observed_to_expected_height_ratio'],f.config['tracking']['height_ratio_range'][0])
         f.fine_slices=1
         f.fail_every_fine=True
         f.motor=SegmentMotor(f.clock,f.config['mm_per_count'],travel_scale)
