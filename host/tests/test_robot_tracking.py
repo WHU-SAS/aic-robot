@@ -1085,7 +1085,7 @@ class RobotTrackingTests(unittest.TestCase):
             if self.task.status=='succeeded':break
         self.assertTrue(hidden)
         self.assertEqual(self.task.status,'succeeded',self.task.snapshot())
-        self.assertGreaterEqual(self.task.metrics['target_changes'],1)
+        self.assertEqual(self.task.metrics['arm_attempts'],1)
         self.assertFalse(any(event[0]=='goals' for event in self.arms[0].io.events))
         self.assertTrue(any(version>0 for stamp,observation,version in self.handoffs))
 

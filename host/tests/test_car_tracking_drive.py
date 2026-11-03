@@ -1,4 +1,5 @@
 """Persistent drive decisions with real geometry and synthetic motor replies."""
+import copy
 import math
 import unittest
 
@@ -315,14 +316,96 @@ class TrackingDriveTests(unittest.TestCase):
         self.assertEqual(result['command'],'SPEED,70,70')
         self.assertFalse(result['allow_arm'])
 
-    def test_changed_target_inside_fine_region_stops_before_restarting(self):
+    def test_changed_visible_target_inside_fine_region_remeasures_without_stopping(self):
         self.update(1000)
         self.update(1100,450,run=True)
         result=self.update(1200,300,run=True,travel=7,target_version=2,
             precise=self.precise(1100,400,'moving',version=1))
-        self.assertEqual(result['command'],'STOP')
-        self.assertEqual(result['status'],'target_changed_near')
+        self.assertEqual(result['command'],'SPEED,70,70')
+        self.assertEqual(result['request_fine'],'moving')
+        self.assertNotEqual(result['phase'],'settling')
         self.assertIsNone(self.drive.anchor)
+
+    def test_first_real_native_large_scale_jump_revokes_full_and_range_without_stopping(self):
+        for capability in ('full','range'):
+            with self.subTest(capability=capability):
+                self.setUp()
+                self.config['tracking']['confirmation_frames']=1
+                tracker=BlueTracker(self.config['tracking'],self.projection)
+                memory=TargetMemory(self.projection,self.config)
+                def cube_blob(x,y):
+                    n=self.projection.normal
+                    foot=[x,y,(self.projection.offset-n[0]*x-n[1]*y)/n[2]]
+                    u,v=self.projection.base_to_pixel(foot)
+                    top=self.projection.base_to_pixel([foot[k]+20*n[k] for k in range(3)])
+                    size=round(abs(v-top[1]))
+                    return Blob([round(u-size/2),round(v-size+1),size,size],size*size)
+                old=self.native_cue(1000,cube_blob(1200,0),tracker=tracker)
+                first=memory.update(old,motion_state=self.state(1000))
+                self.drive.update(old,self.state(1000),1000,target_version=0,target_event=first)
+                fine=self.precise(1000,1200,'moving',version=0)['observation']
+                point=[old['visual_evidence']['ground_contact_proxy_Base_mm'][k]+
+                       10*self.projection.normal[k] for k in range(3)]
+                fine['cube_center_Base_mm']=point
+                if capability=='range':
+                    fine.pop('cube_center_Base_mm')
+                    fine.update(status='no_complete_face',range_candidate={
+                        'schema':'aic.car.side_range.v1','status':'range_candidate',
+                        'coordinate_frame':'Base','units':'mm','Base_X_mm':point[0],
+                        'raw_center_Base_mm':point,'not_arm_or_parking_authority':True})
+                self.assertTrue(memory.bind_precise(fine,old,0))
+                self.drive._bind_anchor(fine,old)
+                fresh=self.native_cue(1100,cube_blob(300,50),tracker=tracker)
+                untouched=copy.deepcopy(fresh)
+                evidence=fresh['visual_evidence']
+                self.assertFalse(evidence['associated'])
+                self.assertEqual(evidence['association_confirmations'],0)
+                self.assertTrue(evidence['distance_valid'])
+                self.assertGreater(evidence['bbox_px'][2]/old['bbox_px'][2],
+                                   self.config['tracking']['max_size_ratio'])
+                target=memory.update(fresh,[(7,7)],motion_state=self.state(1100,True,7))
+                self.assertTrue(target['tracking_update'])
+                self.assertEqual(target['version'],1)
+                self.assertFalse(target['anchor_valid'])
+                self.assertIsNotNone(memory._query_visual)
+                self.assertFalse(memory.bind_precise(fine,old,0))
+                result=self.drive.update(fresh,self.state(1100,True,7),1100,
+                    target_version=memory.version,target_event=target)
+                self.assertTrue(result['command'].startswith('SPEED,'),result)
+                self.assertEqual(result['request_fine'],'moving')
+                self.assertNotEqual(result['phase'],'settling')
+                self.assertFalse(self.drive._searching)
+                self.assertIsNone(self.drive.anchor)
+                self.assertEqual(fresh,untouched)
+
+    def test_expired_visible_retarget_cue_cannot_start_bearing_only_motion(self):
+        self.update(1000)
+        coarse=self.weak_cue(1000,confirmed=1)
+        raw=dict(coarse['visual_evidence'])
+        result=self.update(1601,run=True,coarse=coarse,target_version=2,
+            target_event=dict(event='tracking_update',tracking_update=True,
+                navigation_cue=raw,visible=True,associated=True,
+                visibility='visible',target_valid=True))
+        self.assertEqual(result['command'],'STOP')
+        self.assertIsNone(result['request_fine'])
+        self.assertFalse(self.drive._bearing_only)
+
+    def test_unsent_STOP_can_restore_only_explicit_previous_follow_ownership(self):
+        self.update(1000)
+        self.update(1100,450,run=True)
+        stop=self.update(1200,443,run=True,travel=7,
+            precise=self.precise(1100,self.target,'moving'))
+        self.assertEqual(stop['command'],'STOP')
+        self.assertIsNone(self.drive._active_action)
+        state=dict(self.drive._motor)
+        self.assertFalse(self.drive.retarget_following(2))
+        self.assertTrue(self.drive.retarget_following(2,pending_follow=True))
+        self.assertEqual(self.drive._active_action,'follow')
+        self.assertEqual(self.drive._motor,state)
+        self.assertIsNone(self.drive.anchor)
+        self.assertEqual(self.drive.phase,'following')
+        self.drive._motion_hold='existing_motor_stop_4'
+        self.assertFalse(self.drive.retarget_following(3,pending_follow=True))
 
     def test_same_version_wrong_frame_or_old_capture_never_binds(self):
         for mismatch in ('pair','time','request'):

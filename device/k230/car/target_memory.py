@@ -67,8 +67,8 @@ class TargetMemory:
             max(1, task.get('period_ms', 100)))+2)
         self._motion_count = 0
         self._motion_direction = None
-        self._moving_jump_candidate = self._moving_jump_origin = None
-        self._moving_jump_count = 0
+        self._tracking_update = False
+        self._navigation_cue = None
         self._motion_model_uncertain = False
         self._measurement_inconsistent = self._appearance_changed = False
 
@@ -171,11 +171,51 @@ class TargetMemory:
         self._motion_rows = []
         self._motion_count = 0
         self._motion_direction = None
-        self._moving_jump_candidate = self._moving_jump_origin = None
-        self._moving_jump_count = 0
         self._last_reason = reason
         self._event = 'invalidated'
         self._moved = False
+        return self.snapshot()
+
+    def retarget_current(self, observation, reason='tracking_update'):
+        """Adopt one current usable cue for motion, revoking old geometry.
+
+        This is a following update, not proof of human motion or of object
+        identity. The original native association/geometry evidence is kept.
+        The coordinator must restrict calls to owned chassis following.
+        """
+        evidence = self._evidence(observation)
+        box, pixel = evidence.get('bbox_px'), evidence.get('center_pixel')
+        stamp = observation.get('capture_timestamp_ms', observation.get('timestamp_ms'))
+        if (stamp != self._last_stamp or observation.get('frame_id',stamp) != self._last_frame or
+                evidence.get('visible') is not True or evidence.get('ambiguous') is True or
+                not _point(box,4) or min(box[2:]) < 3 or not _point(pixel,2) or
+                max(box[2]/box[3],box[3]/box[2]) >
+                    self.config.get('tracking',{}).get('max_aspect_ratio',4) or
+                evidence.get('reason') in ('sparse_blob','implausible_aspect_ratio','invalid_or_tiny_blob')):
+            return None
+        visual = {'bbox_px':list(box),'center_pixel':list(pixel)}
+        if not self._tracking_update:
+            self.invalidate(reason)
+        self._tracking_update = True
+        self._navigation_cue = dict(evidence)
+        self._query_visual = self._identity_visual = self._visual_previous = visual
+        self._expected = (list(evidence['ground_contact_proxy_Base_mm']) if
+            evidence.get('distance_valid') is True and
+            _point(evidence.get('ground_contact_proxy_Base_mm'),3) else None)
+        self._distance_valid = self._expected is not None
+        self._visible = self._associated = True
+        self._visibility = 'visible'
+        self._invalidated = self._gap = False
+        self._gap_ended_at = self._exit_direction = None
+        self._acquire_count = 1
+        self._last_center = list(pixel)
+        self._event, self._movement_state = 'tracking_update', 'consistent'
+        self._moved = False
+        self._residual_px = self._residual_fraction = None
+        self._motion_model_uncertain = self._measurement_inconsistent = self._appearance_changed = False
+        self._precise_candidate = True
+        self._roll_visual(visual)
+        self.last_seen = dict(observation)
         return self.snapshot()
 
     def update(self, observation, wheel_deltas=(), arm_state=None, motion_state=None):
@@ -191,9 +231,9 @@ class TargetMemory:
 
         motion_state is the current chassis STATUS. While run is true or wheel
         increments exist, encoder/image disagreement is model uncertainty, not
-        target motion. Only an independently observed abrupt colour jump can
-        invalidate an in-flight result; slow movement is resolved by subsequent
-        stationary visual localization, not by trusting an ideal wheel model.
+        target motion. During commanded running, a current visible jump rebases
+        following and revokes old fine geometry without a suspected-motion pause.
+        Stopped and arm-stage movement retain their own confirmation rules.
         """
         deltas = tuple(wheel_deltas)
         moving = bool((motion_state or {}).get('run')) or any(abs(a)+abs(b) for a,b in deltas)
@@ -202,6 +242,7 @@ class TargetMemory:
         if self._motion_reference is not None and deltas:
             self._motion_reference = self._propagate(self._motion_reference,deltas)
         self._event, self._moved = 'none', False
+        self._tracking_update, self._navigation_cue = False, None
         self._motion_model_uncertain = False
         stamp = observation.get('capture_timestamp_ms', observation.get('timestamp_ms'))
         frame = observation.get('frame_id', stamp)
@@ -234,8 +275,6 @@ class TargetMemory:
             (arm.get('grasp_confirmed') is True and
              arm.get('pending_stage') == 'lift'))
         if holding:
-            self._moving_jump_candidate = self._moving_jump_origin = None
-            self._moving_jump_count = 0
             self._visibility, self._movement_state = 'holding', 'holding'
             self._distance_valid = False
             self._event = 'holding'
@@ -291,6 +330,33 @@ class TargetMemory:
         bbox = evidence.get('bbox_px', [])
         visual = ({'center_pixel':list(center), 'bbox_px':list(bbox)}
                   if _point(center,2) and _point(bbox,4) and min(bbox[2:]) > 0 else None)
+        reference = self._identity_visual if self._gap else self._visual_previous
+        source_reference = reference
+        if self._motion_reference is not None and self._motion_visual is not None:
+            # A fine-compute gap can contain a large commanded turn. Compare
+            # with its encoder-propagated image position, not the old pixels.
+            try:
+                source_reference = self._motion_visual
+                reference = dict(self._motion_visual,
+                    center_pixel=self.projection.base_to_pixel(self._motion_reference))
+            except ValueError:
+                reference = None
+        elif any(abs(a)+abs(b) for a,b in deltas):
+            reference = None
+        measured_jump = False
+        if (self._distance_valid and evidence.get('associated') is False and
+                visual is not None and source_reference is not None and reference is not None):
+            # A newly measured cube can jump near enough that its box exceeds
+            # the old size-ratio gate. Require actual common edge translation,
+            # after ego-motion, so mask expansion alone cannot revoke geometry.
+            shift = self._common_translation(visual,source_reference,reference['center_pixel'])
+            size = self.config.get('tracking',{}).get('image_size_px',[1280,960])
+            measured_jump = math.sqrt(sum((value/scale)**2 for value,scale in zip(shift,size))) > \
+                self.config.get('tracking',{}).get('max_center_jump_fraction',.15)
+        if (bool((motion_state or {}).get('run')) and not arm and not ambiguous and
+                (self._visual_jump(visual,reference) or measured_jump) and
+                self.retarget_current(observation) is not None):
+            return self.snapshot()
         unconfirmed_reacquisition = False
         if (unique and self._distance_valid and self._gap and visual is not None and
                 self._identity_visual is not None and
@@ -338,8 +404,6 @@ class TargetMemory:
             self._gap = True
             self._movement_state = 'unknown'
             self._visual_previous = None
-            self._moving_jump_candidate = self._moving_jump_origin = None
-            self._moving_jump_count = 0
             if self._visible and not unconfirmed_reacquisition:
                 # Unrelated or ambiguous blue between the edge observation
                 # and a blank frame does not prove the target left the view.
@@ -365,49 +429,19 @@ class TargetMemory:
             self._measurement_inconsistent, unused, self._residual_fraction = self._different(
                 point,self._expected,evidence)
         self._expected = list(point) if self._distance_valid else None
-        jump_usable = (visual is not None and
-            max(bbox[2]/bbox[3],bbox[3]/bbox[2]) <=
-            self.config.get('tracking', {}).get('max_aspect_ratio',4) and
-            evidence.get('reason') not in ('sparse_blob','implausible_aspect_ratio','invalid_or_tiny_blob'))
-        jump = moving and jump_usable and self._visual_jump(visual,previous_visual)
-        if self._moving_jump_origin is not None and visual is not None and self._held_match(
-                visual,self._moving_jump_origin):
-            # One bad frame followed by the original region is not a new
-            # target at the returning position.
-            self._moving_jump_count = 0
-        elif self._moving_jump_candidate is not None and jump_usable and self._held_match(
-                visual,self._moving_jump_candidate):
-            self._moving_jump_count += 1
-        elif jump:
-            if self._moving_jump_candidate is None:
-                self._moving_jump_origin = previous_visual
-            self._moving_jump_count = 1
-        else:
-            self._moving_jump_count = 0
-        self._moving_jump_candidate = visual if self._moving_jump_count else None
-        if not self._moving_jump_count:
-            self._moving_jump_origin = None
-        if self._moving_jump_count:
-            self._motion_rows = []
-            self._motion_count = 0
-            self._motion_direction = None
-            self._roll_visual(visual)
-            self._geometry_unknown = True
-            self._movement_state, self._event = 'suspected', 'suspected'
-            if self._moving_jump_count >= self.confirmation_frames:
-                was_invalidated = self._invalidated
-                self.invalidate('visual_discontinuity')
-                self._moved = not was_invalidated
-                self._event, self._movement_state = 'moved', 'confirmed'
-                self._associated = True
-                self._identity_visual = visual
-            self.last_seen = dict(observation)
-            return self.snapshot()
         if visual is not None and self._motion_visual is not None and (
                 self._motion_reference is not None or not any(abs(a)+abs(b) for a,b in deltas)):
             expected = (self.projection.base_to_pixel(self._motion_reference)
                         if self._motion_reference is not None else self._motion_visual['center_pixel'])
             shift = self._common_translation(visual,self._motion_visual,expected)
+            if motion_state is not None and not motion_state.get('run'):
+                observed = self._common_translation(visual,self._motion_visual,
+                    self._motion_visual['center_pixel'])
+                if math.sqrt(sum(value*value for value in observed)) > self._pixel_limit(evidence):
+                    # Passive wheel counts cannot erase an independently seen
+                    # stopped-target translation. Its residual still subtracts
+                    # the measured chassis motion before two-frame confirmation.
+                    moving = False
             previous_box = self._motion_visual['bbox_px']
             self._appearance_changed = any(abs(bbox[k]/previous_box[k]-1) >
                 self.distance_fraction for k in (2,3))
@@ -630,6 +664,7 @@ class TargetMemory:
         anchor = self.last_precise is not None and self._anchor_version == self.version
         return {'version':self.version, 'event':self._event,
             'confirmed_moved':self._moved, 'visibility':self._visibility,
+            'tracking_update':self._tracking_update, 'navigation_cue':self._navigation_cue,
             'visible':self._visible, 'associated':self._associated,
             'precise_candidate':self._precise_candidate,
             'table_distance_valid':self._distance_valid and self._associated,

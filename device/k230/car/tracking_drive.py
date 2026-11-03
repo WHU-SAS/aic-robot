@@ -35,6 +35,7 @@ class DriveController:
         self._near_recovery = None
         self._awaiting_query_identity = False
         self._moving_retry_frame = None
+        self._bearing_only = False
         self._motor = self._previous_motor = None
         self._stable_counts = self._stable_at = self.stopped_at_ms = None
         self._active_action = None
@@ -72,10 +73,24 @@ class DriveController:
         """Explicit owner acknowledgement of an existing button/link stop."""
         self._motion_hold = None
 
+    def retarget_following(self, target_version=None, pending_follow=False):
+        """Retain owned FOLLOW; pending_follow is an unsent decision rollback."""
+        owned = (self._active_action == 'follow' or
+                 pending_follow and self._active_action is None)
+        if (not owned or self._motor is None or
+                not self._motor.get('run') or self._motion_hold):
+            return False
+        self._changed_target(self.version if target_version is None else target_version)
+        self._active_action = 'follow'
+        self.phase = 'following'
+        self._moving_started = True
+        return True
+
     def restart_observation(self, change_view=False, discard_reference=False):
         """After arm recovery, demand a NEW stopped observation of this target."""
         self.anchor = self.parking = self._paired_point = None
         self._coarse_reference = None
+        self._bearing_only = False
         self._parking_reference = self._parking_ready_ms = None
         self._fine_request = None
         self._search_inspecting = False
@@ -114,6 +129,7 @@ class DriveController:
         self._parking_reference = self._parking_ready_ms = None
         self._fine_request = self._last_precise = None
         self._coarse_reference = self._moving_retry_frame = None
+        self._bearing_only = False
         self._near_recovery = None
         self._awaiting_query_identity = False
         self._adjust_due = False
@@ -702,8 +718,23 @@ class DriveController:
 
     def update(self, coarse, motor_state, now_ms, precise=None, target_version=0,
                fine_pending=False, target_event=None, arm_active=False):
-        coarse = self._canonical_coarse(coarse)
         event = target_event or {}
+        coarse = self._canonical_coarse(coarse)
+        stamp = (coarse or {}).get('capture_timestamp_ms')
+        fresh = type(stamp) is int and 0 <= age_ms(now_ms,stamp) <= self.config['tracking']['max_age_ms']
+        owned_follow = bool(motor_state['run'] and self._active_action == 'follow' and not arm_active)
+        cue = event.get('navigation_cue')
+        adopted = (owned_follow and fresh and event.get('tracking_update') and
+            isinstance(cue,dict) and isinstance(coarse,dict) and
+            cue.get('bbox_px') == (coarse.get('visual_evidence') or {}).get('bbox_px') and
+            cue.get('center_pixel') == (coarse.get('visual_evidence') or {}).get('center_pixel') and
+            cue.get('timestamp_ms',coarse.get('capture_timestamp_ms')) == coarse.get('capture_timestamp_ms'))
+        if adopted:
+            # Control may follow a newly selected cue without claiming native
+            # old-object association. The input observation remains unchanged.
+            control = dict(cue,visible=True,associated=True,ambiguous=False,
+                navigation_confirmed=cue.get('distance_valid') is True)
+            coarse = self._canonical_coarse(dict(coarse,visual_evidence=control))
         decision = {'phase': self.phase, 'status': 'running', 'command': None,
                     'request_fine': None, 'allow_arm': False, 'parking': None,
                     'reset_tracker': False,
@@ -711,12 +742,14 @@ class DriveController:
                     'precise_deferred': False,
                     'coarse_frame_id': (coarse or {}).get('frame_id')}
         changed = self.version != target_version
-        if changed:
-            self._changed_target(target_version)
         initial_busy = self._motor is None and motor_state['run']
         self._observe_motor(motor_state, now_ms)
         state, running = motor_state, bool(motor_state['run'])
         visible = self._visible(coarse, event)
+        if changed and not (owned_follow and fresh and visible and self.retarget_following(target_version)):
+            self._changed_target(target_version)
+        if adopted:
+            decision['reset_tracker'] = True
         precise_candidate = bool(event.get('precise_candidate'))
         query_visible = visible or precise_candidate
         if (event.get('event') == 'exited' or event.get('search') and not query_visible):
@@ -727,6 +760,8 @@ class DriveController:
                                 'bottom_view_frame_ms' in self._near_recovery)
         measured_coarse_plan = self._coarse_plan(coarse, now_ms)
         coarse_plan = measured_coarse_plan if visible else None
+        if coarse_plan is not None:
+            self._bearing_only = False
         if coarse_plan is not None and target_valid and not self._searching:
             self._remember_coarse(coarse)
         elif (running and self._active_action == 'follow' and target_valid and
@@ -835,14 +870,10 @@ class DriveController:
                 return finish('STOP', 'recovering_view')
             self.phase = 'recovering_view'
             return finish('HB', 'recovering_view')
-        # ARC cannot be retargeted by SPEED. Follow can smoothly use the fresh
-        # coarse target, provided it has not entered the static-near region.
+        # ARC cannot be retargeted by SPEED. Owned FOLLOW can smoothly adopt
+        # a current visible target even inside the fine region.
         if changed and running and self._active_action in ('arc', 'inspection_follow'):
             return finish('STOP', 'target_changed')
-        if (changed and running and coarse_plan is not None and
-                coarse_plan['coarse_Base_X_mm'] <= self.near['capture_Base_X_mm']):
-            self.phase = 'settling'
-            return finish('STOP', 'target_changed_near')
         # A version change is processed above before accepting a completed job.
         if precise is not None and (target_valid or
                 (precise_candidate and precise.get('purpose') == 'static')):
@@ -994,6 +1025,21 @@ class DriveController:
                 return finish(status='visual_tracking')
         if self._active_action == 'arc' and running:
             return finish('HB')
+        if (owned_follow and fresh and visible and target_valid and self.anchor is None and
+                coarse_plan is None and (adopted or self._bearing_only)):
+            # A new pixel direction supplies no new forward endpoint. Continue
+            # turning toward it while measuring, with zero mean translation.
+            bearing = self._coarse_direction(coarse, now_ms)
+            if bearing is not None:
+                self._bearing_only = True
+                turn = int(max(-self.options.get('search_speed_mm_s',20),
+                    min(self.options.get('search_speed_mm_s',20),
+                        self.near['heading_gain_per_s']*math.radians(bearing)*
+                        self.near['track_width_mm']/2)))
+                if coarse.get('frame_id') != self._moving_retry_frame:
+                    self._request('moving',coarse,state,now_ms,decision,fine_pending)
+                self.phase = 'fine_moving' if self._fine_request else 'following'
+                return finish('SPEED,%d,%d' % (-turn,turn),'tracking_bearing_only')
         if precise_candidate and not visible:
             self.phase = 'visual_tracking'
             if running:

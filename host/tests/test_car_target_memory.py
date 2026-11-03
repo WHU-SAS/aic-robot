@@ -299,32 +299,45 @@ class TargetMemoryTests(unittest.TestCase):
 
     def test_observed_image_jump_during_motion_still_invalidates_inflight_fine(self):
         coarse,fine=self.seed()
-        first=self.memory.update(self.visual((500,330,0),associated=False,
-            reason='unassociated_blue'),motion_state={'run':1})
-        self.assertEqual(first['event'],'suspected')
-        self.assertEqual(first['version'],0)
+        raw=self.visual((500,330,0),associated=False,reason='unassociated_blue')
+        before=copy.deepcopy(raw)
+        first=self.memory.update(raw,motion_state={'run':1})
+        self.assertEqual(first['event'],'tracking_update')
+        self.assertEqual(first['movement_state'],'consistent')
+        self.assertFalse(first['confirmed_moved'])
+        self.assertEqual(first['version'],1)
+        self.assertTrue(first['target_valid'])
+        self.assertTrue(first['associated'])
+        self.assertFalse(first['anchor_valid'])
+        self.assertEqual(raw,before)
+        self.assertFalse(first['navigation_cue']['associated'])
+        self.assertEqual(self.memory._query_visual['center_pixel'],raw['visual_evidence']['center_pixel'])
+        self.assertFalse(self.memory.bind_precise(fine,coarse,0))
         second=self.memory.update(self.visual((500,340,0),associated=False,
             reason='unassociated_blue'),motion_state={'run':1})
-        self.assertTrue(second['confirmed_moved'])
-        self.assertEqual(second['reason'],'visual_discontinuity')
+        self.assertFalse(second['confirmed_moved'])
         self.assertEqual(second['version'],1)
         self.assertFalse(self.memory.bind_precise(fine,coarse,0))
 
-    def test_moving_visual_jump_can_be_confirmed_on_first_stationary_frame(self):
+    def test_moving_visual_update_is_not_later_reported_as_a_stationary_exception(self):
         self.seed()
         self.memory.update(self.visual((500,330,0)),motion_state={'run':1})
         state=self.memory.update(self.visual((500,340,0)),motion_state={'run':0})
         self.assertEqual(state['version'],1)
-        self.assertEqual(state['reason'],'visual_discontinuity')
+        self.assertEqual(state['reason'],'tracking_update')
+        self.assertFalse(state['confirmed_moved'])
 
-    def test_moving_single_frame_jump_and_return_do_not_create_a_new_target(self):
-        self.seed()
-        self.memory.update(self.visual((500,330,0)),motion_state={'run':1})
+    def test_moving_jump_and_return_update_both_positions_without_restoring_old_fine(self):
+        coarse,fine=self.seed()
+        first=self.memory.update(self.visual((500,330,0)),motion_state={'run':1})
+        self.assertEqual(first['version'],1)
         for unused in range(4):
             state=self.memory.update(self.coarse(),motion_state={'run':1})
-            self.assertEqual(state['version'],0)
-            self.assertFalse(state['needs_precise'])
+            self.assertEqual(state['version'],2)
+            self.assertTrue(state['needs_precise'])
+            self.assertFalse(state['confirmed_moved'])
         self.assertEqual(state['movement_state'],'consistent')
+        self.assertFalse(self.memory.bind_precise(fine,coarse,0))
 
     def test_moving_colour_region_growth_is_not_an_independent_position_jump(self):
         self.seed()
@@ -335,17 +348,58 @@ class TargetMemoryTests(unittest.TestCase):
             self.assertNotEqual(state['event'],'suspected')
             self.assertFalse(state['needs_precise'])
 
+    def test_unassociated_large_mask_expansion_without_common_translation_keeps_fine(self):
+        unused,fine=self.seed()
+        expanded=self.visual((500,330,0),associated=False,
+            bbox_px=[660,440,360,120],center_pixel=[970,520],
+            reason='unassociated_blue')
+        state=self.memory.update(expanded,motion_state={'run':1})
+        self.assertEqual(state['version'],0)
+        self.assertFalse(state['tracking_update'])
+        self.assertTrue(state['anchor_valid'])
+        self.assertEqual(state['last_precise'],fine)
+
     def test_unknown_and_shape_discontinuity_do_not_confirm_a_moving_visual_jump(self):
         self.seed()
         self.memory.update(self.visual((500,330,0)),motion_state={'run':1})
         self.memory.update(self.absent(),motion_state={'run':1})
         state=self.memory.update(self.visual((500,330,0)),motion_state={'run':1})
-        self.assertEqual(state['version'],0)
+        self.assertEqual(state['version'],1)
         # The other side of a gap has no same-frame identity proof; a large
         # aspect/size change alone is not a confirmed new object position.
         state=self.memory.update(self.visual((500,-330,0),bbox_px=[250,400,4,4]),
                                  motion_state={'run':1})
+        self.assertEqual(state['version'],1)
+
+    def test_passive_tiny_wheel_counts_do_not_enable_running_retarget_policy(self):
+        self.seed()
+        state=self.memory.update(self.visual((500,230,0)),[(.01,.01)],motion_state={'run':0})
         self.assertEqual(state['version'],0)
+        self.assertEqual(state['movement_state'],'suspected')
+        self.assertFalse(state['tracking_update'])
+        self.assertIsNone(state['navigation_cue'])
+        for unused in range(3):
+            state=self.memory.update(self.visual((500,230,0)),[],motion_state={'run':0})
+        self.assertEqual(state['version'],1)
+        self.assertFalse(state['anchor_valid'])
+        self.assertTrue(state['needs_precise'])
+        self.assertFalse(state['tracking_update'])
+
+    def test_large_encoder_explained_image_turn_does_not_revoke_completed_fine(self):
+        for run in (0,1):
+            with self.subTest(run=run):
+                self.setUp()
+                original,fine=self.seed()
+                deltas=[(0,60)]
+                current=self.memory._propagate(self.memory._motion_reference,deltas)
+                raw=self.visual(current,associated=False,reason='unassociated_blue')
+                self.assertGreater(abs(raw['center_pixel'][0]-original['center_pixel'][0]),
+                                   1280*.15)
+                state=self.memory.update(raw,deltas,motion_state={'run':run})
+                self.assertEqual(state['version'],0)
+                self.assertFalse(state['tracking_update'])
+                self.assertTrue(state['anchor_valid'])
+                self.assertEqual(state['last_precise'],fine)
 
     def test_moving_target_explicitly_leaving_view_still_invalidates(self):
         coarse,fine=self.seed()
@@ -889,7 +943,7 @@ class TargetMemoryTests(unittest.TestCase):
                     candidate=self.visual((500,230,0),association_confirmations=count,
                         navigation_confirmed=False)
                     self.assertEqual(candidate['visual_evidence']['center_pixel'],[870.,520.])
-                    state=self.memory.update(candidate,motion_state={'run':1})
+                    state=self.memory.update(candidate,motion_state={'run':0})
                     self.assertFalse(state['associated'])
                     self.assertEqual(state['visibility'],'unknown')
                     self.assertFalse(state['table_distance_valid'])
@@ -901,7 +955,7 @@ class TargetMemoryTests(unittest.TestCase):
                     self.assertEqual(state['last_disappearance_direction'],'left')
                 candidate=self.visual((500,230,0),association_confirmations=3,
                     navigation_confirmed=True)
-                state=self.memory.update(candidate,motion_state={'run':1})
+                state=self.memory.update(candidate,motion_state={'run':0})
                 self.assertEqual(state['version'],1)
                 self.assertFalse(state['anchor_valid'])
                 self.assertFalse(state['target_valid'])

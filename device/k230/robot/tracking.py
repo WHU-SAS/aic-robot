@@ -442,6 +442,23 @@ class TrackingTask:
     def _match_fine(self, coarse, observation):
         return associate_fine_candidate(observation, coarse)
 
+    def _continue_visible_tracking(self, reason, pending_follow=False):
+        """Drop stale geometry while an owned approach follows a current cue."""
+        if (self.arm is not None or self.planning is not None or
+                not self.state.get('run') or not (self.drive._active_action == 'follow' or
+                    pending_follow and self.drive._active_action is None) or
+                self.drive._motion_hold is not None):
+            return False
+        target = self.memory.retarget_current(self.coarse, reason)
+        if target is None or not self.drive.retarget_following(self.memory.version,
+                                                               pending_follow=pending_follow):
+            return False
+        self.target = target
+        self.complete = self.last_parking = None
+        self._force_observe = True
+        self._release_evidence(self.memory.version)
+        return True
+
     def _step_arm(self):
         if self.arm is None or self._fresh_before_arm:
             return
@@ -565,18 +582,29 @@ class TrackingTask:
                                                   self.coarse['capture_timestamp_ms']))
                     eligible['current_consistency'] = consistency
                     if consistency == 'changed':
+                        purpose = eligible['purpose']
+                        continued = purpose == 'moving' and self._continue_visible_tracking(
+                            'fine_current_mismatch')
                         self._record('tracking_fine_current_mismatch',dict(
-                            frame_id=source.get('frame_id'),purpose=eligible['purpose']))
+                            frame_id=source.get('frame_id'),purpose=purpose,
+                            continued_follow=continued))
                         # This is a stale capability, not a failed face solve.
                         # Do not turn it into an automatic view-changing move.
                         self.complete = self.last_parking = None
-                        self.drive.restart_observation(discard_reference=True)
-                        self.decision = {'phase':'settling','status':'fine_outdated'}
-                        self._force_observe = True
-                        if self.state.get('run'):
-                            self._command('STOP')
-                        return self.snapshot()
+                        if continued:
+                            eligible = None
+                            event = dict(self.target)
+                        else:
+                            self.drive.restart_observation(discard_reference=True)
+                            self.decision = {'phase':'settling','status':'fine_outdated'}
+                            self._force_observe = True
+                            if self.state.get('run'):
+                                self._command('STOP')
+                            return self.snapshot()
                 outstanding_request=(self.drive._fine_request or {}).get('request_id')
+                following_before_decision = (self.state.get('run') and
+                    self.drive._active_action == 'follow' and
+                    self.arm is None and self.planning is None)
                 self.decision = self.drive.update(self.coarse, self.state, self.clock(),
                     precise=eligible, target_version=self.memory.version,
                     fine_pending=self.job is not None, target_event=event,
@@ -609,9 +637,16 @@ class TrackingTask:
                                 self.coarse['capture_timestamp_ms']))
                         if not bound:
                             self.last_parking=None
-                            self.drive.restart_observation(discard_reference=True)
-                            self.decision.update(allow_arm=False,parking=None,phase='settling',
-                                command='STOP' if self.state.get('run') else None)
+                            if done['purpose']=='moving' and self._continue_visible_tracking(
+                                    'fine_binding_rejected',pending_follow=bool(
+                                        following_before_decision and
+                                        self.decision.get('command')=='STOP')):
+                                self.decision = self.drive.update(self.coarse,self.state,self.clock(),
+                                    target_version=self.memory.version,target_event=dict(self.target))
+                            else:
+                                self.drive.restart_observation(discard_reference=True)
+                                self.decision.update(allow_arm=False,parking=None,phase='settling',
+                                    command='STOP' if self.state.get('run') else None)
                             self._force_observe=True
                             self._record('tracking_fine_binding_rejected',dict(
                                 frame_id=done['observation'].get('frame_id')))

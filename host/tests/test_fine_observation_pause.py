@@ -1,17 +1,24 @@
 """Fine callbacks move the scene while the real task has no coarse captures."""
 import copy
 import unittest
+from unittest.mock import patch
 
 from device.k230.car.blue_tracker import BlueTracker
 from device.k230.car.near_control import predict_center
 from device.k230.vision.runtime import track_coarse
 from host.tests import test_robot_tracking as fixtures
+from tools.deploy.k230_robot import build_bundle as robot_bundle
 
 
 class FineObservationPauseTests(unittest.TestCase):
-    def fixture(self, purpose, capability='full'):
+    def fixture(self, purpose, capability='full', move_during_fine=True):
         f=fixtures.RobotTrackingTests()
-        f.setUp()
+        # Exercise the promoted one-frame tracking configuration, rather than
+        # the legacy standalone fixture's deliberately retained three frames.
+        config=robot_bundle(tracking=True)[0]['car']
+        with patch.object(fixtures,'build_bundle',return_value=(config,None,None,None)):
+            f.setUp()
+        self.assertEqual(f.config['tracking']['confirmation_frames'],1)
         if purpose=='moving':
             f.x=650
         f.fine_slices=40
@@ -20,8 +27,10 @@ class FineObservationPauseTests(unittest.TestCase):
         ordinary_track=f.track
         class NativeProjection:
             def blob_geometry(self,box):
+                ratio=.3 if f.geometry_invalid else 1.
                 return dict(ground_contact_proxy_Base_mm=self.proxy,
-                    observed_to_expected_height_ratio=1.,expected_vertical_height_px=box[3])
+                    observed_to_expected_height_ratio=ratio,
+                    expected_vertical_height_px=box[3]/ratio)
         model=NativeProjection()
         tracker=BlueTracker(f.config['tracking'],model)
         class Blob:
@@ -31,20 +40,36 @@ class FineObservationPauseTests(unittest.TestCase):
             def cy(self):return self.evidence['center_pixel'][1]
             def pixels(self):return self.evidence['pixels']
         class Image:
-            def __init__(self,evidence):self.blob=Blob(evidence)
-            def find_blobs(self,*args,**kwargs):return [self.blob]
+            def __init__(self,evidence):self.blob=Blob(evidence) if evidence is not None else None
+            def find_blobs(self,*args,**kwargs):return [self.blob] if self.blob is not None else []
         def native(point,frame):
             original=ordinary_track(point,frame)
             evidence=original['visual_evidence']
-            model.proxy=list(evidence['ground_contact_proxy_Base_mm'])
+            if not evidence.get('visible'):
+                return track_coarse(Image(None),frame,tracker.detect_frame)
+            model.proxy=list(original['ground_contact_proxy_Base_mm'])
             return track_coarse(Image(evidence),frame,tracker.detect_frame)
         f.task.track=native
         f.task.reset_tracker=tracker.reset
+        f.native_tracker=tracker
+        f.bind_attempts=[]
+        bind=f.task.memory.bind_precise
+        def bind_current(observation,*args,**kwargs):
+            f.bind_attempts.append(observation['frame_id'])
+            return bind(observation,*args,**kwargs)
+        f.task.memory.bind_precise=bind_current
+        f.fine_start_states=[]
+        start=f.Fine.start
+        def record_start(session,image,frame,bbox):
+            f.fine_start_states.append(dict(frame=frame['frame_id'],run=f.motor.run,
+                                           purpose=f.task.job['purpose']))
+            return start(session,image,frame,bbox)
+        f.Fine.start=record_start
         projected=f.Fine.advance
         scene_change=[]
         def advance(session):
             projected(session)
-            if (not scene_change and session.ticks==3 and
+            if (move_during_fine and not scene_change and session.ticks==3 and
                     f.task.job is not None and f.task.job['purpose']==purpose):
                 # This executes independently of capture; the borrowed fine
                 # image is unchanged and the next camera input moves40mm.
@@ -77,35 +102,44 @@ class FineObservationPauseTests(unittest.TestCase):
         self.assertEqual(done['observation']['target_association']['status'],'matched')
         return done
 
-    def assert_stale_image_cannot_command_or_arm(self,f,done):
+    def assert_old_fine_is_not_used(self,f,done):
+        old=done['observation']['frame_id']
+        self.assertNotIn(old,f.bind_attempts)
+        for active in (f.task.memory.last_precise,f.task.drive.anchor):
+            self.assertTrue(active is None or active['frame_id']!=old,active)
+        self.assertFalse(f.handoffs)
+        self.assertFalse(f.arms)
+
+    def consume_fresh_frame(self,f,done):
         command_at=len(f.motor.commands)
         f.tick()
         evidence=f.task.coarse['visual_evidence']
         self.assertGreater(f.task.coarse['frame_id'],done['observation']['frame_id'])
         self.assertEqual(evidence['association_confirmations'],1)
-        self.assertFalse(evidence['navigation_confirmed'])
-        nonzero=[command for unused,command in f.motor.commands[command_at:]
-            if command.split(',')[0] in ('FOLLOW','SPEED','ARC') and
-            any(float(value)!=0 for value in command.split(',')[1:])]
-        self.assertFalse(nonzero,nonzero)
-        self.assertFalse(f.handoffs)
-        self.assertFalse(f.arms)
-        self.assertIsNone(f.task.memory.last_precise)
-        self.assertIsNone(f.task.drive.anchor)
+        self.assertTrue(evidence['navigation_confirmed'])
+        self.assert_old_fine_is_not_used(f,done)
+        return [command for unused,command in f.motor.commands[command_at:]]
 
     def test_static_old_full_image_cannot_authorize_arm_after_a_paused_scene_change(self):
         f,moved=self.fixture('static')
         done=self.complete_paused_image(f,moved,'static')
-        self.assert_stale_image_cannot_command_or_arm(f,done)
+        commands=self.consume_fresh_frame(f,done)
+        self.assertFalse(any(command.split(',')[0] in ('FOLLOW','SPEED','ARC') and
+            any(float(value)!=0 for value in command.split(',')[1:]) for command in commands),commands)
 
-    def test_moving_old_full_and_range_cannot_resume_from_a_paused_scene_change(self):
+    def test_moving_old_full_and_range_are_discarded_while_current_coarse_keeps_following(self):
         for capability in ('full','range'):
             with self.subTest(capability=capability):
                 f,moved=self.fixture('moving',capability)
                 done=self.complete_paused_image(f,moved,'moving')
                 self.assertEqual(done['observation']['target_association']['geometry_capability'],
                     'moving_range' if capability=='range' else 'full_pose')
-                self.assert_stale_image_cannot_command_or_arm(f,done)
+                commands=self.consume_fresh_frame(f,done)
+                self.assertTrue(any(command.startswith('SPEED,') for command in commands),commands)
+                self.assertNotIn('STOP',commands)
+                self.assertEqual(f.motor.run,1)
+                self.assertFalse(f.task.drive._searching)
+                self.assertNotEqual(f.task.snapshot()['phase'],'searching')
 
     def test_current_photo_comparison_excludes_post_exposure_driving(self):
         f=fixtures.RobotTrackingTests()

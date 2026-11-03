@@ -343,7 +343,7 @@ class TrackingReacquisitionTests(unittest.TestCase):
             clock.advance(50)
         return task,motor,observed
 
-    def test_task_missing_dispatch_and_flashes_do_not_repeat_bottom_retreat(self):
+    def test_task_visible_updates_do_not_repeat_bottom_retreat(self):
         def scene(number):
             if number <= 3: return [FAR]
             if number == 4: return [([620,950,30,10],150)]
@@ -356,14 +356,14 @@ class TrackingReacquisitionTests(unittest.TestCase):
         # One distant cube cannot become a tiny bottom edge in a single frame.
         # That flash supplies no verified departure and earns no blind retreat.
         self.assertEqual(len(backwards),0,commands)
-        self.assertTrue(any(is_search_spin(command) for command in commands))
         self.assertTrue(any(row['status'] == 'lost' for row in observed))
-        self.assertGreater(task._missing,0)
+        self.assertTrue(any(not row['visual_evidence']['visible'] for row in observed))
         self.assertIsNone(task.fault)
         self.assertEqual(task.metrics['arm_attempts'],0)
-        first_search = next(stamp for stamp,command in motor.commands if is_search_spin(command))
-        self.assertFalse(any(command.startswith(('FOLLOW,','SPEED,')) and not is_search_spin(command)
-            for stamp,command in motor.commands if stamp >= first_search))
+        # A current usable region is now a normal following update. It may
+        # renew coarse travel instead of forcing global searching first.
+        self.assertTrue(any(row['event']=='tracking_target' and
+            row['details']['event']=='tracking_update' for row in task.timeline))
 
     def test_task_three_missing_frames_dispatch_search_without_an_exit_event(self):
         def scene(number):
