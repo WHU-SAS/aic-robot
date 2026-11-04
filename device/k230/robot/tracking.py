@@ -168,6 +168,29 @@ class TrackingTask:
                 (self.job is not None and self.job['purpose'] == 'moving') or
                 (self.complete is not None and self.complete['purpose'] == 'moving'))
 
+    def _controlled_correction(self, capture_ms):
+        """Near static-fine cycle, plus its ARC's unobserved stop boundary."""
+        if (self.fault is not None or self.arm is not None or self.planning is not None or
+                type(capture_ms) is not int):
+            return False
+        if self.drive.phase == 'following' and self.drive.anchor is None:
+            return False
+        if (self.drive.phase == 'fine_static' or
+                (self.job or {}).get('purpose') == 'static' or
+                (self.drive._fine_request or {}).get('purpose') == 'static'):
+            return True
+        last = self.drive._last_precise
+        if (last is not None and last[2] == 'static' and self.drive.phase in
+                ('following','correcting','settling','fine_static')):
+            return True
+        if self.drive._active_action == 'arc' and self.drive.phase == 'correcting':
+            return True
+        ended = self.drive.last_arc_end or {}
+        stamp, previous = ended.get('at_ms'), self.memory._last_stamp
+        return (ended.get('phase') == 'correcting' and type(stamp) is int and
+            type(previous) is int and age_ms(stamp,previous) >= 0 and
+            age_ms(capture_ms,stamp) >= 0)
+
     def _observation_period(self):
         if self._moving_observation() or self.arm is not None:
             return self.period
@@ -389,7 +412,8 @@ class TrackingTask:
         try:
             self.coarse = coarse
             self.target = self.memory.update(coarse,
-                self.drive.odometry.since(previous,stamp), motion_state=self.state)
+                self.drive.odometry.since(previous,stamp), motion_state=self.state,
+                controlled_correction=self._controlled_correction(stamp))
             self._memory_odom_capture = stamp
             self.drive._memory_odom_capture = stamp
             job['_light_pending'] = None
@@ -491,7 +515,7 @@ class TrackingTask:
             self._cancel_plan('scene_has_no_arm_plan')
             self.last_parking = None
             self.emit('tracking_reobserve', {'reason':str(exc), 'stage':'arm_plan'})
-            self.drive.restart_observation(change_view=True)
+            self.drive.restart_observation()
             self._force_observe = True
         except Exception as exc:
             self._fault('arm_plan', exc)
@@ -521,7 +545,7 @@ class TrackingTask:
             self._wheel_delta(self._frame_motor,self.state))
         self._check_chassis_reference()
         self.target = self.memory.update(self.coarse, deltas, arm_state,
-                                         motion_state=self.state)
+            motion_state=self.state, controlled_correction=self._controlled_correction(now))
         if self._memory_odom_capture is not None:
             self._memory_odom_capture = now
             self.drive._memory_odom_capture = now
@@ -561,7 +585,8 @@ class TrackingTask:
             self.reset_tracker()
         self._missing = (self._missing+1 if not (
             self.target['visible'] and self.target['associated'] or
-            self.target.get('precise_candidate')) else 0)
+            self.target.get('precise_candidate') or
+            self.drive._visual_presence(self.coarse,self.clock())) else 0)
         unsent_hover = self.arm is not None and self.arm.snapshot().get('pending_stage') == 'hover'
         if (self._missing >= self.loss_confirmation_frames and
                 (self.planning is not None or unsent_hover)):
@@ -701,6 +726,12 @@ class TrackingTask:
                 self._handoff_moving_precise()
             self._record('tracking_fine_completed', dict(purpose=job['purpose'],
                 frame_id=job['session'].latest.get('frame_id'),
+                cube_center_Base_mm=job['session'].latest.get('cube_center_Base_mm'),
+                raw_center_Base_mm=(job['session'].latest.get('range_candidate') or {}).get('raw_center_Base_mm'),
+                evidence_type=(job['session'].latest.get('quality') or {}).get('evidence_type'),
+                boundary_method=(job['session'].latest.get('quality') or {}).get('boundary_method'),
+                vision_path=(job['session'].latest.get('quality') or {}).get('vision_path'),
+                reprojection_rms_px=(job['session'].latest.get('quality') or {}).get('reprojection_rms_px'),
                 status=observation.get('status'),
                 target_association=(observation.get('target_association') or {}).get('status'),
                 reason=observation.get('reason'),search=observation.get('search'),
@@ -977,8 +1008,14 @@ class TrackingTask:
                     increments = self.drive.odometry.since(
                         source.get('capture_timestamp_ms',self.clock()),
                         self.coarse['capture_timestamp_ms'])
+                    # Near-cycle coarse displacement does not classify target
+                    # movement, but a completed stopped image must still match
+                    # the CURRENT view before binding or handing it to the arm.
+                    # This rejects only that image, without changing the epoch
+                    # or interrupting an already issued correction ARC.
                     consistency = self.memory.precise_consistency(source,
-                        eligible['paired_coarse'],increments)
+                        eligible['paired_coarse'],increments,require_current=(
+                            eligible['purpose']=='static' and not self.state.get('run')))
                     eligible['current_consistency'] = consistency
                     if consistency == 'changed':
                         fine_point = (source.get('cube_center_Base_mm') or
@@ -1030,6 +1067,11 @@ class TrackingTask:
                         outstanding_request_id=outstanding_request,
                         consumed=self.decision.get('precise_consumed'),
                         anchor_present=self.drive.anchor is not None,
+                        command=self.decision.get('command'),
+                        static_verification=self.decision.get('static_verification'),
+                        correction_plan=self.decision.get('correction_plan'),
+                        near_plan=self.decision.get('plan'),
+                        correction_reference=self.decision.get('correction_reference'),
                         phase=self.decision.get('phase')))
                 drive_event = (self.decision.get('phase'), self.decision.get('status'),
                     (self.decision.get('command') or '').split(',')[0])
@@ -1041,7 +1083,8 @@ class TrackingTask:
                         encoder_a=self.state.get('encoder_a'), encoder_b=self.state.get('encoder_b')))
                 if self.complete is not None and self.decision.get('precise_consumed'):
                     done = self.complete
-                    if (not self.decision.get('moving_fine_stopped') and
+                    if (not self.decision.get('return_to_coarse') and
+                            not self.decision.get('moving_fine_stopped') and
                             done['observation'].get('target_association', {}).get('status') == 'matched'):
                         bound=self.memory.bind_precise(done['observation'], done['paired_coarse'],
                             done['target_version'], self.drive.odometry.since(
@@ -1066,6 +1109,10 @@ class TrackingTask:
                             self._force_observe=True
                             self._record('tracking_fine_binding_rejected',dict(
                                 frame_id=done['observation'].get('frame_id')))
+                if self.decision.get('return_to_coarse'):
+                    self.memory.release_precise()
+                    self.target = self.memory.snapshot()
+                    self.last_parking = None
                 if not self.decision.get('precise_deferred'):
                     self.complete = None
                 if self.decision.get('command'):
@@ -1097,7 +1144,7 @@ class TrackingTask:
                         except ReobserveRequired as exc:
                             self.last_parking = None
                             self.emit('tracking_reobserve', {'reason': str(exc), 'stage': 'arm_plan'})
-                            self.drive.restart_observation(change_view=True)
+                            self.drive.restart_observation()
                         except Exception as exc:
                             self._fault('arm_plan', exc)
                     elif (self.decision.get('request_fine') and self.job is None and

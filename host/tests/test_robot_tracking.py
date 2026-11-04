@@ -585,7 +585,8 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertEqual(len(self.arms),1)
 
     def test_arc_timeout_context_survives_target_log_rollover_and_cleanup_stop(self):
-        self.fail_every_fine = True
+        # A measured lateral error, rather than failed recognition, grants ARC.
+        self.y += 40
         original = self.motor.expect
         def expect(command):
             state = original(command)
@@ -608,12 +609,14 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertEqual(result['arc_timeouts'], 1)
         self.assertEqual(result['last_arc_end'], ended)
 
-    def test_move_during_paused_fine_rejects_old_image_and_never_hands_it_to_arm(self):
+    def test_true_move_during_approach_reacquires_before_final_static_handoff(self):
+        self.x=650
         self.fine_slices = 40
         self.move_in_fine_callback()
         self.finish()
         self.assertTrue(self.moved)
-        self.assertTrue(any(event=='tracking_fine_current_mismatch' for event,details in self.events))
+        self.assertTrue(any(event=='tracking_target' and details.get('movement_state')=='confirmed'
+                            for event,details in self.events))
         self.assertGreaterEqual(self.task.metrics['fine_started'],2)
         self.assertGreaterEqual(self.task.metrics['target_changes'],1)
         self.assertTrue(all(obs['capture_timestamp_ms'] >= self.moved_at and v>0
@@ -695,11 +698,54 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertEqual([e for e in arm.io.events if e[0]=='goals'],goals)
         self.assertFalse(any(e[0]=='ready2' for e in arm.io.events))
 
-    def test_failed_static_measurement_changes_view_before_trying_again(self):
+    def test_failed_static_measurement_rephotographs_without_moving(self):
         self.fail_first_fine = True
         self.finish()
-        self.assertTrue(any(c.startswith('ARC,') for t,c in self.motor.commands))
+        self.assertFalse(any(c.startswith(('ARC,','FOLLOW,','SPEED,')) for t,c in self.motor.commands))
         self.assertGreaterEqual(self.task.metrics['fine_started'],2)
+        self.assertNotEqual(self.created_fines[0].frame['frame_id'],self.created_fines[1].frame['frame_id'])
+        self.assertTrue(all(not row['run']for row in self.observation_rows))
+
+    def test_repeated_static_failures_stay_stopped_until_a_new_successful_frame(self):
+        advance=self.Fine.advance
+        def six_failures(session):
+            advance(session)
+            if session.latest is not None and session.index<6:
+                session.latest['status']='no_complete_face'
+        self.Fine.advance=six_failures
+        self.finish()
+        self.assertGreaterEqual(len(self.created_fines),7)
+        ids=[session.frame['frame_id']for session in self.created_fines[:7]]
+        self.assertEqual(len(set(ids)),7)
+        self.assertFalse(any(c.startswith(('ARC,','FOLLOW,','SPEED,'))for t,c in self.motor.commands))
+        self.assertEqual(len(self.arms),1)
+        self.assertEqual(self.handoffs[0][1]['frame_id'],self.created_fines[6].frame['frame_id'])
+
+    def test_visible_geometry_or_identity_uncertainty_does_not_become_loss_search(self):
+        for kind in('range_invalid','association_unknown','ambiguous_candidates'):
+            with self.subTest(kind=kind):
+                self.setUp();self.geometry_invalid=True;self.fail_every_fine=True
+                track=self.task.track
+                def uncertain(point,frame):
+                    result=track(point,frame)
+                    evidence=result['visual_evidence']
+                    if kind=='association_unknown':
+                        evidence.update(associated=False,cube_shape_compatible=False)
+                        result['visual_candidates']=[dict(evidence)]
+                    elif kind=='ambiguous_candidates':
+                        first=dict(evidence,associated=False)
+                        second=copy.deepcopy(first)
+                        second['center_pixel'][0]+=100;second['bbox_px'][0]+=100
+                        result['visual_candidates']=[first,second]
+                        evidence.update(visible=False,associated=False,ambiguous=True,candidate_count=2)
+                    return result
+                self.task.track=uncertain
+                self.tick(350)
+                self.assertEqual(self.task._missing,0)
+                self.assertIsNone(self.task.fault)
+                self.assertFalse(self.arms)
+                self.assertGreaterEqual(self.task.metrics['observations'],3)
+                self.assertFalse(any(c.startswith(('ARC,','FOLLOW,','SPEED,'))for t,c in self.motor.commands))
 
     def test_planning_blind_interval_requires_a_new_frame_before_hover(self):
         original = self.task.begin_arm
@@ -787,7 +833,7 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertIsNone(self.task.fault)
         self.assertEqual(self.task.status,'running')
 
-    def test_ambiguous_before_hover_preserves_one_frame_but_can_reobserve_if_persistent(self):
+    def test_visible_ambiguity_before_hover_waits_without_searching(self):
         for count in (1,8):
             with self.subTest(ambiguous_frames=count):
                 self.setUp()
@@ -818,10 +864,13 @@ class RobotTrackingTests(unittest.TestCase):
                     self.assertEqual(len(self.arms),1)
                     self.assertEqual(result['metrics']['fine_started'],1)
                 else:
-                    self.assertEqual([e[0] for e in self.arms[0].io.events],['close'])
-                    self.assertTrue(any(is_search_spin(c) for t,c in self.motor.commands))
+                    self.assertEqual(self.arms[0].io.events,[])
+                    self.assertEqual(self.task._missing,0)
+                    self.assertFalse(any(is_search_spin(c) for t,c in self.motor.commands))
                     self.assertIsNone(self.task.fault)
                     self.assertEqual(self.task.status,'running')
+                    self.finish()
+                    self.assertFalse(any(c.startswith(('ARC,','FOLLOW,','SPEED,')) for t,c in self.motor.commands))
 
     def test_visible_coarse_geometry_rejection_can_be_rescued_by_full_static_pose(self):
         self.geometry_invalid=True
@@ -839,15 +888,18 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertEqual(len(self.arms),1)
         self.assertFalse(any(c.startswith(('FOLLOW','SPEED','ARC')) for t,c in self.motor.commands))
 
-    def test_weak_target_moving_during_first_fine_rejects_old_pose_and_rephotographs(self):
+    def test_weak_static_pair_waits_for_fresh_consistent_identity_without_motion_classification(self):
         self.geometry_invalid=True
         self.move_in_fine_callback(after_ticks=5,amount=20)
-        for unused in range(500):
-            self.tick()
-            rejected=any(event=='tracking_fine_current_mismatch' for event,details in self.events)
-            if rejected and self.task.metrics['fine_started']>=2:break
-        else:self.fail(self.task.snapshot())
-        self.assertFalse(self.arms)
+        self.finish()
+        self.assertGreaterEqual(self.task.metrics['fine_started'],2)
+        self.assertTrue(any(event=='tracking_fine_current_mismatch'for event,details in self.events))
+        self.assertEqual(self.task.metrics['target_changes'],0)
+        old=self.created_fines[0].frame['frame_id']
+        self.assertTrue(all(observation['frame_id']!=old
+                            for stamp,observation,version in self.handoffs))
+        self.assertTrue(all(observation['capture_timestamp_ms']>=self.moved_at
+                            for stamp,observation,version in self.handoffs))
         self.assertFalse(self.task.drive._awaiting_query_identity)
         self.assertFalse(any(c.startswith(('FOLLOW','SPEED','ARC')) for t,c in self.motor.commands))
 
@@ -885,7 +937,7 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertEqual(self.task.fault,'test: communication uncertain')
         self.assertEqual(self.motor.commands[-1][1],'STOP')
 
-    def test_only_scene_plan_unavailable_changes_view_not_bad_calibration(self):
+    def test_scene_plan_unavailable_rephotographs_without_changing_view(self):
         original=self.task.begin_arm
         attempts=[]
         def plan(obs,version):
@@ -895,7 +947,8 @@ class RobotTrackingTests(unittest.TestCase):
         self.task.begin_arm=plan
         self.finish()
         self.assertGreaterEqual(len(attempts),2)
-        self.assertTrue(any(c.startswith('ARC') for t,c in self.motor.commands))
+        self.assertGreaterEqual(self.task.metrics['fine_started'],2)
+        self.assertFalse(any(c.startswith(('ARC,','FOLLOW,','SPEED,')) for t,c in self.motor.commands))
 
     def test_bad_calibration_waits_without_repeated_motion_or_terminal_fail(self):
         self.task.begin_arm=lambda obs,version:(_ for _ in ()).throw(ValueError('calibration mismatch'))
@@ -980,7 +1033,7 @@ class RobotTrackingTests(unittest.TestCase):
         self.assertGreaterEqual(self.task.metrics['plans_cancelled'],1)
         self.assertTrue(all(version>0 for t,obs,version in self.handoffs))
 
-    def test_cooperative_scene_plan_failure_changes_view_and_retries(self):
+    def test_cooperative_scene_plan_failure_rephotographs_statically(self):
         original=self.task.begin_arm
         started=[]
         def plan(obs,version):
@@ -992,7 +1045,8 @@ class RobotTrackingTests(unittest.TestCase):
         self.task.begin_arm=plan
         self.finish()
         self.assertGreaterEqual(len(started),2)
-        self.assertTrue(any(command.startswith('ARC') for t,command in self.motor.commands))
+        self.assertGreaterEqual(self.task.metrics['fine_started'],2)
+        self.assertFalse(any(command.startswith(('ARC,','FOLLOW,','SPEED,')) for t,command in self.motor.commands))
 
     def test_many_cheap_planning_yields_share_budget_instead_of_each_sleeping(self):
         original=self.task.begin_arm

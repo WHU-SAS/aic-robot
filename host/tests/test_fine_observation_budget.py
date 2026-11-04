@@ -313,9 +313,9 @@ class FineObservationBudgetTests(unittest.TestCase):
         self.assertEqual(f.fine_start_states[-1]['run'],1)
         self.assertGreater(f.created_fines[-1].frame['frame_id'],old)
 
-    def test_static_confirmed_move_cancels_original_image_without_arm_handoff(self):
-        # Cheap observations can satisfy the existing two-frame movement
-        # confirmation window without changing that independent policy.
+    def test_dense_static_observations_keep_the_owned_near_fine_despite_pixel_motion(self):
+        # Near parking follows its current fine image, then obtains a new
+        # stopped fine after the action. Coarse jumps do not classify motion.
         s=CostScene(self,slices=140,capture_ms=5,track_ms=10,classify_ms=5)
         f=s.f
         s.until(lambda:f.task.job is not None)
@@ -324,15 +324,41 @@ class FineObservationBudgetTests(unittest.TestCase):
         def move_once(row):
             if len(s.extra)==1:f.y+=40
         s.on_extra=move_once
-        s.until(lambda:f.task.memory.version>version)
+        done=s.first_complete()
         self.assertGreaterEqual(len(s.extra),2)
-        self.assertGreater(f.task.metrics['fine_cancelled'],0)
+        self.assertEqual(f.task.memory.version,version)
+        self.assertEqual(f.task.metrics['fine_cancelled'],0)
+        self.assertFalse(any(row.get('target',{}).get('confirmed_moved') for row in s.extra))
+        self.assertEqual(done['observation']['frame_id'],old)
+        self.assertEqual(done['paired_coarse']['frame_id'],old)
+        self.assertEqual(done['observation']['cube_center_Base_mm'],s.starts[0]['point'])
+        self.assertNotEqual(s.starts[0]['point'],f.point())
+        self.assertFalse(f.handoffs)
+        self.assertFalse(f.arms)
+        commands=len(f.motor.commands)
+        f.tick()
+        self.assertGreater(f.task.coarse['frame_id'],old)
+        self.assertIn('STATUS',[command for unused,command in f.motor.commands[commands:]])
         self.assertNotIn(old,f.bind_attempts)
         self.assertFalse(f.handoffs)
         self.assertFalse(f.arms)
-        self.assertTrue(f.task.memory.last_precise is None or
-                        f.task.memory.last_precise['frame_id']!=old)
-        self.assertTrue(f.task.drive.anchor is None or f.task.drive.anchor['frame_id']!=old)
+        self.assertEqual(f.task.memory.version,version)
+        self.assertEqual(f.task.metrics['fine_cancelled'],0)
+        self.assertEqual(f.motor.run,0)
+        # Latest-frame validity is separate from motion classification: the
+        # completed image is stale, so rephotograph while stopped. Only that
+        # new fine cycle can correct the pose and eventually hand it to the arm.
+        s.until(lambda:bool(f.handoffs))
+        self.assertEqual(len(f.handoffs),1)
+        self.assertGreater(f.handoffs[0][1]['frame_id'],old)
+        self.assertEqual(f.handoffs[0][1]['target_association']['status'],'matched')
+        self.assertGreaterEqual(len(f.created_fines),2)
+        self.assertEqual(f.handoffs[0][1]['frame_id'],f.fine_start_states[-1]['frame'])
+        self.assertEqual(f.fine_start_states[-1]['purpose'],'static')
+        self.assertEqual(f.fine_start_states[-1]['run'],0)
+        self.assertTrue(f.task.last_parking['verification']['accepted'])
+        self.assertTrue(f.task.last_parking['verification']['window']['inside'])
+        self.assertEqual(f.motor.run,0)
 
     def test_unknown_extra_observation_is_not_reported_as_target_motion(self):
         s=CostScene(self,slices=90)
@@ -351,7 +377,7 @@ class FineObservationBudgetTests(unittest.TestCase):
         self.assertIs(f.task.job['session'],original)
         self.assertFalse(f.handoffs)
 
-    def test_sparse_static_observations_keep_original_confirmation_policy_and_freshly_reject_old_image(self):
+    def test_sparse_static_observations_keep_budget_and_same_frame_near_fine_authority(self):
         s=CostScene(self,slices=90,capture_ms=10,track_ms=30,classify_ms=10)
         f=s.f
         def move_once(row):
@@ -367,12 +393,29 @@ class FineObservationBudgetTests(unittest.TestCase):
         self.assertTrue(classified)
         self.assertFalse(any(row['target']['confirmed_moved'] for row in classified))
         self.assertEqual(f.task.metrics['fine_cancelled'],0)
+        commands=len(f.motor.commands)
         f.tick()
+        self.assertGreater(f.task.coarse['frame_id'],old)
+        self.assertIn('STATUS',[command for unused,command in f.motor.commands[commands:]])
         self.assertNotIn(old,f.bind_attempts)
+        self.assertEqual(done['paired_coarse']['frame_id'],old)
+        self.assertEqual(done['observation']['target_association']['frame_id'],old)
         self.assertFalse(f.handoffs)
         self.assertFalse(f.arms)
-        self.assertTrue(f.task.memory.last_precise is None or
-                        f.task.memory.last_precise['frame_id']!=old)
+        self.assertEqual(f.motor.run,0)
+        s.until(lambda:bool(f.handoffs))
+        self.assertEqual(len(f.handoffs),1)
+        self.assertGreater(f.handoffs[0][1]['frame_id'],old)
+        self.assertEqual(f.handoffs[0][1]['frame_id'],f.fine_start_states[-1]['frame'])
+        self.assertEqual(f.fine_start_states[-1]['purpose'],'static')
+        self.assertEqual(f.fine_start_states[-1]['run'],0)
+        self.assertEqual(f.handoffs[0][1]['target_association']['status'],'matched')
+        self.assertTrue(f.task.last_parking['verification']['accepted'])
+        timing=f.task.last_parking['verification']['static_timing']
+        self.assertLessEqual(timing['stopped_at_ms'],timing['capture_timestamp_ms'])
+        self.assertLessEqual(timing['capture_timestamp_ms'],timing['result_ready_ms'])
+        self.assertLessEqual(timing['result_ready_ms'],timing['checked_at_ms'])
+        self.assertEqual(f.motor.run,0)
 
     def test_bottom_whole_then_partial_during_budgeted_observation_keeps_original_reverse_budget(self):
         b=bottom.BottomScene(self)

@@ -167,6 +167,10 @@ class TargetMemory:
         # bind_precise validates both complete poses and physical-side ranges.
         return self.last_precise is not None and self._anchor_version == self.version
 
+    def release_precise(self):
+        """Keep measurement history, without a current distance capability."""
+        self._anchor_version = None
+
     def invalidate(self, reason='target_changed'):
         """One version change until fresh consistent observations reacquire it.
 
@@ -235,7 +239,8 @@ class TargetMemory:
         self.last_seen = dict(observation)
         return self.snapshot()
 
-    def update(self, observation, wheel_deltas=(), arm_state=None, motion_state=None):
+    def update(self, observation, wheel_deltas=(), arm_state=None, motion_state=None,
+               controlled_correction=False):
         """Use ordered wheel increments SINCE THE PREVIOUS update call.
 
         arm_state is an arm-engine snapshot. Close uses contact interpretation
@@ -252,6 +257,12 @@ class TargetMemory:
         following and revokes old fine geometry without a suspected-motion pause.
         A measured travel anchor instead requires confirmed, associated whole-
         region translation; coarse proxy noise or reacquisition cannot revoke it.
+
+        controlled_correction is the owner's near static-verification/correction
+        cycle, including ARC completion. Coarse displacement does not classify
+        external motion in this cycle: its next precise image gives the next
+        correction. Real visibility/loss rules and raw feedback stay unchanged;
+        the current coarse image only rebases history and records the residual.
         """
         deltas = tuple(wheel_deltas)
         moving = bool((motion_state or {}).get('run')) or any(abs(a)+abs(b) for a,b in deltas)
@@ -488,8 +499,19 @@ class TargetMemory:
             previous_box = self._motion_visual['bbox_px']
             self._appearance_changed = any(abs(bbox[k]/previous_box[k]-1) >
                 self.distance_fraction for k in (2,3))
-            moving_evidence = moving and anchored and not self._appearance_changed
-            if moving and not moving_evidence:
+            moving_evidence = (not controlled_correction and moving and anchored and
+                               not self._appearance_changed)
+            if controlled_correction:
+                # Actual whole-box image translation is expected during a
+                # commanded turn, even when its encoder projection is biased.
+                # This also owns the first run=0 exposure across ARC completion;
+                # the passive-count override above must not call that motion.
+                self._motion_rows = []
+                self._motion_count = 0
+                self._motion_direction = None
+                self._residual_px = math.sqrt(sum(value*value for value in shift))
+                self._motion_model_uncertain = self._residual_px > self._pixel_limit(evidence)
+            elif moving and not moving_evidence:
                 # A fixed cube can barely move in the image while an ARC's
                 # wheel model predicts65px. Do not stop/relocalize for that
                 # disagreement or carry it into the first stationary frame.
@@ -516,14 +538,14 @@ class TargetMemory:
             self._motion_rows = [row for row in self._motion_rows
                 if 0 <= age_ms(stamp,row[0]) <= self._motion_window_ms][-self._motion_row_limit:]
             total = [sum(row[k] for row in self._motion_rows) for k in (1,2)]
-            confirmed_evidence = not moving
+            confirmed_evidence = not controlled_correction and not moving
             if moving_evidence:
                 observed_total = [sum(row[k] for row in self._motion_rows) for k in (3,4)]
                 confirmed_evidence = (math.sqrt(sum(value*value for value in observed_total)) >
                     self._pixel_limit(evidence) and sum(a*b for a,b in zip(total,observed_total)) > 0)
                 self._motion_model_uncertain = math.sqrt(sum(value*value for value in total)) > \
                     self._pixel_limit(evidence) and not confirmed_evidence
-            if not moving or moving_evidence:
+            if not controlled_correction and (not moving or moving_evidence):
                 self._residual_px = math.sqrt(sum(value*value for value in total))
             if confirmed_evidence and self._residual_px > self._pixel_limit(evidence):
                 coherent = (self._motion_direction is not None and
@@ -572,7 +594,8 @@ class TargetMemory:
             self._gap_ended_at = None
         return self.snapshot()
 
-    def precise_consistency(self, observation, coarse, wheel_deltas=None):
+    def precise_consistency(self, observation, coarse, wheel_deltas=None,
+                            require_current=False):
         """Compare a completed capability with the current native input only.
 
         This does not assert physical target motion or change any history.
@@ -580,6 +603,8 @@ class TargetMemory:
         poses and range-only results can nevertheless be stale when a current
         unique same-size region contradicts their original native image ray.
         wheel_deltas ends at that current image's capture, never clock-now.
+        require_current distinguishes a completed stopped image's freshness
+        check from retention of an already accepted travelling distance.
         """
         stamp = observation.get('capture_timestamp_ms')
         if (stamp is None or self._last_stamp is None or self._query_visual is None or
@@ -614,7 +639,7 @@ class TargetMemory:
         if residual > self._pixel_limit(evidence):
             # This single coarse comparison is diagnostic. A bound travel
             # anchor is revoked only by update's confirmed movement rule.
-            return 'unknown' if self._distance_anchor() else 'changed'
+            return 'unknown' if self._distance_anchor() and not require_current else 'changed'
         return 'consistent'
 
     def bind_precise(self, observation, coarse, version, wheel_deltas=None):

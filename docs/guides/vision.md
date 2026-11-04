@@ -74,7 +74,7 @@ PC单图入口、独立抓取及小车`observations.py`已接入该协议。部�
 
 追踪静态入口通过`tracking_task.static_localization_policy=shared_side_only`使用共享侧面及其同图恢复，不进入旧全量恢复链。仅该策略将同帧唯一关联粗候选的原`bbox`传入共享搜索作为提示，各路线分别遵守候选预算、四边2px或上述非平面3px、面积选择和桌面约束；静态多路线的总耗时需整链测量，候选预算不是1.5秒硬时限。提示不能补边、提供坐标或替代完成后的严格`target_association`检查：仍用原粗质心与实际选中姿态的完整20mm方块投影核对，同帧号或搜索ROI本身不能证明选中同一物体。关联不确定时保留原解作诊断，清除下游XYZ／测距能力，继续观察恢复。
 
-静态共享入口按上述当前图像选路，保留`search.route_history`及各路线的拒绝原因；仍拒绝时返回`no_complete_face`，交整车换视角，不继续旧全量恢复，也不返回部分坐标。总处理时间包含此前所有路线，不能把最后成功分支的时间单独当端到端耗时。旧独立、离线及未设策略字段的分步入口默认`full_recovery`，保持原搜索范围及恢复链，不使用这个`bbox`提示。底层`pick/vision.py:localize_steps(..., allow_legacy=False, bbox_px=...)`提供该共享侧面策略。
+静态共享入口按上述当前图像选路，保留`search.route_history`及各路线的拒绝原因；仍拒绝时返回`no_complete_face`，交整车保持停车、拍新图重看，不以识别失败授权左右换角度，不继续旧全量恢复，也不返回部分坐标。控制修改的安装状态见[全流程追踪](full-process-tracking.md)。总处理时间包含此前所有路线，不能把最后成功分支的时间单独当端到端耗时。旧独立、离线及未设策略字段的分步入口默认`full_recovery`，保持原搜索范围及恢复链，不使用这个`bbox`提示。底层`pick/vision.py:localize_steps(..., allow_legacy=False, bbox_px=...)`提供该共享侧面策略。
 
 分步结果不在完成前提供抓取坐标。预算取`tracking_task.fine_budget_ms`，其次`near_parking.fine_budget_ms`，默认20ms；每步记录实际耗时与`over_budget`，单个OpenCV或候选处理仍可超时，属于软预算。禁用旧恢复不是硬时限，也不保证原来依赖顶面或旧恢复的图仍会成功。分步入口保留调用方调度能力；当前整车离线候选按用户最新选择以10%额外耗时软预算穿插少量粗观察，只在精测让出且预算足够时取新帧；保留必要的真实底盘反馈，算完仍以新粗帧及STATUS核验，不逐求解步骤重拍。原JPEG95/BGR与同帧粗观测始终归本次精测所有。
 

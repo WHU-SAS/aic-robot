@@ -230,20 +230,28 @@ class GlobalBottomRecoveryTaskTests(unittest.TestCase):
         f.x,f.y=point[:2]
         for unused in range(15):
             s.step('whole_far')
-            if f.task.drive._bottom_reverse_budget is None and f.task.memory.last_precise:
+            plan=(f.task.decision or {}).get('plan') or {}
+            if (f.task.drive._bottom_reverse_budget is None and
+                    f.task.drive._active_action=='follow' and plan.get('mode')=='coarse'):
                 break
         else:self.fail(f.task.snapshot())
         self.assertEqual(f.task.memory.last_disappearance_direction,'bottom')
         self.assertIsNone(f.task.drive._bottom_reverse_budget)
         self.assertTrue(f.task.target['associated'])
         self.assertEqual(f.task.drive._active_action,'follow')
-        anchor=f.task.drive.anchor
-        self.assertIsNotNone(anchor)
+        self.assertFalse(f.task.drive._search_reverse_required)
+        self.assertGreater(len(f.fine_start_states),s.initial_fines)
+        self.assertEqual(f.fine_start_states[-1]['purpose'],'static')
+        self.assertEqual(f.fine_start_states[-1]['run'],0)
+        self.assertIsNone(f.task.drive.anchor)
+        self.assertIsNone(f.task.drive._last_precise)
+        self.assertFalse(f.task.memory.snapshot()['anchor_valid'])
+        self.assertFalse(f.handoffs)
         command_at=len(f.motor.commands)
         for unused in range(50):s.step('missing')
-        # Finish the measured route before the existing loss search takes over.
-        # The old bottom hint cannot start another reverse budget or turn the
-        # consumed moving point into another forward segment.
+        # Finish the bounded coarse route before the existing loss search.
+        # The old bottom hint cannot start another reverse budget or renew
+        # the completed forward endpoint.
         self.assertTrue(f.task.drive._searching)
         self.assertIsNone(f.task.drive.anchor)
         self.assertEqual(f.task.memory.last_disappearance_direction,'bottom')

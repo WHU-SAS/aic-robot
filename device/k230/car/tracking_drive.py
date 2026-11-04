@@ -56,14 +56,9 @@ class DriveController:
         self._bottom_reverse_budget = None
         self._bottom_static_pending = False
         self._search_inspecting = False
-        self._search_view_pending = False
         self._search_arc_active = False
         self._search_follow_active = False
         self._search_speeds = None
-        self._search_view_counts = None
-        self._search_view_yaw_deg = 0
-        self._adjust_due = False
-        self._adjust_count = 0
         self.corrections = 0
         self.fine_requests = 0
         self.odometry = Odometry(config['mm_per_count'])
@@ -89,7 +84,7 @@ class DriveController:
         self._moving_started = True
         return True
 
-    def restart_observation(self, change_view=False, discard_reference=False):
+    def restart_observation(self, discard_reference=False):
         """After arm recovery, demand a NEW stopped observation of this target."""
         self.anchor = self.parking = self._paired_point = None
         self._coarse_reference = None
@@ -97,12 +92,9 @@ class DriveController:
         self._parking_reference = self._parking_ready_ms = None
         self._fine_request = None
         self._search_inspecting = False
-        self._search_view_pending = False
-        self._search_view_counts = None
         self._awaiting_query_identity = False
         if discard_reference:
             self._near_recovery = self.paired_coarse = None
-        self._adjust_due = bool(change_view)
         self._moving_started = False
         self.phase = 'settling'
 
@@ -121,17 +113,17 @@ class DriveController:
             self._bottom_reverse_budget = {}
         if self._search_reverse_required:
             self._bottom_reverse_budget.pop('view_recovered',None)
-        self._search_inspecting = self._search_view_pending = False
+        self._search_inspecting = False
         self._search_arc_active = False
         self._search_follow_active = False
-        self._search_speeds = self._search_view_counts = None
+        self._search_speeds = None
         self._search_hint = None
-        self._search_view_yaw_deg = 0
         self.anchor = self.parking = self._paired_point = None
         self._coarse_reference = None
         self._near_recovery = None
         self._awaiting_query_identity = False
         self.cancel_fine()
+        self._last_precise = None
 
     def _changed_target(self, version):
         self._retain_reverse_budget()
@@ -144,21 +136,17 @@ class DriveController:
         self._bearing_only = False
         self._near_recovery = None
         self._awaiting_query_identity = False
-        self._adjust_due = False
         self._moving_started = False
         self._searching = searching
         self._search_inspecting = False
         self._search_hint = None
-        self._search_view_pending = False
-        self._search_view_counts = None
         self.phase = 'observe'
 
     def _end_search(self):
         self._searching = self._search_inspecting = False
-        self._search_view_pending = False
         self._search_arc_active = False
         self._search_follow_active = False
-        self._search_speeds = self._search_view_counts = None
+        self._search_speeds = None
         self._search_hint = None
 
     def _canonical_coarse(self, coarse):
@@ -200,15 +188,6 @@ class DriveController:
                 rows.pop()
             self.odometry.add(state, sent, received)
         counts = (state['encoder_a'], state['encoder_b'])
-        if self._search_view_pending and self._search_view_counts is not None:
-            previous = self._search_view_counts
-            dl = count_delta(previous[0], counts[0])*self.config['mm_per_count']
-            dr = -count_delta(previous[1], counts[1])*self.config['mm_per_count']
-            self._search_view_yaw_deg += math.degrees(abs(dr-dl)/self.near['track_width_mm'])
-            self._search_view_counts = counts
-            if self._search_view_yaw_deg >= self.options.get('search_angle_deg', 10):
-                self._search_view_pending = False
-                self._search_view_counts = None
         if state['run']:
             self._stable_at = self._stable_counts = self.stopped_at_ms = None
         elif counts != self._stable_counts:
@@ -283,6 +262,18 @@ class DriveController:
         evidence = (coarse or {}).get('visual_evidence') or {}
         pixel = (coarse or {}).get('center_pixel', evidence.get('center_pixel'))
         return self.projection.pixel_to_plane(pixel, 10)
+
+    def _visual_presence(self, coarse, now):
+        """Current blue pixels prevent a false loss, not a distance/identity grant."""
+        if not isinstance(coarse,dict):return False
+        stamp=coarse.get('capture_timestamp_ms')
+        if type(stamp) is not int or not 0 <= age_ms(now,stamp) <= self.config['tracking']['max_age_ms']:
+            return False
+        evidence=coarse.get('visual_evidence') or {}
+        pool=list(coarse.get('visual_candidates') or [])
+        if evidence.get('visible'):pool.append(evidence)
+        return any(isinstance(cue,dict) and cue.get('visible') is not False and
+            cue.get('timestamp_ms',stamp)==stamp and self._search_shape(cue) for cue in pool)
 
     def _remember_coarse(self, coarse):
         self._remember_search_region(coarse)
@@ -451,7 +442,7 @@ class DriveController:
             return None
         return 'right' if error > 0 else 'left'
 
-    def _inspection_cue(self, coarse, visible, target_valid, precise_candidate, now, centered=True):
+    def _inspection_cue(self, coarse, visible, target_valid, precise_candidate, now):
         """Current appearance can request a static query without a range."""
         evidence = (coarse or {}).get('visual_evidence') or {}
         stamp = (coarse or {}).get('capture_timestamp_ms')
@@ -461,9 +452,9 @@ class DriveController:
             return False
         if evidence.get('reason') == 'clipped_blob':
             return (self._search_weak_shape(evidence, evidence.get('associated') is True) and
-                (not centered or abs(evidence['center_pixel'][0]-
+                abs(evidence['center_pixel'][0]-
                  self.config['tracking']['image_size_px'][0]/2) <=
-                    self.config['coarse_center_tolerance_px']))
+                    self.config['coarse_center_tolerance_px'])
         return True
 
     def _coarse_direction(self, coarse, now):
@@ -672,7 +663,20 @@ class DriveController:
             return None
         return request
 
-    def _accept(self, complete, state, now, coarse_plan, decision):
+    def _return_to_coarse(self, coarse, decision):
+        """An explicitly distant current target leaves the near-fine cycle."""
+        self.anchor = self.paired_coarse = self.parking = self._paired_point = None
+        self._coarse_reference = self._near_recovery = None
+        self._parking_reference = self._parking_ready_ms = None
+        self._fine_request = self._last_precise = self._moving_retry_frame = None
+        self._awaiting_query_identity = self._bearing_only = False
+        self._moving_started = False
+        self._end_search()
+        self._remember_coarse(coarse)
+        self.phase = 'observe'
+        decision['return_to_coarse'] = True
+
+    def _accept(self, complete, state, now, coarse_plan, decision, coarse):
         request = self._matching_precise_request(complete, now)
         if request is None:
             return None
@@ -689,6 +693,7 @@ class DriveController:
             verdict = verify_parked(observation, self.projection, self.config['workspace'], self.near,
                 now, stopped if stopped is not None else now,
                 complete.get('result_ready_ms', now), stationary_since_capture=stationary)
+            decision['static_verification'] = verdict
         # An unknown coarse frame is not proof that this successful stopped
         # measurement moved. Keep the same request until association returns;
         # the owner retains the completion and the original motor latch/age.
@@ -730,6 +735,10 @@ class DriveController:
         self.parking = None
         if verdict['status'] == 'not_parked':
             self._end_search()
+            if (decision.get('coarse_far') and observation['cube_center_Base_mm'][0] >
+                    self.near['capture_Base_X_mm']):
+                self._return_to_coarse(coarse,decision)
+                return None
             self._bind_anchor(observation, paired)
             plan = self._near_plan(coarse_plan, now)
             if self._awaiting_query_identity:
@@ -743,25 +752,21 @@ class DriveController:
                 return None
             correction = correction_plan(verdict, self.projection,
                                          self.config['workspace'], self.near)
+            decision['correction_plan'] = correction
             if correction.get('status') == 'arc':
+                decision['correction_reference'] = dict(encoder_a=state['encoder_a'],
+                    encoder_b=state['encoder_b'],motor_ms=state.get('ms'),
+                    received_ms=state.get('_k230_received_ms'))
                 self.corrections += 1
                 self.phase = 'correcting'
                 return correction['command']
-        # An unavailable measurement never becomes parking authority. A
-        # visible target can be observed from a genuinely different view.
-        self.phase = 'observing'
-        if self._search_inspecting or request.get('query_only'):
-            # Seeing this target and obtaining a full face are different.
-            # A failed query changes the local view; it is not a new loss.
-            self._searching = False
-            self._search_inspecting = True
-            self._search_view_pending = True
-            self._search_view_counts = (state['encoder_a'], state['encoder_b'])
-            self._search_view_yaw_deg = 0
-            self._adjust_due = False
-            self.phase = 'visual_tracking'
-        else:
-            self._adjust_due = True
+        # Failed recognition grants no motion. Clear historical destinations
+        # so the next stopped image cannot be bypassed by an old moving point.
+        self.anchor = self._paired_point = self._coarse_reference = None
+        self._parking_reference = self._parking_ready_ms = None
+        self._bearing_only = False
+        self._end_search()
+        self.phase = 'settling'
         return None
 
     def consume_moving_precise(self, complete, motor_state, now_ms, target_version):
@@ -782,11 +787,6 @@ class DriveController:
             self._fine_request['stopped_for_verification'] = True
         return self.update(None, motor_state, now_ms, precise=complete,
             target_version=target_version, target_event={'target_valid': True})
-
-    def _arc(self, angle):
-        travel = max(1, int(self.near['track_width_mm']*math.radians(abs(angle))/2+.5))
-        direction = 1 if angle >= 0 else -1
-        return 'ARC,%d,%d' % (-direction*travel, direction*travel)
 
     def _recovery_cue(self, coarse, visible, target_valid, now):
         evidence = (coarse or {}).get('visual_evidence') or {}
@@ -839,37 +839,6 @@ class DriveController:
         return (type(stamp) is int and evidence.get('timestamp_ms',stamp) == stamp and
             0 <= age_ms(now,stamp) <= self.config['tracking']['max_age_ms'])
 
-    def _adjust(self, allow_reverse=True, coarse=None, now=None):
-        self._adjust_due = False
-        self._adjust_count += 1
-        recovery = self._near_recovery
-        evidence = (coarse or {}).get('visual_evidence') or {}
-        edges = evidence.get('edge_directions', []) if evidence.get('reason') == 'clipped_blob' else []
-        if recovery is not None and ('bottom' in edges or
-                'bottom_view_frame_ms' in recovery):
-            recovery['bottom_view_frame_ms'] = coarse['capture_timestamp_ms']
-        if (allow_reverse and self._adjust_count % 3 == 0 and
-                not (recovery and recovery.get('reverse_exhausted'))):
-            distance = self.options.get('reobserve_reverse_mm', 10)
-            if recovery is not None:
-                recovery['last_move'] = 'reverse'
-            return 'ARC,%d,%d' % (-distance, -distance)
-        angle = self.options.get('reobserve_angle_deg', 5)
-        if recovery is not None:
-            recovery['last_move'] = 'turn'
-            if 'left' in edges:
-                return self._arc(angle)
-            if 'right' in edges:
-                return self._arc(-angle)
-            try:
-                geometry = _geometry(self._recovery_point(recovery, now),
-                                     self.projection, self.config['workspace'])
-            except (ValueError, TypeError, KeyError):
-                geometry = None
-            if geometry and abs(geometry['image_error_px']) > self.near['center_tolerance_px']:
-                return self._arc(angle if geometry['bearing_deg'] > 0 else -angle)
-        return self._arc(angle if self._adjust_count % 3 == 1 else -angle)
-
     def update(self, coarse, motor_state, now_ms, precise=None, target_version=0,
                fine_pending=False, target_event=None, arm_active=False):
         event = target_event or {}
@@ -898,7 +867,7 @@ class DriveController:
         confirmed_moved = bool(event.get('confirmed_moved') or
             event.get('event') == 'moved' and event.get('movement_state') == 'confirmed')
         anchor_locked = (self.anchor is not None and not confirmed_moved and
-            not self._adjust_due and not self._searching and not self._search_inspecting and
+            not self._searching and not self._search_inspecting and
             self._active_action not in ('arc', 'recovery_reverse', 'bottom_reverse',
                                         'inspection_follow', 'search_follow'))
         changed = self.version != target_version
@@ -906,6 +875,7 @@ class DriveController:
         self._observe_motor(motor_state, now_ms)
         state, running = motor_state, bool(motor_state['run'])
         visible = self._visible(coarse, event)
+        presence = self._visual_presence(coarse,now_ms)
         precise_candidate = bool(event.get('precise_candidate'))
         query_visible = visible or precise_candidate
         if (anchor_locked and self.phase == 'settling' and not running and
@@ -925,7 +895,8 @@ class DriveController:
             self._changed_target(target_version)
         if adopted:
             decision['reset_tracker'] = True
-        if (not anchor_locked and
+        bottom_exit = event.get('event') == 'exited' and event.get('last_disappearance_direction') == 'bottom'
+        if (not anchor_locked and (not presence or bottom_exit) and
                 (event.get('event') == 'exited' or event.get('search') and not query_visible)):
             direction = event.get('last_disappearance_direction')
             self.request_search(direction,bottom_history=
@@ -945,6 +916,10 @@ class DriveController:
         decision['target_visible'] = visible
         decision['precise_candidate'] = precise_candidate
         decision['query_visible'] = query_visible
+        decision['coarse_far'] = bool(fresh and visible and target_valid and
+            (coarse.get('visual_evidence') or {}).get('navigation_confirmed') is True and
+            measured_coarse_plan is not None and measured_coarse_plan['coarse_Base_X_mm'] >
+            self.near['capture_Base_X_mm'])
         if not target_valid and not anchor_locked:
             self.anchor = self.parking = self._paired_point = None
             self._coarse_reference = None
@@ -1024,7 +999,7 @@ class DriveController:
                 elif reason != 8:
                     self._motion_hold = 'arc_stopped_%d' % reason
             self._active_action = None
-            if self.phase in ('correcting', 'adjusting'):
+            if self.phase == 'correcting':
                 self.anchor = self._paired_point = None
                 self.phase = 'settling'
             elif self.phase == 'searching':
@@ -1107,7 +1082,7 @@ class DriveController:
         # A version change is processed above before accepting a completed job.
         if precise is not None and (target_valid or
                 (precise_candidate and precise.get('purpose') == 'static')):
-            command = self._accept(precise, state, now_ms, coarse_plan, decision)
+            command = self._accept(precise, state, now_ms, coarse_plan, decision, coarse)
             if command:
                 return finish(command)
         if self._awaiting_query_identity:
@@ -1137,7 +1112,7 @@ class DriveController:
                 self._request('static', coarse, state, now_ms, decision, False)
             self.phase = 'fine_static'
             return finish(status='localizing_static')
-        if (self.anchor is not None and not self._adjust_due and
+        if (self.anchor is not None and
                 self._active_action != 'arc' and not self._search_inspecting):
             # A successful fine measurement owns distance until the car stops.
             # Current coarse evidence may steer it, but loss/ambiguity/range
@@ -1189,6 +1164,14 @@ class DriveController:
                 self.phase = 'visual_tracking'
                 if running:
                     return finish('STOP', 'visual_tracking')
+            elif presence and direction is None:
+                # Pixels are present even if range/association is unclear.
+                # There is no current direction that could justify turning.
+                self._searching = False
+                self._search_inspecting = True
+                self.phase = 'visual_tracking'
+                if running:
+                    return finish('STOP', 'visual_tracking')
             else:
                 self.phase = 'searching'
                 if running:
@@ -1210,7 +1193,7 @@ class DriveController:
         recovery = self._near_recovery
         bottom = (evidence.get('reason') == 'clipped_blob' and
                   'bottom' in evidence.get('edge_directions', []))
-        if (recovery is not None and (self.phase == 'settling' or self._adjust_due) and
+        if (recovery is not None and self.phase == 'settling' and
                 (bottom or 'bottom_view_frame_ms' in recovery)):
             self.phase = 'settling'
             if running:
@@ -1236,7 +1219,6 @@ class DriveController:
                     self._search_reverse_required = True
                     self._search_reverse_done = False
                     self.anchor = self._paired_point = self._coarse_reference = None
-                    self._adjust_due = False
                     self.phase = 'recovering_view'
                     speed = int(self.options.get('recovery_reverse_mm_s', 15))
                     return finish('FOLLOW,%d,%d' % (-speed,-speed), 'recovering_view', True)
@@ -1244,14 +1226,11 @@ class DriveController:
                     self._search_reverse_required = self._search_reverse_done = True
                     self.phase = 'observing'
                     return finish(status='bottom_reverse_limit')
-                self._adjust_due = True
             else:
                 recovery.pop('bottom_view_frame_ms', None)
-                self._adjust_due = False
         if self._search_inspecting:
-            direction = self._search_heading(coarse, event, now_ms, decision)
-            if direction is not None:
-                self._search_direction = direction
+            # This is initial visual reacquisition, not a failed fine retry:
+            # failed static results leave this state via _end_search above.
             if coarse_plan is not None and target_valid:
                 self._end_search()
                 self._remember_coarse(coarse)
@@ -1260,33 +1239,32 @@ class DriveController:
                     return finish('STOP', 'reacquired')
             else:
                 self.phase = 'visual_tracking'
-                if not self._inspection_cue(coarse, visible, target_valid, precise_candidate, now_ms, False):
-                    self.phase = 'observing'
-                    return finish('STOP' if running else None, 'waiting_for_target')
-                if (self._search_view_pending or not self._inspection_cue(
-                        coarse, visible, target_valid, precise_candidate, now_ms)):
-                    if running and not self._search_follow_active:
-                        return finish('STOP', 'changing_view')
-                    speed = int(self.options.get('search_speed_mm_s', 20))
-                    speeds = (speed, -speed) if self._search_direction == 'right' else (-speed, speed)
-                    if running:
-                        if speeds != self._search_speeds:
-                            self._search_speeds = speeds
-                            return finish('SPEED,%d,%d' % speeds, 'changing_view')
-                        return finish('HB', 'changing_view')
-                    if self.stopped_at_ms is None:
-                        return finish(status='settling')
-                    self._search_speeds = speeds
-                    self._search_follow_active = True
-                    return finish('FOLLOW,%d,%d' % speeds, 'changing_view')
                 if running:
                     return finish('STOP', 'visual_tracking')
                 if self.stopped_at_ms is None:
                     return finish(status='settling')
-                self._request('static', coarse, state, now_ms, decision, fine_pending)
-                return finish(status='visual_tracking')
+                if self._inspection_cue(coarse,visible,target_valid,precise_candidate,now_ms):
+                    self._request('static', coarse, state, now_ms, decision, fine_pending)
+                return finish(status='visual_tracking' if presence else 'waiting_for_target')
         if self._active_action == 'arc' and running:
             return finish('HB')
+        if (self.phase == 'settling' and self.anchor is None and
+                decision['coarse_far']):
+            # No fine endpoint is being replaced: current confirmed far
+            # geometry can resume ordinary coarse approach instead of asking
+            # the near-only fine solver for the same distant view forever.
+            self._return_to_coarse(coarse,decision)
+        if self.phase == 'settling':
+            # A failed stopped measurement must be replaced while stopped,
+            # before coarse range or visible centering can start another move.
+            if running:
+                return finish('STOP', 'settling')
+            if self.stopped_at_ms is None:
+                return finish(status='settling')
+            if not query_visible:
+                return finish(status='waiting_for_target')
+            self._request('static', coarse, state, now_ms, decision, fine_pending)
+            return finish()
         if (owned_follow and fresh and visible and target_valid and self.anchor is None and
                 coarse_plan is None and (adopted or self._bearing_only)):
             # A new pixel direction supplies no new forward endpoint. Continue
@@ -1320,27 +1298,11 @@ class DriveController:
         if (self._near_recovery is None and self.anchor is None and coarse_plan is None and
                 visible and not fine_pending and
                 evidence.get('reason') == 'clipped_blob'):
-            edges = evidence.get('edge_directions', [])
-            direction = next((edge for edge in edges if edge in ('left', 'right', 'bottom')), None)
+            direction = self._search_heading(coarse,event,now_ms,decision)
             if direction is not None:
                 self.request_search(direction)
                 self.phase = 'searching'
                 return finish('STOP' if running else None, 'centering_clipped_target')
-        if self.phase == 'settling' or self._adjust_due:
-            if running:
-                return finish('STOP', 'settling')
-            if self.stopped_at_ms is None:
-                return finish(status='settling')
-            if self._adjust_due:
-                if not visible:
-                    return finish(status='waiting_for_target')
-                self.phase = 'adjusting'
-                return finish(self._adjust(allow_reverse=coarse_plan is not None,
-                                           coarse=coarse, now=now_ms))
-            if not visible:
-                return finish(status='waiting_for_target')
-            self._request('static', coarse, state, now_ms, decision, fine_pending)
-            return finish()
         if self.anchor:
             steering = measured_coarse_plan if visible else None
             if measured_coarse_plan is None and visible:
