@@ -176,6 +176,12 @@ def _proposal(p,corners,context,intrinsics,extrinsics,plane,thresholds):
 
 def _measurement(p,edges,proposals,context,contour,audit):
     points=[p.intersect(edges[i-1][0],edges[i][0])for i in range(6)]
+    # A rounded wall may give two well-fitted segments of the SAME physical
+    # edge. It is not a sixth cube corner if their measured turn is unresolved
+    # at the existing3px line precision. Check real lines, not hull seeds.
+    if any(p.residual(points[i],p.fit([points[i-1],points[(i+1)%6]]))<=3
+           for i in range(6)):
+        raise ValueError('Cube outline has no distinct measured six-edge topology')
     seed=[p.intersect(proposals[i-1],proposals[i])for i in range(6)]
     halves=[[p.intersect(edges[i-1][2][j],edges[i][2][j])for i in range(6)]for j in (0,1)]
     errors=[p.distance(a,b)for group in halves for a,b in zip(points,group)]

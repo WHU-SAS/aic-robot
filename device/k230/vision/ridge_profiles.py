@@ -82,8 +82,82 @@ def _terminal_support(im,hsv,bbox,line,core_first,core_last):
         edge_ownership='G_outline_proposal',grants_measured_vertical_edge=False)
 
 
+def _joint_ridge(im,hsv,xx,yy,normal,tangent,fit_edge,audit=False):
+    """Fallback only: shared2D bands choose real bidirectional G peaks.
+
+    Strongest G alone can follow a drifting reflection or an uneven blue
+    platform. Nominate maxima of the weaker8px-flank prominence instead;
+    remeasure every subpixel candidate before the unchanged line fitter.
+    Two batched G strips, no extra image, colour policy or3D feedback.
+    """
+    offsets=np.array([[k]for k in range(-15,16)],dtype=FLOAT)
+    strip=_G(im,xx+offsets*normal[0],yy+offsets*normal[1],tangent)
+    response=-np.maximum(strip[:15,:]-strip[8:23,:],
+                         strip[16:,:]-strip[8:23,:])
+    peak_offsets=[];coordinates=[[0.]*64 for unused in range(7)]
+    for j in range(64):
+        peaks=[]
+        for k in range(1,14):
+            before,value,after=[float(response[i,j])for i in(k-1,k,k+1)]
+            curvature=before-2*value+after
+            if curvature>=0 or value<before or value<after:continue
+            fraction=max(-.5,min(.5,.5*(before-after)/curvature))
+            offset=k-7+fraction
+            if peaks and offset==peaks[-1]:continue
+            coordinates[len(peaks)][j]=offset;peaks.append(offset)
+        peak_offsets.append(peaks)
+    # Stacked upper/centre/lower profiles share three native tangent remaps.
+    stacked=np.array([[v+shift for v in row]for shift in(-8,0,8)
+                      for row in coordinates],dtype=FLOAT)
+    measured=_G(im,xx+stacked*normal[0],yy+stacked*normal[1],tangent)
+    rows=[]
+    for j,peaks in enumerate(peak_offsets):
+        choices=[]
+        for k,offset in enumerate(peaks):
+            px=float(xx[0,j])+offset*normal[0]
+            py=float(yy[0,j])+offset*normal[1]
+            both=True
+            for sign in(-1,1):
+                color=hsv[int(round(py+sign*8*normal[1])),
+                          int(round(px+sign*8*normal[0]))]
+                both=both and 90<=color[0]<=140 and color[1]>=80 and color[2]>=35
+            rise=float(measured[k+7,j]-measured[k,j])
+            fall=float(measured[k+7,j]-measured[k+14,j])
+            prominence=min(rise,fall)
+            if both and prominence>=2.:
+                choices.append(dict(offset=offset,point=[px,py],
+                    rise_DN=rise,fall_DN=fall,prominence_DN=prominence))
+        rows.append(choices)
+    best=None
+    for start in(-6.,-3.,0.,3.,6.):
+        for end in(-6.,-3.,0.,3.,6.):
+            chosen=[];cost=0.
+            for j,choices in enumerate(rows):
+                reference=start+(end-start)*j/63
+                eligible=[v for v in choices if abs(v['offset']-reference)<=3]
+                if not eligible:continue
+                point=min(eligible,key=lambda v:(abs(v['offset']-reference),
+                                                -v['prominence_DN']))
+                chosen.append((j,point));cost+=(point['offset']-reference)**2
+            if len(chosen)<45 or chosen[-1][0]-chosen[0][0]<50:continue
+            rank=(len(chosen),chosen[-1][0]-chosen[0][0],-cost/len(chosen))
+            if best is None or rank>best[0]:best=(rank,chosen,start,end)
+    if best is None:raise ValueError('No distributed G prominence band with45 measured stations')
+    chosen=best[1];stations=[j for j,point in chosen]
+    points=[point['point']for j,point in chosen]
+    edge=fit_edge(points,stations)
+    prominences=[point['prominence_DN']for j,point in chosen]
+    recorded=[dict(station=j,point=point['point'],rise_DN=point['rise_DN'],
+        fall_DN=point['fall_DN'],prominence_DN=point['prominence_DN'],
+        both_blue=True,supported=True)for j,point in chosen]if audit else[]
+    return edge,points,stations,prominences,recorded,dict(
+        peak_selection='joint_flank_prominence_line_consensus',
+        original_peak_window_px=3.,local_peak_window_px=6.,
+        joint_model_count=25,joint_model_offsets_px=[best[2],best[3]])
+
+
 def measure(im,hsv,bbox,fit_edge,fit,residual,cue=None,audit=False):
-    """One fixed+/-3px local G peak; no search over appearance policies."""
+    """Original G peaks first; failed fits may use shared prominence bands."""
     if cue is None:
         try:from .separator_profiles import cue24
         except ImportError:from separator_profiles import cue24
@@ -123,7 +197,13 @@ def measure(im,hsv,bbox,fit_edge,fit,residual,cue=None,audit=False):
         if audit:
             rows.append(dict(station=j,point=point,rise_DN=rise,fall_DN=fall,
                 prominence_DN=prominence,both_blue=both,supported=supported))
-    edge=fit_edge(points,stations)
+    joint=None
+    try:edge=fit_edge(points,stations)
+    except ValueError as exc:
+        original_reason=str(exc)
+        edge,points,stations,prominences,rows,joint=_joint_ridge(
+            im,hsv,xx,yy,normal,tangent,fit_edge,audit)
+        joint['original_peak_rejection']=original_reason
     values=sorted(prominences);count=len(values)
     median=values[count//2]if count%2 else(values[count//2-1]+values[count//2])/2
     edge[1].update(appearance_method='same_frame_G_ridge',
@@ -134,6 +214,9 @@ def measure(im,hsv,bbox,fit_edge,fit,residual,cue=None,audit=False):
         local_peak_window_px=3.,tangent_average_pixels=3,
         prominence_min_DN=min(prominences),prominence_median_DN=median,
         prominence_max_DN=max(prominences),original_RGB8_step_evidence=False)
+    if joint:
+        edge[1]['peak_selection']=joint['peak_selection']
+        details.update(joint)
     kept=[(station,point)for station,point in zip(stations,points)
           if residual(point,edge[0])<=3]
     first=min(kept,key=lambda item:item[1][0]);last=max(kept,key=lambda item:item[1][0])

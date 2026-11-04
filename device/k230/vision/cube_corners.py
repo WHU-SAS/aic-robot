@@ -78,6 +78,37 @@ def _upper_back_proposal(vertices, bbox):
     return a, b
 
 
+def _merged_upper_back_proposal(p, vertices, bbox):
+    """Join a split contour window; actual RGB edge measurement follows.
+
+    This is only an alternative proposal when the original single segment
+    is unavailable. At most three adjacent monotone segments must agree
+    within the existing3px line precision, without any pose/height score.
+    """
+    x, y, w, h = bbox
+    choices = []
+    for j, a in enumerate(vertices):
+        for direction in (-1, 1):
+            run = [a]
+            for count in (1, 2, 3):
+                b = vertices[(j+direction*count) % len(vertices)]
+                if b[0] <= run[-1][0] or max(a[1], b[1]) > y+.16*h:
+                    break
+                run.append(b)
+                dx, dy = b[0]-a[0], b[1]-a[1]
+                if dx < .5*w or abs(dy) >= .3*dx:
+                    continue
+                line = p.fit(run)
+                error = max(p.residual(v, line) for v in run)
+                if error <= 3:
+                    choices.append((dx, -error, a, b, list(run)))
+    if not choices:
+        raise ValueError('No current collinear upper-back contour run')
+    best = max(choices, key=lambda v: v[:2])
+    return best[2], best[3], {'contour_run_px': best[4],
+                             'max_contour_line_error_px': -best[1]}
+
+
 def _vertical_slope(p, pixel, intrinsics, extrinsics, plane):
     try:
         from ..pick.pose import undistort
@@ -283,7 +314,8 @@ def prepare(bgr, bbox_px, roi_padding_px=24, side_search_height_ratio=1.6):
     except ValueError:
         pass  # The profile route can still use a near-frontal blue component.
     selector = {'route_hint': 'profile', 'has_top_depth_layout': mirrored is not None,
-                'has_upper_back_proposal': False}
+                'has_upper_back_proposal': False,
+                'has_merged_upper_back_proposal': False}
     context = {'raw': raw, 'hsv': hsv, 'smooth': smooth, 'contour': contour,
                'vertices': vertices, 'bbox_px': list(bbox_px), 'local_bbox': box,
                'roi_px': [ox, oy, x1-ox, y1-oy], 'mirrored_layout': mirrored,
@@ -307,6 +339,14 @@ def prepare(bgr, bbox_px, roi_padding_px=24, side_search_height_ratio=1.6):
             selector['upper_back_proposal_px'] = [a, b]
         except ValueError as exc:
             selector['proposal_reason'] = str(exc)
+            try:
+                a, b, joined = _merged_upper_back_proposal(p, canonical_vertices, canonical_box)
+                context['merged_upper_back_proposal'] = (a, b)
+                selector['has_merged_upper_back_proposal'] = True
+                selector['merged_upper_back_proposal_px'] = [a, b]
+                selector['merged_upper_back_contour'] = joined
+            except ValueError:
+                pass
     else:
         selector['proposal_reason'] = 'No current exterior top/depth corner'
     return context
@@ -425,7 +465,8 @@ def corner_steps(bgr, bbox_px, intrinsics, extrinsics, table_plane,
         unused, a, b = min(choices, key=lambda v: v[0])
         edges['top_depth'] = _measure(p, profiles, im, hsv, a, b)
         yield {'stage': 'edge_complete', 'edge_name': 'top_depth'}
-        a, b = _upper_back_proposal(vertices, box)
+        proposal = context.get('upper_back_proposal') or context.get('merged_upper_back_proposal')
+        a, b = proposal if proposal is not None else _upper_back_proposal(vertices, box)
         edges['back_top'] = _measure(p, profiles, im, hsv, a, b)
         yield {'stage': 'edge_complete', 'edge_name': 'back_top'}
         edges['back_outer'] = _measure(p, profiles, im, hsv, [x+w-1, y+.10*h], [x+w-1, y+.65*h])

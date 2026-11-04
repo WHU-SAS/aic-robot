@@ -1167,6 +1167,7 @@ def localize_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
     else:
         selector = prepared['selector']
         routes = (('cube', 'profile', 'outline') if selector['route_hint'] == 'cube'
+                  else ('profile', 'cube', 'outline') if selector.get('has_merged_upper_back_proposal')
                   else ('profile', 'outline'))
         for route in routes:
             route_started = _now()
