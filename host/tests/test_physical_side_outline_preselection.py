@@ -3,6 +3,9 @@
 Real local archives are optional regression fixtures, not surveyed XYZ/grasp
 truth. Synthetic left-side occlusion is a known existing original-face accept;
 this change must neither relabel it nor introduce a different measurement.
+Retained images are replayed with the current table-quality policy on both
+sides of each comparison; archived predictions from the former8mm tolerance
+are provenance, not the baseline for today's0..20mm acceptance policy.
 """
 import importlib.util
 import inspect
@@ -132,9 +135,12 @@ class PhysicalSideOutlinePreselectionTests(unittest.TestCase):
             image,frame,cfg=self.materials(row['id'])
             for kind in ('original1','public_static'):
                 with self.subTest(identity=row['id'],kind=kind):
-                    baseline=row['runs'][kind+'_baseline']['observation']
-                    if kind=='original1':generator=p._original_localize_steps(image,frame,row['bbox_px'],
-                        cfg['intrinsics'],cfg['extrinsics'],cfg['table_plane'],max_candidates=1,preselect_outline=True)
+                    if kind=='original1':
+                        baseline=list(p._original_localize_steps(image,frame,row['bbox_px'],
+                            cfg['intrinsics'],cfg['extrinsics'],cfg['table_plane'],
+                            max_candidates=1,preselect_outline=False))[-1]['observation']
+                        generator=p._original_localize_steps(image,frame,row['bbox_px'],
+                            cfg['intrinsics'],cfg['extrinsics'],cfg['table_plane'],max_candidates=1,preselect_outline=True)
                     else:
                         # Isolate this image-only preselection from later
                         # front/back geometry improvements in other routes.
@@ -178,15 +184,20 @@ class PhysicalSideOutlinePreselectionTests(unittest.TestCase):
             frame={'frame_id':1,'capture_timestamp_ms':0,'clock_domain':'k230_ticks_ms',
                 'image_size_px':[1280,960],'timestamp_source':'offline_placeholder_not_capture_time'}
             for kind in('original1','public_static'):
-                if kind=='original1':generator=p._original_localize_steps(im,frame,bbox,cfg['intrinsics'],cfg['extrinsics'],cfg['table_plane'],max_candidates=1,preselect_outline=True)
-                else:generator=p.localize_steps(im,frame,bbox,cfg['intrinsics'],cfg['extrinsics'],cfg['table_plane'])
-                current=list(generator)[-1]['observation'];baseline=row['runs'][kind+'_baseline']['observation']
-                if kind=='public_static':
+                if kind=='original1':
+                    baseline=list(p._original_localize_steps(im,frame,bbox,
+                        cfg['intrinsics'],cfg['extrinsics'],cfg['table_plane'],
+                        max_candidates=1,preselect_outline=False))[-1]['observation']
+                    generator=p._original_localize_steps(im,frame,bbox,cfg['intrinsics'],cfg['extrinsics'],cfg['table_plane'],max_candidates=1,preselect_outline=True)
+                else:
                     with patch.object(p,'_original_localize_steps',side_effect=without_preselection):
                         baseline=list(p.localize_steps(im,frame,bbox,cfg['intrinsics'],cfg['extrinsics'],cfg['table_plane']))[-1]['observation']
+                    generator=p.localize_steps(im,frame,bbox,cfg['intrinsics'],cfg['extrinsics'],cfg['table_plane'])
+                current=list(generator)[-1]['observation']
                 self.assertEqual(current['status'],baseline['status'])
                 if baseline['status']=='localized':
                     self.assertTrue(identity.endswith('SYNTHETIC_left_side'))
                     self.assertEqual(current['payload'],baseline['payload'])
+                    self.assertEqual(current['cube_center_Base_mm'],baseline['cube_center_Base_mm'])
             tested+=1
         self.assertEqual(tested,7)

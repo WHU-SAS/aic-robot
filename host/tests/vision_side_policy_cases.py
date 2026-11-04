@@ -175,7 +175,7 @@ class SidePolicyCases(unittest.TestCase):
                 geometry=result['poses'][0]['table_geometry']
                 self.assertTrue(geometry['accepted'])
                 self.assertLessEqual(geometry['normal_deviation_deg'],20.)
-                self.assertLessEqual(abs(geometry['height_error_mm']),8.)
+                self.assertLessEqual(abs(geometry['height_error_mm']),10.)
             else:
                 self.assertEqual(result['vision_path'],'shared_bounded_physical_sides')
                 self.assertGreater(result['side_faces'][0]['area_px2'],30000)
@@ -209,6 +209,24 @@ class TablePoseCases(unittest.TestCase):
         self.assertIsNone(constrain_face({'poses':[bad]},self.table()))
         self.assertEqual(bad['cube_center_Camera_mm'],[0.,-5.,250.])
         self.assertIsNone(constrain_face({'poses':[self.pose(rms=2.1)]},self.table()))
+
+    def test_table_height_accepts_zero_and_twenty_but_not_outside(self):
+        from device.k230.pick.table_pose import constrain_face
+        # In this rotated-camera fixture the table is Base Z=10 and
+        # the center is Base Z=30-Camera Y; no image is treated as truth.
+        for height,accepted in ((0.,True),(20.,True),(-.01,False),(20.01,False)):
+            with self.subTest(center_height_mm=height):
+                pose=self.pose(height_y=20.-height)
+                result=constrain_face({'poses':[pose]},self.table())
+                if accepted:
+                    self.assertIsNotNone(result)
+                    geometry=result['poses'][0]['table_geometry']
+                    self.assertTrue(geometry['accepted'])
+                    self.assertAlmostEqual(geometry['center_height_mm'],height)
+                    self.assertEqual(result['poses'][0]['cube_center_Camera_mm'],
+                                     pose['cube_center_Camera_mm'])
+                else:
+                    self.assertIsNone(result)
 
     def test_plane_scale_sign_and_camera_rotation_are_respected(self):
         from device.k230.pick.table_pose import metrics

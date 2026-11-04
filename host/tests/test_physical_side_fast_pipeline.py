@@ -161,7 +161,9 @@ class PublicStaticFastPipelineTests(unittest.TestCase):
         self.assertEqual(prepared.call_count,1);self.assertEqual(cubes.call_count,1)
         self.assertEqual(profiles.call_count,1);self.assertIs(profiles.call_args.args[8],contexts[0])
         self.assertEqual(cue.call_count,1);self.assertEqual(G.call_count,1)
-        self.assertEqual(colors.call_count,1);self.assertEqual(smooth.call_count,1)
+        self.assertCountEqual([call.args[1]for call in colors.call_args_list],
+            [cv2.COLOR_BGR2HSV,cv2.COLOR_BGR2GRAY])
+        self.assertEqual(smooth.call_count,1)
         self.assertEqual([e['route']for e in events if e['stage']=='recovery_selected'],['cube','profile'])
         self.assert_typed_current(events[-1]['observation'],saved[1],saved[3])
 

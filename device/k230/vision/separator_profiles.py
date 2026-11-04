@@ -207,6 +207,30 @@ def _sample(im,hsv,mx,my,normal):
     return np.maximum(delta[:,:,0],0)/den*blue,supported,delta[:,:,0]
 
 
+def _B_terminal(im,hsv,bbox,line):
+    """Full-width proposal using the B model's own positive-step evidence."""
+    x,y,w,h=bbox;count=max(2,int(math.ceil(w)))
+    xs=[x+(w-1)*j/(count-1)for j in range(count)]
+    xx=np.array([xs],dtype=MAP_FLOAT);yy=-(line[0]*xx+line[2])/line[1]
+    unused,support,jump=_sample(im,hsv,xx,yy,line[:2])
+    allowed=(support*(jump>0)).tolist()[0];first=None
+    for j,value in enumerate(allowed+[False]):
+        if value and first is None:first=j
+        if not value and first is not None:
+            last=j-1
+            if xs[first]<=x+(w-1)*.15 and xs[last]>=x+(w-1)*.85:
+                points=[[xs[k],-(line[0]*xs[k]+line[2])/line[1]]for k in(first,last)]
+                return dict(method='original_B_profile_full_bbox_positive_step',
+                    gap_reference='full_source_bbox',observed_coverage=[0.,1.],
+                    sampled_columns=count,first_station=first,last_station=last,
+                    first_point_px=points[0],last_point_px=points[1],
+                    left_gap_px=points[0][0]-x,right_gap_px=x+w-1-points[1][0],
+                    original_RGB8_step_evidence=True,contrast_span_px=5.,
+                    edge_ownership='RGB_outline_proposal',grants_measured_vertical_edge=False)
+            first=None
+    return None
+
+
 def measure(im,hsv,bbox,fit_edge,fit,residual,cue=None,audit=False):
     """Fixed energy descriptor; arrays bounded to45models x64stations.
 
@@ -252,5 +276,7 @@ def measure(im,hsv,bbox,fit_edge,fit,residual,cue=None,audit=False):
     edge[1]['appearance_method']='joint_energy_B_transition_after_G_cue'
     details=dict(cue=cue_audit,descriptor='energy',model_offset=offset,model_relative_slope=slope,
                  original_RGB_support=count,model_score=float(score),max_sample_models=45)
+    terminal=_B_terminal(im,hsv,bbox,edge[0])
+    if terminal is not None:details['terminal_support']=terminal
     if audit:details.update(measured_points=coordinates,station_ids=stations)
     return edge,details

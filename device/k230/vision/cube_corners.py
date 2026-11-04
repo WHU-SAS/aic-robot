@@ -483,6 +483,44 @@ def _front_back_upper_proposals(p,vertices,bbox):
     return left,(a,b),run
 
 
+def _front_back_upper_window(p,prepared,intrinsics,extrinsics,table_plane):
+    """Only the used upper-right window, independent of six-corner topology."""
+    try:from .cube_outline import DEFAULT_LAB_THRESHOLDS
+    except ImportError:from cube_outline import DEFAULT_LAB_THRESHOLDS
+    raw,hsv=prepared['raw'],prepared['hsv'];x,y,w,h=prepared['local_bbox']
+    ox,oy=prepared['roi_px'][:2]
+    lab=p.cv2.cvtColor(raw,p.cv2.COLOR_BGR2LAB)
+    mask=p.np.zeros(hsv.shape[:2],dtype=p.np.uint8)
+    for L0,L1,a0,a1,b0,b1 in DEFAULT_LAB_THRESHOLDS:
+        part=p.cv2.inRange(lab,(int(round(L0*255/100)),a0+128,b0+128),
+            (int(round(L1*255/100)),a1+128,b1+128))
+        mask=p.np.maximum(mask,part)
+    center=(int(round(x+.5*w)),int(round(y+.6*h)))
+    contours,unused=p.cv2.findContours(mask,p.cv2.RETR_EXTERNAL,p.cv2.CHAIN_APPROX_SIMPLE)
+    current=[c for c in contours if p.cv2.pointPolygonTest(c,center,False)>=0]
+    kind='configured_LAB'
+    if not current:
+        values=hsv[max(0,int(y)):min(hsv.shape[0],int(y+h)),
+                   max(0,int(x)):min(hsv.shape[1],int(x+w)),2]
+        floor=max(35.,.25*float(p.np.max(values)))
+        mask=p.cv2.inRange(hsv,(90,120,int(math.ceil(floor))),(140,255,255))
+        contours,unused=p.cv2.findContours(mask,p.cv2.RETR_EXTERNAL,p.cv2.CHAIN_APPROX_SIMPLE)
+        current=[c for c in contours if p.cv2.pointPolygonTest(c,center,False)>=0]
+        kind='existing_HSV_body_when_LAB_center_absent'
+    if not current:raise ValueError('No current blue component for upper-right window')
+    body=p.np.zeros(mask.shape,dtype=p.np.uint8)
+    p.cv2.drawContours(body,[max(current,key=p.cv2.contourArea)],-1,(255,),-1)
+    ownership=p.np.array(hsv,dtype=p.np.uint8)
+    ownership[:,:,2]=ownership[:,:,2]*(body>0)*(mask>0)
+    a=[x+w-1,y+.1*h]
+    slope=_vertical_slope(p,[a[0]+ox,a[1]+oy],intrinsics,extrinsics,table_plane)
+    b=[a[0]+slope*.25*h,a[1]+.25*h]
+    return a,b,ownership,dict(method='current_bbox_right_projected_vertical_upper_window',
+        body_mask_kind=kind,table_up_slope=slope,window_roi_px=[a,b],
+        LAB_thresholds=[list(v)for v in DEFAULT_LAB_THRESHOLDS],
+        pose_used=False,table_offset_used=False,six_corner_layout_required=False)
+
+
 def front_back_steps(p,im,hsv,prepared,front_edges,front_quad,
                      intrinsics,extrinsics,table_plane):
     """Reuse four measured ROI front edges, measure three upper outline edges.
@@ -494,11 +532,9 @@ def front_back_steps(p,im,hsv,prepared,front_edges,front_quad,
     a separate six-point/seven-source layout, not the exterior-six policy.
     """
     try:
-        from . import edge_profiles as profiles,cube_outline,cube_corners as corners
+        from . import edge_profiles as profiles
     except ImportError:
         import edge_profiles as profiles
-        import cube_outline
-        import cube_corners as corners
     count=0;rejected=[]
     try:
         vertices=prepared.get('vertices')
@@ -509,12 +545,12 @@ def front_back_steps(p,im,hsv,prepared,front_edges,front_quad,
         yield {'stage':'front_back_edge_complete','edge_name':'left_top_depth'}
         upper=_measure(p,profiles,im,hsv,*back)
         yield {'stage':'front_back_edge_complete','edge_name':'back_top'}
-        # The independent colour-body silhouette proposes only this upper
-        # window. Its line still requires the original64station measurement.
-        seed,unused,ownership,proposal=cube_outline._proposal(p,corners,prepared,
-            intrinsics,extrinsics,table_plane,cube_outline.DEFAULT_LAB_THRESHOLDS)
-        a,b=seed[2],seed[3];middle=[(a[k]+b[k])/2 for k in range(2)]
-        right=_measure(p,profiles,im,ownership,a,middle)
+        # A short UNUSED side-bottom/top branch cannot reject this window.
+        # Only the actual upper-right line must pass its64station measurement.
+        a,b,ownership,proposal=_front_back_upper_window(p,prepared,
+            intrinsics,extrinsics,table_plane)
+        right_window=[a,b]
+        right=_measure(p,profiles,im,ownership,a,b)
         body_kind=proposal['body_mask_kind']
         right[1].update(edge_ownership=('same_current_LAB_component_upper_outline'
             if body_kind=='configured_LAB'else'same_current_HSV_body_upper_outline'),
@@ -548,7 +584,7 @@ def front_back_steps(p,im,hsv,prepared,front_edges,front_quad,
             'topology':'measured_front_face_and_back_top','roi_px':list(prepared['roi_px']),
             'candidate_window_shared':True,'odd_even_check':'independent_measured_point_line_fits',
             'upper_proposals':{'left_depth_roi_px':depth,'back_top_roi_px':back,
-                'merged_back_contour_roi_px':run,'right_upper_roi_px':[a,middle],
+                'merged_back_contour_roi_px':run,'right_upper_roi_px':right_window,
                 'right_silhouette':proposal,'pose_used':False,'table_offset_used':False}}
         count=1
         yield {'stage':'cube_candidate','candidate':0,'measurement':measurement}

@@ -47,8 +47,8 @@ def _terminal_face_seed(p,smooth,hsv,box,top,details,origin,
     seed=[p.intersect(top[0],left_seed),p.intersect(top[0],right_seed),
           p.intersect(right_seed,run['line']),p.intersect(left_seed,run['line'])]
     return seed,{1 if side=='right'else 3:crease},dict(
-        method=('observed_RGB_terminal_outline_and_front_bottom'if outline
-                else'observed_G_terminal_crease_and_front_bottom'),side=side,
+        method='observed_separator_terminal_wall_and_front_bottom',side=side,
+        separator_descriptor=details.get('descriptor'),
         terminal_gap_px=gaps[side],crease_seed_roi_px=[edge_a,edge_b],
         crease_quality=crease[1],bottom_contour_seed_roi_px=[run['a'],run['b']])
 
@@ -163,10 +163,15 @@ def recover_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
                 upper = [p.intersect(top[0], [1., 0., -point[0]]) for point in (left, right)]
                 seed = upper+[right, left]
                 reused={}
-                if selected_method in ('ridge','RGB'):
-                    proposal=_terminal_face_seed(p,smooth,hsv,local_bbox,top,details,
-                        [x0,y0],intrinsics,extrinsics,table_plane,
-                        outline=selected_method=='RGB')
+                if selected_method in ('ridge','RGB') or (refine_cube and selected_method=='B'):
+                    try:
+                        proposal=_terminal_face_seed(p,smooth,hsv,local_bbox,top,details,
+                            [x0,y0],intrinsics,extrinsics,table_plane,outline=True)
+                    except (ValueError,ZeroDivisionError) as exc:
+                        # A highlight can end on a flat face. Its endpoint is
+                        # only a proposal until a real wall is measured.
+                        metadata['face_proposal_rejected']={'reason':str(exc)}
+                        proposal=None
                     if proposal is not None:
                         seed,reused,metadata['face_proposal']=proposal
                 if min(seed[3][1]-seed[0][1],seed[2][1]-seed[1][1]) < 25:
@@ -197,6 +202,20 @@ def recover_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
                                'edge_index': edge_index, 'stations': 64}
                     edges.append(edge)
                 q = [p.intersect(edges[i-1][0], edges[i][0]) for i in range(4)]
+                if refine_cube and (selected_method in ('ridge','RGB') or
+                                    metadata.get('face_proposal') is not None):
+                    # The short proposal band can fit a reflection on the
+                    # packaging. Measure the actual top-to-bottom wall span
+                    # before intersecting half-lines or solving any pose.
+                    terminal=details.get('terminal_support',{})
+                    endpoint=terminal.get('last_point_px') if 'full_bbox' in terminal.get('method','') else None
+                    wall,audit=edge_profiles.wall_edge(p,smooth,hsv,
+                        seed[1],seed[2],q[1],q[2],endpoint)
+                    metadata['whole_wall_profile']=audit
+                    if wall is not None:
+                        edges[1]=wall
+                        q=[p.intersect(edges[i-1][0],edges[i][0])for i in range(4)]
+                    yield {'stage':'wall_profile','candidate':0,'accepted':wall is not None}
                 for half in (0, 1):
                     check = [p.intersect(edges[i-1][2][half], edges[i][2][half]) for i in range(4)]
                     if max(p.distance(a, b) for a, b in zip(q, check)) > 3:
@@ -224,7 +243,8 @@ def recover_steps(bgr, frame, bbox_px, intrinsics, extrinsics, table_plane,
                 else:
                     separator = p._separator_evidence(hsv, q[back:]+q[:back], edges[back], im)
                 yield {'stage': 'side_seam', 'candidate': 0}
-                if refine_cube and selected_method in ('ridge','RGB'):
+                if refine_cube and (selected_method in ('ridge','RGB') or
+                                    metadata.get('face_proposal') is not None):
                     try:
                         from .cube_corners import front_back_steps
                         from .cube_observation import build_result
