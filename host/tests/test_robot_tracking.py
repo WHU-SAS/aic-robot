@@ -724,7 +724,12 @@ class RobotTrackingTests(unittest.TestCase):
     def test_visible_geometry_or_identity_uncertainty_does_not_become_loss_search(self):
         for kind in('range_invalid','association_unknown','ambiguous_candidates'):
             with self.subTest(kind=kind):
-                self.setUp();self.geometry_invalid=True;self.fail_every_fine=True
+                self.setUp()
+                # Establish this actual target before its coarse geometry or
+                # identity becomes uncertain; an unseen raw blue pool does
+                # not itself establish a persistent target identity.
+                self.tick()
+                self.geometry_invalid=True;self.fail_every_fine=True
                 track=self.task.track
                 def uncertain(point,frame):
                     result=track(point,frame)

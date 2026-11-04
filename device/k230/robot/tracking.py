@@ -213,6 +213,8 @@ class TrackingTask:
 
     def idle_delay_ms(self):
         """Background calculation can use time before the next camera deadline."""
+        if self._forward_loss_confirmed():
+            return 0
         if self.state.get('run') and ((self.drive._fine_request or {}).get('stopped_for_verification') or
                                      self.drive._motion_hold):
             return 0
@@ -420,6 +422,7 @@ class TrackingTask:
             if self.target.get('confirmed_moved'):
                 self.metrics['target_changes'] += 1
             classified_at = self.clock()
+            self._count_visibility(coarse,classified_at)
             bottom_lost = (job['purpose']=='static' and
                 (self.drive._bottom_reverse_budget or {}).get('view_recovered') and
                 age_ms(classified_at,stamp) <= self.config.get('tracking',{}).get('max_age_ms',500) and
@@ -544,6 +547,11 @@ class TrackingTask:
             if self._memory_odom_capture is not None else
             self._wheel_delta(self._frame_motor,self.state))
         self._check_chassis_reference()
+        if self.drive._searching and self.drive.anchor is None:
+            # Confirmed loss has ended the old finite approach. Keep its
+            # evidence, but let a genuinely new full candidate reacquire;
+            # the departed target's old scale is not a new distance grant.
+            self.memory.release_precise()
         self.target = self.memory.update(self.coarse, deltas, arm_state,
             motion_state=self.state, controlled_correction=self._controlled_correction(now))
         if self._memory_odom_capture is not None:
@@ -583,10 +591,7 @@ class TrackingTask:
             # Memory has confirmed a unique jump; the next native frame can
             # establish a new color association instead of following old blue.
             self.reset_tracker()
-        self._missing = (self._missing+1 if not (
-            self.target['visible'] and self.target['associated'] or
-            self.target.get('precise_candidate') or
-            self.drive._visual_presence(self.coarse,self.clock())) else 0)
+        self._count_visibility(self.coarse,self.clock())
         unsent_hover = self.arm is not None and self.arm.snapshot().get('pending_stage') == 'hover'
         if (self._missing >= self.loss_confirmation_frames and
                 (self.planning is not None or unsent_hover)):
@@ -600,6 +605,53 @@ class TrackingTask:
             self.drive.restart_observation()
         self._fresh_before_arm = False
         return image, frame
+
+    def _count_visibility(self, coarse, now):
+        stamp=(coarse or {}).get('capture_timestamp_ms')
+        if type(stamp) is not int or not 0<=age_ms(now,stamp)<=self.config['tracking']['max_age_ms']:
+            return
+        present=self.drive._visual_presence(coarse,now)
+        # A forward approach can still see a complete new measured region
+        # before identity catches up. This exception grants no route/arm
+        # authority, and does not replace stopped identity-loss rules.
+        if self._owned_forward():
+            cue=(self.target or {}).get('navigation_cue')
+            evidence=(coarse or {}).get('visual_evidence') or {}
+            tracking_update=((self.target or {}).get('tracking_update') and
+                isinstance(cue,dict) and cue.get('bbox_px')==evidence.get('bbox_px') and
+                cue.get('center_pixel')==evidence.get('center_pixel') and
+                cue.get('timestamp_ms',stamp)==stamp)
+            present=present or tracking_update or self.drive._measurable_presence(coarse,now)
+        elif ((self.drive._bottom_reverse_budget or {}).get('view_recovered') and
+                self.drive._bottom_full_view(coarse,self.target,now)):
+            present=True
+        self._missing=0 if present else self._missing+1
+
+    def _owned_forward(self):
+        speeds=self._motion_speeds
+        return bool(self.state.get('run') and self.drive._active_action=='follow' and
+            not self.drive._searching and not self.drive._search_inspecting and
+            self.drive._motion_hold is None and self.arm is None and self.planning is None and
+            speeds is not None and sum(float(value) for value in speeds[:2])>0)
+
+    def _forward_loss_confirmed(self):
+        return self._missing>=self.loss_confirmation_frames and self._owned_forward()
+
+    def _stop_lost_follow(self):
+        if not self._forward_loss_confirmed():return False
+        self._cancel_job('target_lost_during_follow')
+        self.last_parking=None
+        event=dict(self.target or {},loss_confirmed=True,search=True)
+        self.decision=self.drive.update(self.coarse,self.state,self.clock(),
+            target_version=self.memory.version,target_event=event)
+        self.memory.release_precise()
+        self.target=self.memory.snapshot()
+        self._record('tracking_loss_confirmed',dict(
+            observations=self._missing,frame_id=(self.coarse or {}).get('frame_id'),
+            command=self.decision.get('command')))
+        if self.decision.get('command'):
+            self._command(self.decision['command'])
+        return True
 
     def _start_job(self, purpose, image, frame):
         if purpose=='moving' and self.state.get('run'):
@@ -924,7 +976,7 @@ class TrackingTask:
         Hundreds of algebraic progress events should not each cost5ms of idle
         time. Stop at the next observation deadline or the soft work budget.
         """
-        if self._pending_fine_stop():
+        if self._forward_loss_confirmed() or self._pending_fine_stop():
             # JPEG/native work has just yielded with no remaining travel.
             # Return to the original command slot before another solve/light.
             return
@@ -956,6 +1008,8 @@ class TrackingTask:
         if self.status == 'succeeded':
             return self.snapshot()
         if self.fault is not None:
+            return self.snapshot()
+        if self._stop_lost_follow():
             return self.snapshot()
         if (self.complete is not None and self.complete['purpose'] == 'moving' and
                 (self.complete['observation'].get('status') == 'localized' or
@@ -992,14 +1046,31 @@ class TrackingTask:
             image, frame = self._observe(force_status=
                 self._fresh_before_arm or self.complete is not None)
             self._force_observe = False
+            if self.fault is None and self._stop_lost_follow():
+                return self.snapshot()
+            if (self.fault is None and self._owned_forward() and
+                    0<self._missing<self.loss_confirmation_frames):
+                # Keep only the already authorized finite MCU segment during
+                # a one/two-frame gap. Memory's real edge-exit/version remains
+                # intact, without making it an immediate control STOP/search.
+                self.decision=dict(phase=self.drive.phase,status='transient_target_loss',
+                    command='HB',target_version=self.memory.version,allow_arm=False)
+                self._command('HB')
+                return self.snapshot()
             if self.fault is None:
                 event = dict(self.target)
                 # An unknown center loss is first observed, not called an exit.
                 # Once stopped, ordinary confirmation frames may start looking.
                 if (self.arm is None and self.planning is None and not self.state['run'] and self.job is None and
-                        self.complete is None and (not event['anchor_valid'] or
-                        self.drive.phase in ('settling', 'observing', 'observe')) and self._missing >=
+                        (not event['anchor_valid'] or self.drive.phase in
+                         ('settling','observing','observe','visual_tracking','fine_static')) and self._missing >=
                         self.loss_confirmation_frames):
+                    # Loss is decided after the original stopped confirmation
+                    # count. An old completed query cannot hold identity wait
+                    # forever when there is no matching current target region.
+                    if self.complete is not None and self.complete['purpose']=='static':
+                        self.complete=None
+                        self.drive.cancel_fine()
                     event['search'] = True
                 eligible = self.complete if (self.target.get('target_valid') or
                                               self.target.get('precise_candidate')) else None
@@ -1057,6 +1128,9 @@ class TrackingTask:
                     precise=eligible, target_version=self.memory.version,
                     fine_pending=self.job is not None, target_event=event,
                     arm_active=self.arm is not None or self.planning is not None)
+                if self.drive._searching and self.drive.anchor is None:
+                    self.memory.release_precise()
+                    self.target=self.memory.snapshot()
                 if self.decision.get('reset_tracker'):
                     self.reset_tracker()
                 if self.complete is not None and not self.decision.get('precise_deferred'):

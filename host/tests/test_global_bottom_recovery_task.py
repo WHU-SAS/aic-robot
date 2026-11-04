@@ -59,9 +59,11 @@ class BottomScene:
         'partial_left':[0,800,100,160],
         'partial_right':[1180,800,100,160],
         'whole_far':[610,300,80,100],
-        # Keep the original weak-height/scale failure after a fine-compute
-        # gap. It is visible/queryable, without a usable tabletop distance.
-        'whole_weak':[610,300,80,30],
+        # Same remembered near target, with complete pixels but rejected
+        # height geometry. A remote80x30 fragment at y300 is not this target:
+        # its height differs7.3x and its centre jumps525px after1.5mm reverse.
+        'whole_weak':[570,700,160,74],
+        'foreign_weak':[610,300,80,30],
     }
 
     def __init__(self,test,travel_scale=1.):
@@ -135,6 +137,51 @@ class BottomScene:
 
 
 class GlobalBottomRecoveryTaskTests(unittest.TestCase):
+    def test_first_measured_whole_frame_stops_before_navigation_confirmation(self):
+        s=BottomScene(self);s.begin_reverse();f=s.f
+        f.config['tracking']['confirmation_frames']=3
+        commands=s.step('whole_far')
+        first=s.frames[-1]
+        self.assertTrue(first['evidence']['distance_valid'])
+        self.assertFalse(first['evidence']['navigation_confirmed'])
+        self.assertIn('STOP',commands)
+        command_at=len(f.motor.commands)
+        for unused in range(15):
+            s.step('whole_far')
+            if len(f.fine_start_states)>s.initial_fines:break
+        else:self.fail('Measured bottom recovery did not request a new static frame')
+        self.assertEqual(f.fine_start_states[-1]['purpose'],'static')
+        self.assertGreater(f.fine_start_states[-1]['frame'],first['frame'])
+        self.assertFalse(any(c.startswith(('FOLLOW,','SPEED,','ARC,'))
+            for at,c in f.motor.commands[command_at:]))
+        self.assertFalse(f.handoffs)
+
+    def test_foreign_weak_blue_does_not_stop_or_renew_bottom_recovery(self):
+        s=BottomScene(self);s.begin_reverse();f=s.f
+        commands_at=len(f.motor.commands)
+        for unused in range(100):
+            commands=s.step('foreign_weak')
+            self.assertFalse(f.task.drive._bottom_full_view(
+                f.task.coarse,f.task.target,f.clock.now()))
+            if 'STOP' in commands:break
+            self.assertEqual(f.motor.run,1)
+            self.assertEqual((f.motor.left_speed,f.motor.right_speed),(-15,-15))
+            self.assertEqual(len(f.fine_start_states),s.initial_fines)
+            self.assertFalse(f.handoffs)
+        else:self.fail('The original100mm budget did not stop reverse')
+        self.assertGreater(s.travel(),98)
+        self.assertLessEqual(s.travel(),100)
+        self.assertEqual([c for at,c in f.motor.commands[commands_at:] if c=='STOP'],['STOP'])
+        for unused in range(10):
+            s.step('foreign_weak')
+            self.assertEqual(f.motor.run,0)
+            self.assertEqual(len(f.fine_start_states),s.initial_fines)
+            self.assertFalse(f.handoffs)
+        self.assertIsNone(f.task.drive.anchor)
+        self.assertFalse(any(c.startswith('ARC,') or
+            c.startswith(('FOLLOW,','SPEED,')) and c.split(',')[1:]!=['-15','-15']
+            for at,c in f.motor.commands[commands_at:]))
+
     def test_task_bottom_exit_keeps_continuous_reverse_through_missing_and_partial(self):
         s=BottomScene(self);s.begin_reverse();f=s.f
         for mode in ('missing','missing','partial_lower','missing','partial_left','missing'):

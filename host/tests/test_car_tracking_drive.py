@@ -67,6 +67,14 @@ class TrackingDriveTests(unittest.TestCase):
             bbox_px=[333,223,84,34],center_pixel=[375.,240.])
         return value
 
+    def weak_cue_at_known_target(self, now, confirmed=1, x=650):
+        """Geometry unavailable, with pixels belonging to our known target."""
+        value=self.weak_cue(now,confirmed)
+        trusted=self.coarse(now,x)['visual_evidence']
+        value['visual_evidence'].update(bbox_px=list(trusted['bbox_px']),
+            center_pixel=list(trusted['center_pixel']),pixels=800)
+        return value
+
     def native_cue(self, now, *blobs, tracker=None):
         tracker = tracker or BlueTracker(self.config['tracking'],self.projection)
         frame = {'frame_id':now,'capture_timestamp_ms':now,'timestamp_ms':now,
@@ -894,7 +902,8 @@ class TrackingDriveTests(unittest.TestCase):
             cue=self.coarse(now,self.target)
             cue['visual_evidence'].update(association_confirmations=1,
                 navigation_confirmed=False,distance_valid=False,
-                reason='inconsistent_with_20mm_height')
+                reason='inconsistent_with_20mm_height',
+                bbox_px=list(self.drive._search_region['bbox_px']),pixels=12000)
             result=self.update(now,run=run,travel=travel-10,reason=0 if run else 1,coarse=cue)
             self.assertEqual(result['command'],'STOP' if run else None)
             self.assertFalse(result['allow_arm'])
@@ -1073,10 +1082,15 @@ class TrackingDriveTests(unittest.TestCase):
                 self.assertGreaterEqual(self.drive._near_recovery['capture_timestamp_ms'],6400)
                 self.assertEqual(self.drive._near_recovery['source'],'coarse_assumed_height')
                 failed = self.precise(6400,self.target,status='no_complete_face')
-                failed['paired_coarse'] = self.weak_cue(6400,3)
+                failed['paired_coarse'] = self.weak_cue_at_known_target(6400,3,x=self.target)
                 failed['result_ready_ms'] = 7300
+                current=self.weak_cue_at_known_target(7350,3,x=self.target)
+                for cue in (failed['paired_coarse'],current):
+                    box=list(self.drive._search_region['bbox_px'])
+                    cue['visual_evidence'].update(
+                        bbox_px=box,pixels=box[2]*box[3]*3//4)
                 result = self.update(7350,travel=left-10,right=right-10,reason=8,
-                    coarse=self.weak_cue(7350,3),precise=failed)
+                    coarse=current,precise=failed)
                 self.assertIsNone(result['command'])
                 self.assertEqual(result['request_fine'],'static')
                 commands.append(result['command'])
@@ -1236,9 +1250,9 @@ class TrackingDriveTests(unittest.TestCase):
         self.assertFalse(evidence['navigation_confirmed'])
         self.assertEqual(len(coarse['visual_candidates']),9)
         self.assertTrue(evidence['ambiguous'])
-        # Blue presence stops the search but does not grant range, identity
-        # or a new heading merely by surviving repeated frames.
-        self.assertEqual(result['command'],'STOP')
+        # This unrelated, shape-rejected flash is not our remembered cube.
+        # Its raw blue pixels cannot stop the existing search or grant a route.
+        self.assertEqual(result['command'],'HB')
         self.assertEqual(self.drive._search_direction,'right')
         self.assertEqual(self.drive._search_region['bbox_px'],original.box)
         self.assertIsNone(self.drive._coarse_reference)
@@ -1246,15 +1260,15 @@ class TrackingDriveTests(unittest.TestCase):
         self.assertFalse(result['allow_arm'])
         repeated=self.update(1650,run=True,coarse=coarse,target_event=event,
                              target_version=memory.version)
-        self.assertEqual(repeated['command'],'STOP')
+        self.assertEqual(repeated['command'],'HB')
         self.assertIsNone(self.drive._search_hint)
         ambiguous,unused,result=sample(1700,[Blob(LEFT_CUBE,12164),Blob(RIGHT_CUBE,12053)])
         self.assertTrue(ambiguous['visual_evidence']['ambiguous'])
-        self.assertEqual(result['command'],'STOP')
+        self.assertEqual(result['command'],'HB')
         self.assertIsNone(self.drive._search_hint)
         for now in (1800,1900):
             coarse,event,result=sample(now,raw)
-            self.assertEqual(result['command'],'STOP')
+            self.assertEqual(result['command'],'HB')
             self.assertEqual(self.drive._search_direction,'right')
         coarse,event,result=sample(2000,raw)
         self.assertIsNone(self.drive._search_hint)
@@ -1313,7 +1327,11 @@ class TrackingDriveTests(unittest.TestCase):
                 super().__init__(box,pixels);self.center=center
             def cx(self):return self.center[0]
             def cy(self):return self.center[1]
-        tracker=BlueTracker(self.config['tracking'],self.projection)
+        # Preserve these archived raw cues under their original25px capture
+        # policy; they are below today's500px camera filter and never targets.
+        historical=copy.deepcopy(self.config['tracking'])
+        historical.update(min_pixels=25,min_area_px2=25)
+        tracker=BlueTracker(historical,self.projection)
         target=RecordedBlob([604,277,109,142],11587,[649.,346.])
         for now in (800,850,900):trusted=self.native_cue(now,target,tracker=tracker)
         self.drive.request_search('right')
@@ -1322,23 +1340,34 @@ class TrackingDriveTests(unittest.TestCase):
         for now, blob in (
                 (1150,RecordedBlob([353,341,9,5],31,[357.,343.])),
                 (1250,RecordedBlob([0,915,11,5],27,[6.,917.]))):
-            cue=self.native_cue(now,blob)
+            cue=self.native_cue(now,blob,tracker=BlueTracker(historical,self.projection))
             self.assertTrue(cue['visual_evidence']['associated'])
             self.assertEqual(len(cue['visual_candidates']),1)
-            self.assertGreaterEqual(cue['visual_evidence']['pixels'],self.config['tracking']['min_pixels'])
+            self.assertGreaterEqual(cue['visual_evidence']['pixels'],historical['min_pixels'])
+            self.assertLess(cue['visual_evidence']['pixels'],self.config['tracking']['min_pixels'])
             self.assertFalse(cue['visual_evidence']['distance_valid'])
             result=self.update(now,run=True,coarse=cue,target_event={'last_seen':trusted})
-            self.assertEqual(result['command'],'STOP')
+            self.assertEqual(result['command'],'HB')
             self.assertEqual(self.drive._search_direction,'right')
             self.assertFalse(result['allow_arm'])
 
-    def test_visible_clipped_candidate_among_noise_stops_without_distance_or_identity(self):
+    def test_visible_clipped_candidate_among_rejected_noise_stops_without_distance_or_identity(self):
+        class ThresholdedImage(Image):
+            def find_blobs(self,*args,**kwargs):
+                self.calls+=1
+                return [blob for blob in self.blobs if blob.pixels()>=kwargs['pixels_threshold']
+                        and blob.box[2]*blob.box[3]>=kwargs['area_threshold']]
         self.drive.request_search('right')
         self.update(1000,coarse=self.missing(1000));self.update(1050,coarse=self.missing(1050))
         for now in (1150,1250,1350):
-            cue=self.native_cue(now,Blob([0,300,80,80],3200),Blob([353,341,9,5],31))
-            self.assertTrue(cue['visual_evidence']['ambiguous'])
-            self.assertEqual(len(cue['visual_candidates']),2)
+            frame={'frame_id':now,'capture_timestamp_ms':now,'timestamp_ms':now,
+                   'clock_domain':'k230_ticks_ms','image_size_px':[1280,960]}
+            image=ThresholdedImage(Blob([0,300,80,80],3200),Blob([353,341,9,5],31))
+            tracker=BlueTracker(self.config['tracking'],self.projection)
+            cue=for_approach(track_coarse(image,frame,tracker.detect_frame),'coarse')
+            self.assertFalse(cue['visual_evidence']['ambiguous'])
+            self.assertEqual(len(cue['visual_candidates']),1)
+            self.assertEqual(cue['visual_evidence']['bbox_px'],[0,300,80,80])
             result=self.update(now,run=True,coarse=cue)
             self.assertEqual(result['command'],'STOP')
         self.assertFalse(self.drive._searching)
@@ -1407,8 +1436,14 @@ class TrackingDriveTests(unittest.TestCase):
         self.assertTrue(cue['visual_evidence']['ambiguous'])
         self.assertEqual(sum(c['distance_valid'] for c in cue['visual_candidates']),2)
         result=self.update(1150,run=True,coarse=cue)
-        self.assertEqual(result['command'],'STOP')
+        # With no previous cube, an unselected independent pool cannot choose
+        # one object or stop the search merely because both blobs are large.
+        self.assertEqual(result['command'],'HB')
         self.assertEqual(self.drive._search_direction,'right')
+        self.assertTrue(self.drive._searching)
+        self.assertIsNone(self.drive._coarse_reference)
+        self.assertIsNone(self.drive.anchor)
+        self.assertFalse(result['allow_arm'])
 
     def test_visible_ambiguous_or_shape_rejected_blue_stops_search_without_range_authority(self):
         for change in ({'ambiguous':True}, {'cube_shape_compatible':False,
@@ -1726,8 +1761,8 @@ class TrackingDriveTests(unittest.TestCase):
         self.update(1000,coarse=self.missing(1000),target_event={
             'search':True,'last_seen':self.coarse(900)})
         self.update(1050,coarse=self.missing(1050))
-        self.assertEqual(self.update(1150,run=True,coarse=self.weak_cue(1150))['command'],'STOP')
-        result=self.update(1250,run=True,coarse=self.weak_cue(1250,3),
+        self.assertEqual(self.update(1150,run=True,coarse=self.weak_cue_at_known_target(1150))['command'],'STOP')
+        result=self.update(1250,run=True,coarse=self.weak_cue_at_known_target(1250,3),
                            target_event={'visible':True,'associated':True})
         self.assertEqual(result['command'],'STOP')
         self.assertEqual(result['phase'],'visual_tracking')
@@ -1736,8 +1771,8 @@ class TrackingDriveTests(unittest.TestCase):
         self.assertTrue(self.drive._search_inspecting)
         self.assertIsNone(self.drive.anchor)
         self.assertFalse(result['allow_arm'])
-        self.update(1350,coarse=self.weak_cue(1350,4),reason=1)
-        result=self.update(1400,coarse=self.weak_cue(1400,5),reason=1)
+        self.update(1350,coarse=self.weak_cue_at_known_target(1350,4),reason=1)
+        result=self.update(1400,coarse=self.weak_cue_at_known_target(1400,5),reason=1)
         self.assertEqual(result['request_fine'],'static')
         self.assertFalse(self.drive._searching)
         self.assertTrue(self.drive._search_inspecting)
@@ -1764,16 +1799,16 @@ class TrackingDriveTests(unittest.TestCase):
         self.update(1000,coarse=self.missing(1000),target_event={
             'search':True,'last_disappearance_direction':'bottom','last_seen':self.coarse(900)})
         self.assertEqual(self.update(1050,coarse=self.missing(1050))['command'],'FOLLOW,-20,20')
-        self.update(1150,travel=-10,reason=8,coarse=self.weak_cue(1150,3))
-        result=self.update(1200,travel=-10,reason=8,coarse=self.weak_cue(1200,4))
+        self.update(1150,travel=-10,reason=8,coarse=self.weak_cue_at_known_target(1150,3))
+        result=self.update(1200,travel=-10,reason=8,coarse=self.weak_cue_at_known_target(1200,4))
         self.assertEqual(result['request_fine'],'static')
         for index,now in enumerate(range(1300,1900,100)):
             request=dict(self.drive._fine_request)
             stamp=request['capture_timestamp_ms']
             failed=self.precise(stamp,self.target,status='no_complete_face')
-            failed['paired_coarse']=self.weak_cue(stamp,4+index)
+            failed['paired_coarse']=self.weak_cue_at_known_target(stamp,4+index)
             result=self.update(now,travel=-10,reason=8,
-                coarse=self.weak_cue(now,5+index),precise=failed)
+                coarse=self.weak_cue_at_known_target(now,5+index),precise=failed)
             self.assertTrue(result['precise_consumed'])
             self.assertIsNone(result['command'])
             self.assertEqual(result['request_fine'],'static')
@@ -1786,10 +1821,10 @@ class TrackingDriveTests(unittest.TestCase):
     def test_confirmed_navigation_can_replace_failed_static_inspection_without_an_extra_turn(self):
         self.update(1000,coarse=self.missing(1000),target_event={
             'search':True,'last_seen':self.coarse(900)})
-        self.update(1050,coarse=self.weak_cue(1050,3))
+        self.update(1050,coarse=self.weak_cue_at_known_target(1050,3))
         failed=self.precise(1050,self.target,status='no_complete_face')
-        failed['paired_coarse']=self.weak_cue(1050,3)
-        result=self.update(1150,coarse=self.weak_cue(1150,4),precise=failed)
+        failed['paired_coarse']=self.weak_cue_at_known_target(1050,3)
+        result=self.update(1150,coarse=self.weak_cue_at_known_target(1150,4),precise=failed)
         self.assertIsNone(result['command'])
         self.assertEqual(result['request_fine'],'static')
         result=self.update(1250,coarse=self.coarse(1250),target_version=2)

@@ -187,6 +187,8 @@ class DriveController:
             if len(rows) > 1 and rows[-1][1:] == counts and rows[-2][1:] == counts:
                 rows.pop()
             self.odometry.add(state, sent, received)
+            if self._search_region is not None:
+                self._search_region = self._presence_reference(self.odometry.rows[-1][0])
         counts = (state['encoder_a'], state['encoder_b'])
         if state['run']:
             self._stable_at = self._stable_counts = self.stopped_at_ms = None
@@ -263,17 +265,40 @@ class DriveController:
         pixel = (coarse or {}).get('center_pixel', evidence.get('center_pixel'))
         return self.projection.pixel_to_plane(pixel, 10)
 
+    def _presence_reference(self, stamp):
+        """Propagate only the existing target region, without retaining old IO rows."""
+        if self._search_region is None:return None
+        reference=dict(self._search_region)
+        point,previous=reference.get('point'),reference.get('motor_stamp_ms')
+        if point is None or type(previous) is not int or type(stamp) is not int:
+            return reference
+        if age_ms(stamp,previous)>=0:
+            deltas=self.odometry.since(previous,stamp)
+        else:
+            deltas=[(-a,-b)for a,b in reversed(self.odometry.since(stamp,previous))]
+        point=predict_center(point,deltas,self.near['track_width_mm'],
+            self.projection.normal,self.projection.forward_axis_Base,
+            self.projection.motion_origin_Base_mm)
+        reference.update(point=point,motor_stamp_ms=stamp)
+        try:reference['center_pixel']=self.projection.base_to_pixel(point)
+        except ValueError:pass
+        return reference
+
     def _visual_presence(self, coarse, now):
-        """Current blue pixels prevent a false loss, not a distance/identity grant."""
+        """A current target-sized region can hold observation; stray blue cannot."""
         if not isinstance(coarse,dict):return False
         stamp=coarse.get('capture_timestamp_ms')
         if type(stamp) is not int or not 0 <= age_ms(now,stamp) <= self.config['tracking']['max_age_ms']:
             return False
         evidence=coarse.get('visual_evidence') or {}
-        pool=list(coarse.get('visual_candidates') or [])
+        reference=self._presence_reference(stamp)
+        # Without target history, only a native selected observation can hold
+        # a static query. An arbitrary unselected invalid pool is not a target.
+        pool=list(coarse.get('visual_candidates') or []) if reference is not None else []
         if evidence.get('visible'):pool.append(evidence)
         return any(isinstance(cue,dict) and cue.get('visible') is not False and
-            cue.get('timestamp_ms',stamp)==stamp and self._search_shape(cue) for cue in pool)
+            cue.get('timestamp_ms',stamp)==stamp and self._search_shape(cue) and
+            (reference is None or self._search_match(cue,reference)) for cue in pool)
 
     def _remember_coarse(self, coarse):
         self._remember_search_region(coarse)
@@ -285,19 +310,39 @@ class DriveController:
         except (ValueError, TypeError, KeyError):
             pass
 
-    def _remember_search_region(self, coarse, precise_pair=False):
+    def _remember_search_region(self, coarse, precise_pair=False, reacquired=False,
+                                measured_query=False):
         """Keep full-target size for direction hints, never a distance anchor."""
         if not isinstance(coarse, dict):
             return
         evidence = (coarse or {}).get('visual_evidence') or coarse or {}
         if (evidence.get('ambiguous') or evidence.get('reason') == 'clipped_blob' or
-                evidence.get('associated') is False or
+                evidence.get('associated') is False and not measured_query or
                 (not precise_pair and (evidence.get('distance_valid') is not True or
-                 evidence.get('navigation_confirmed') is not True))):
+                 not measured_query and evidence.get('navigation_confirmed') is not True))):
             return
         if self._search_shape(evidence):
+            stamp=coarse.get('capture_timestamp_ms')
+            reference=self._presence_reference(stamp)
+            if not precise_pair and not reacquired and reference is not None:
+                previous=reference.get('seen_capture_ms')
+                if (not self._search_match(evidence,reference) or
+                        type(previous) is int and type(stamp) is int and
+                        age_ms(stamp,previous)<=0):
+                    return
             self._search_region = {'bbox_px':list(evidence['bbox_px']),
                                    'center_pixel':list(evidence['center_pixel'])}
+            if type(stamp) is int:
+                height=10.
+                if precise_pair and self.anchor is not None:
+                    unused,point,unused=distance_anchor(self.anchor)
+                    height=sum(a*b for a,b in zip(self.projection.normal,point))-self.projection.offset
+                try:
+                    self._search_region.update(point=self.projection.pixel_to_plane(
+                        evidence['center_pixel'],height),motor_stamp_ms=stamp,seen_capture_ms=stamp)
+                    if self.odometry.rows and age_ms(self.odometry.rows[-1][0],stamp)>=0:
+                        self._search_region=self._presence_reference(self.odometry.rows[-1][0])
+                except ValueError:pass
 
     def _search_match(self, cue, reference):
         if reference is None or not self._search_shape(cue):
@@ -309,6 +354,36 @@ class DriveController:
         return (math.sqrt(((a[0]-b[0])/width)**2+((a[1]-b[1])/height)**2) <=
             tracking['max_center_jump_fraction'] and all(1/limit <=
                 cue['bbox_px'][axis]/reference['bbox_px'][axis] <= limit for axis in (2, 3)))
+
+    def _reacquired_presence(self, coarse, now):
+        """Confirmed navigation may reacquire the target at a new image position."""
+        evidence=(coarse or {}).get('visual_evidence') or {}
+        stamp=(coarse or {}).get('capture_timestamp_ms')
+        if (type(stamp) is not int or not 0<=age_ms(now,stamp)<=self.config['tracking']['max_age_ms'] or
+                evidence.get('associated') is not True or evidence.get('ambiguous') or
+                evidence.get('navigation_confirmed') is not True or
+                evidence.get('distance_valid') is not True or not self._search_shape(evidence)):
+            return False
+        tracking=self.config['tracking']
+        pixels=evidence.get('pixels')
+        return (evidence['bbox_px'][2]*evidence['bbox_px'][3]>=tracking.get('min_area_px2',0) and
+            (pixels is None or pixels>=tracking.get('min_pixels',0)))
+
+    def _measurable_presence(self, coarse, now):
+        """A complete native measurement is visible before identity confirms."""
+        stamp=(coarse or {}).get('capture_timestamp_ms')
+        tracking=self.config['tracking']
+        if type(stamp) is not int or not 0<=age_ms(now,stamp)<=tracking['max_age_ms']:
+            return False
+        evidence=(coarse or {}).get('visual_evidence') or {}
+        pool=list((coarse or {}).get('visual_candidates') or [])
+        if evidence.get('visible'):pool.append(evidence)
+        return any(isinstance(cue,dict) and cue.get('visible') is not False and
+            cue.get('timestamp_ms',stamp)==stamp and cue.get('distance_valid') is True and
+            not cue.get('edge_directions') and self._search_shape(cue) and
+            cue['bbox_px'][2]*cue['bbox_px'][3]>=tracking.get('min_area_px2',0) and
+            (cue.get('pixels') is None or cue['pixels']>=tracking.get('min_pixels',0))
+            for cue in pool)
 
     def _confirmed_search_hint(self, cue, coarse):
         """A new region needs its own three frames, not another cue's count."""
@@ -387,7 +462,7 @@ class DriveController:
             self._search_hint = None
             return None
         self._remember_search_region(event.get('last_seen'))
-        if event.get('anchor_valid'):
+        if event.get('anchor_valid') and self._search_region is None:
             self._remember_search_region(event.get('paired_coarse'), precise_pair=True)
         self._remember_search_region(coarse)
         evidence = coarse.get('visual_evidence') or {}
@@ -395,6 +470,9 @@ class DriveController:
         raw = raw if isinstance(raw, list) else [evidence]
         fresh = [cue for cue in raw if isinstance(cue, dict) and
                  cue.get('timestamp_ms', stamp) == stamp and self._search_shape(cue)]
+        reference=self._presence_reference(stamp)
+        if reference is not None:
+            fresh=[cue for cue in fresh if self._search_match(cue,reference)]
 
         def independent(cues):
             def contains(outer, inner):
@@ -405,6 +483,7 @@ class DriveController:
 
         canonical = (evidence.get('visible') and evidence.get('associated') is True and
             not evidence.get('ambiguous') and self._visible(coarse, event) and
+            (reference is None or self._search_match(evidence,reference)) and
             self._search_shape(evidence) and (evidence.get('distance_valid') is True or
                 self._search_weak_shape(evidence, True)))
         measured = independent([cue for cue in fresh if cue.get('distance_valid') is True])
@@ -427,6 +506,7 @@ class DriveController:
             pool = [cue for cue in fresh if self._search_weak_shape(cue, False)]
             if (not evidence.get('ambiguous') and evidence.get('visible') and
                     evidence.get('associated') is True and
+                    (reference is None or self._search_match(evidence,reference)) and
                     self._search_weak_shape(evidence, True) and not any(
                         cue.get('bbox_px') == evidence.get('bbox_px') and
                         cue.get('center_pixel') == evidence.get('center_pixel') for cue in pool)):
@@ -448,6 +528,7 @@ class DriveController:
         stamp = (coarse or {}).get('capture_timestamp_ms')
         if (type(stamp) is not int or not
                 0 <= age_ms(now, stamp) <= self.config['tracking']['max_age_ms'] or
+                not self._visual_presence(coarse,now) or
                 not (precise_candidate or visible and target_valid and self._search_shape(evidence))):
             return False
         if evidence.get('reason') == 'clipped_blob':
@@ -834,10 +915,19 @@ class DriveController:
                 evidence.get('edge_directions') or not self._search_shape(evidence)):
             return False
         stamp = (coarse or {}).get('capture_timestamp_ms')
-        # A new whole-looking cue may not share the previous partial identity.
-        # It can stop view recovery; only NEW static fine can authorize a pose.
+        # A whole-looking foreign blue patch is not the departed target.
+        # Continuity can keep a weak target queryable. A genuinely measured
+        # complete candidate can also stop recovery before native navigation
+        # confirmation; only NEW static fine may then authorize a pose.
+        tracking=self.config['tracking']
+        pixels=evidence.get('pixels')
+        measurable=(evidence.get('distance_valid') is True and
+            evidence['bbox_px'][2]*evidence['bbox_px'][3]>=tracking.get('min_area_px2',0) and
+            (pixels is None or pixels>=tracking.get('min_pixels',0)))
         return (type(stamp) is int and evidence.get('timestamp_ms',stamp) == stamp and
-            0 <= age_ms(now,stamp) <= self.config['tracking']['max_age_ms'])
+            0 <= age_ms(now,stamp) <= tracking['max_age_ms'] and
+            (measurable or self._search_region is not None and
+             self._visual_presence(coarse,now)))
 
     def update(self, coarse, motor_state, now_ms, precise=None, target_version=0,
                fine_pending=False, target_event=None, arm_active=False):
@@ -867,6 +957,7 @@ class DriveController:
         confirmed_moved = bool(event.get('confirmed_moved') or
             event.get('event') == 'moved' and event.get('movement_state') == 'confirmed')
         anchor_locked = (self.anchor is not None and not confirmed_moved and
+            not event.get('loss_confirmed') and
             not self._searching and not self._search_inspecting and
             self._active_action not in ('arc', 'recovery_reverse', 'bottom_reverse',
                                         'inspection_follow', 'search_follow'))
@@ -876,10 +967,15 @@ class DriveController:
         state, running = motor_state, bool(motor_state['run'])
         visible = self._visible(coarse, event)
         presence = self._visual_presence(coarse,now_ms)
+        reacquired_presence = self._reacquired_presence(coarse,now_ms)
+        if (reacquired_presence and (event.get('confirmed_moved') or
+                event.get('event') in ('acquired','reappeared','tracking_update'))):
+            self._remember_search_region(coarse,reacquired=True)
+            presence=True
         precise_candidate = bool(event.get('precise_candidate'))
         query_visible = visible or precise_candidate
-        if (anchor_locked and self.phase == 'settling' and not running and
-                self.stopped_at_ms is not None and not query_visible and
+        if (anchor_locked and self.phase in ('settling','visual_tracking','fine_static') and not running and
+                self.stopped_at_ms is not None and not presence and
                 (event.get('event') == 'exited' or event.get('search'))):
             # Its finite approach and original stable-stop window are over.
             # Explicit current loss may now use the existing search policy;
@@ -897,7 +993,7 @@ class DriveController:
             decision['reset_tracker'] = True
         bottom_exit = event.get('event') == 'exited' and event.get('last_disappearance_direction') == 'bottom'
         if (not anchor_locked and (not presence or bottom_exit) and
-                (event.get('event') == 'exited' or event.get('search') and not query_visible)):
+                (event.get('event') == 'exited' or event.get('search') and not presence)):
             direction = event.get('last_disappearance_direction')
             self.request_search(direction,bottom_history=
                 direction == 'bottom' and event.get('event') == 'exited')
@@ -1030,6 +1126,9 @@ class DriveController:
         if (self._search_reverse_required and
                 not (self._bottom_reverse_budget or {}).get('view_recovered') and
                 self._bottom_full_view(coarse,event,now_ms)):
+            # This new measured region owns only presence during its stopped
+            # query. No navigation/fine distance capability is granted here.
+            self._remember_search_region(coarse,reacquired=True,measured_query=True)
             self._search_reverse_done = self._bottom_static_pending = True
             self._bottom_reverse_budget['view_recovered'] = True
             self._end_search()
@@ -1150,8 +1249,9 @@ class DriveController:
             if running and not (self._search_arc_active or self._search_follow_active):
                 self.phase = 'searching'
                 return finish('STOP', 'starting_search')
-            if coarse_plan is not None and target_valid:
+            if coarse_plan is not None and target_valid and (presence or reacquired_presence):
                 self._end_search()
+                self._remember_search_region(coarse,reacquired=True)
                 self._remember_coarse(coarse)
                 self.phase = 'observe'
                 if running:
@@ -1231,8 +1331,9 @@ class DriveController:
         if self._search_inspecting:
             # This is initial visual reacquisition, not a failed fine retry:
             # failed static results leave this state via _end_search above.
-            if coarse_plan is not None and target_valid:
+            if coarse_plan is not None and target_valid and (presence or reacquired_presence):
                 self._end_search()
+                self._remember_search_region(coarse,reacquired=True)
                 self._remember_coarse(coarse)
                 self.phase = 'observe'
                 if running:

@@ -13,6 +13,10 @@ from host.tests import test_robot_tracking as fixtures
 class CorrectionContextTrackingTests(unittest.TestCase):
     def test_real_correction_feedback_stays_real_and_requires_new_static_before_arm(self):
         f=fixtures.RobotTrackingTests();f.setUp();f.y+=40
+        # Distinct real UART snapshots cannot contain an entire physical ARC
+        # at one timestamp. Preserve the stopped/run0 completion semantics,
+        # with1ms request time so encoder interpolation has a real interval.
+        f.motor.request_cost_ms=1
         original=f.task.memory.update;observations=[]
         def observed(observation,*args,**kwargs):
             before=copy.deepcopy(kwargs['motion_state'])

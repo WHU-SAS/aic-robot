@@ -82,7 +82,10 @@ class BottomRecoveryFineGapTests(unittest.TestCase):
         scene = self.paused_static()
         fixture = scene.f
         original = list(fixture.task.drive._bottom_reverse_budget['reverse_start_counts'])
-        scene.mode = 'whole_weak'
+        # Keep this physical image region unchanged. A move from the far
+        # source(y350) to the unrelated near weak cue(y737) is correctly
+        # rejected by the final current-image check before any binding.
+        scene.mode = 'whole_far'
         for unused in range(100):
             scene.step()
             if fixture.task.complete is not None:
@@ -93,11 +96,24 @@ class BottomRecoveryFineGapTests(unittest.TestCase):
         old_frame = completed['observation']['frame_id']
         self.assertEqual(completed['observation']['status'], 'localized')
         self.assertEqual(completed['observation']['target_association']['status'], 'matched')
+        # Inject unavailable current range without changing image identity,
+        # then explicitly reject the binding transaction. Its rollback must
+        # retain the original reverse budget even after Drive accepts a pose.
+        geometry=fixture.projection.blob_geometry
+        def weak_geometry(box):
+            result=dict(geometry(box))
+            result['observed_to_expected_height_ratio']=.2
+            return result
+        fixture.projection.blob_geometry=weak_geometry
+        def reject_binding(observation,*args,**kwargs):
+            fixture.bind_attempts.append(observation['frame_id'])
+            return False
+        fixture.task.memory.bind_precise=reject_binding
         scene.step()
         current = scene.frames[-1]['evidence']
         self.assertEqual(current['edge_directions'], [])
         self.assertFalse(current['distance_valid'])
-        self.assertEqual(completed['current_consistency'], 'unknown')
+        self.assertEqual(completed['current_consistency'], 'consistent')
         self.assertIn(old_frame, fixture.bind_attempts)
         self.assertTrue(any(row['event'] == 'tracking_fine_binding_rejected' and
             row['details']['frame_id'] == old_frame for row in fixture.task.timeline))

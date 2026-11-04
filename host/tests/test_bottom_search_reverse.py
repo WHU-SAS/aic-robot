@@ -19,8 +19,14 @@ class BottomSearchReverseTests(unittest.TestCase):
         return self.f.update(now,run=run,travel=travel,
             coarse=self.f.missing(now) if coarse is None else coarse,**kwargs)
 
-    def begin(self):
-        self.step(1000,target_event={'event':'exited','last_disappearance_direction':'bottom'})
+    def begin(self,last_seen=None):
+        event={'event':'exited','last_disappearance_direction':'bottom'}
+        if last_seen is not None:
+            # The bottom-only fixture starts after ordinary tracking has
+            # already observed this target, without fabricating a motor run.
+            self.drive._remember_search_region(last_seen)
+            event['last_seen']=last_seen
+        self.step(1000,target_event=event)
         result=self.step(1050)
         self.assertEqual(result['command'],'FOLLOW,-15,-15')
         self.assertEqual(self.drive._active_action,'bottom_reverse')
@@ -32,6 +38,13 @@ class BottomSearchReverseTests(unittest.TestCase):
         if weak:
             coarse['visual_evidence'].update(distance_valid=False,navigation_confirmed=False,
                 reason='inconsistent_with_20mm_height')
+            # This protocol cue is the already known target after measured
+            # wheel travel, not an unrelated fixed far-image blue rectangle.
+            reference=self.drive._presence_reference(now)
+            if reference is not None:
+                box=list(reference['bbox_px'])
+                coarse['visual_evidence'].update(bbox_px=box,
+                    center_pixel=list(reference['center_pixel']),pixels=box[2]*box[3]*3//4)
             event=dict(precise_candidate=True,target_valid=False,visible=True,associated=True)
         return coarse,event
 
@@ -60,7 +73,7 @@ class BottomSearchReverseTests(unittest.TestCase):
         for weak in (False,True):
             with self.subTest(coarse_distance_available=not weak):
                 self.setUp()
-                self.begin()
+                self.begin(last_seen=self.f.coarse(900) if weak else None)
                 cue,event=self.recovered(1150,weak=weak)
                 if weak:
                     cue['visual_evidence']['associated']=False

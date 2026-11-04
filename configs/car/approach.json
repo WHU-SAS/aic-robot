@@ -6,8 +6,8 @@
   "tracking": {
     "image_size_px": [1280, 960],
     "lab_thresholds": [[0, 100, -10, 127, -128, -35]],
-    "min_pixels": 25,
-    "min_area_px2": 25,
+    "min_pixels": 500,
+    "min_area_px2": 500,
     "max_aspect_ratio": 4,
     "min_fill_ratio": 0.2,
     "forward_range_mm": [

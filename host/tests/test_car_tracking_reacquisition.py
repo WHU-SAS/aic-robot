@@ -156,7 +156,17 @@ class TrackingReacquisitionTests(unittest.TestCase):
         # larger B and accumulated tracking while visual still named left A.
         # A weak first colour mask shares A's actual whole-region pixels, not
         # the historical physically incompatible flat print.
-        self.chain.sample([(WHOLE_LEFT[0],100)])
+        # The former 100px API fixture is now deliberately below the 500px
+        # native admission gate. Keep that rejection distinct from identity.
+        filtered = self.chain.sample([(WHOLE_LEFT[0],100)])
+        self.assertFalse(filtered['coarse']['visual_evidence']['visible'])
+        self.assert_no_forward(filtered)
+        # 600px survives admission but is still sparse in this same whole
+        # region: it can establish visual association, never navigation.
+        weak = self.chain.sample([(WHOLE_LEFT[0],600)])
+        self.assertEqual(weak['coarse']['visual_evidence']['reason'],'sparse_blob')
+        self.assertFalse(weak['coarse']['visual_evidence']['navigation_confirmed'])
+        self.assert_no_forward(weak)
         for unused in range(3): row = self.chain.sample([WHOLE_LEFT,WHOLE_RIGHT])
         coarse,evidence = row['coarse'],row['coarse']['visual_evidence']
         for key in ('bbox_px','center_pixel','ground_contact_proxy_Base_mm'):
@@ -228,9 +238,14 @@ class TrackingReacquisitionTests(unittest.TestCase):
         coarse = row['coarse']
         self.assertTrue(self.chain.memory.bind_precise(
             synthetic_precise(coarse,self.chain.projection),coarse,0))
-        # Shrinking from274px to20px breaks native association. It lies
-        # within the old box, so it has no independent whole-box translation.
+        # The historical 20x20/200px patch fails both native 500px gates.
         row = self.chain.sample([([601,673,20,20],200)])
+        self.assertFalse(row['coarse']['visual_evidence']['visible'])
+        self.assertEqual(row['target']['version'],0)
+        # A 25x25/500px partial survives admission, but shrinking from274px
+        # still breaks association. It lies within the old whole box, so it
+        # has no independent whole-box translation or inherited authority.
+        row = self.chain.sample([([599,670,25,25],500)])
         self.assertFalse(row['coarse']['visual_evidence']['associated'])
         self.assertTrue(row['target']['visible'])
         self.assertFalse(row['target']['associated'])
@@ -247,12 +262,15 @@ class TrackingReacquisitionTests(unittest.TestCase):
             self.assertEqual(row['target']['event'],'holding')
             self.assertEqual(row['target']['version'],0)
         lift = {'phase':'lift','grasp_confirmed':True,'held_center_pixel':[670,520]}
-        for items in ([([760,510,20,20],200)],[],[([760,510,20,20],200)]):
+        # These partials pass the 500px admission gate without becoming a
+        # valid tabletop measurement; this still tests holding semantics.
+        for items in ([([758,508,25,25],500)],[],[([758,508,25,25],500)]):
             row = self.chain.sample(items,arm=lift)
             self.assertEqual(row['target']['version'],0)
             self.assertFalse(row['target']['confirmed_moved'])
+            self.assertFalse(row['coarse']['visual_evidence']['navigation_confirmed'])
         for unused in range(2):
-            row = self.chain.sample([([20,510,20,20],200)],arm=lift)
+            row = self.chain.sample([([18,508,25,25],500)],arm=lift)
         self.assertEqual(row['target']['version'],1)
         self.assertEqual(row['target']['reason'],'held_target_moved')
 
