@@ -59,7 +59,7 @@ finally:
 ''' % (remote, count, remote, delay_ms, delay_ms)
 
 
-def download(link, remote, progress=None):
+def download(link, remote, progress=None, script_prefix=''):
     script = '''import binascii,time,uhashlib,os
 print('SIZE '+str(os.stat(%r)[6]))
 h=uhashlib.sha256();offset=0
@@ -74,7 +74,7 @@ print('HASH '+str(offset)+' '+binascii.hexlify(h.digest()).decode())
 print('EXPORT_DONE')
 ''' % (remote, remote)
     data = bytearray(); expected = None; size = None; total = None
-    for line in link.execute(script, timeout=90):
+    for line in link.execute(script_prefix + script, timeout=90):
         if line.startswith(b'SIZE '):
             total = int(line[5:])
             if progress is not None: progress(0, total)

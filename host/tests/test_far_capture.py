@@ -44,6 +44,7 @@ class FarCaptureTests(unittest.TestCase):
             def __init__(self, size_delta=0): self.size_delta = size_delta
             def execute(self, script, timeout):
                 ast.parse(script)
+                self.script = script
                 yield ('SIZE %d' % (len(content) + self.size_delta)).encode()
                 yield b'DATA 0 ' + base64.b64encode(content)
                 yield ('HASH %d %s' % (len(content), hashlib.sha256(content).hexdigest())).encode()
@@ -53,6 +54,12 @@ class FarCaptureTests(unittest.TestCase):
         self.assertEqual(actual, content)
         self.assertEqual(digest, hashlib.sha256(content).hexdigest())
         self.assertEqual(progress, [(0, len(content)), (len(content), len(content))])
+        held = Link()
+        with_setup, same_digest = download(held, '/sdcard/car_far/test/frame_01.jpg',
+                                          script_prefix='light_is_off = True\n')
+        self.assertEqual(with_setup, content)
+        self.assertEqual(same_digest, digest)
+        self.assertTrue(held.script.startswith('light_is_off = True\n'))
         with self.assertRaises(RuntimeError):
             download(Link(1), '/sdcard/car_far/test/frame_01.jpg')
 

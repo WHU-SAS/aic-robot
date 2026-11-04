@@ -24,6 +24,14 @@ from host.transport.download_calibration import CameraLink, PORT
 from tools.diagnostics.capture_car_far import download, download_progress
 from tools.diagnostics.test_k230_motor_uart import stop_previous_script
 
+LIGHT_OFF_DURING_TRANSFER = '''from machine import FPIOA,Pin
+_lit_download_mux=FPIOA()
+_lit_download_mux.set_function(26,FPIOA.GPIO26)
+_lit_download_pin=Pin(26,Pin.OUT,value=0)
+_lit_download_mux.set_function(26,FPIOA.GPIO26,pu=0,pd=1,ie=1,oe=1)
+_lit_download_pin.value(0)
+'''
+
 
 def build_script(remote, count, delay_ms):
     return '''import os,sys,time,json,gc,binascii,uhashlib
@@ -107,7 +115,8 @@ def open_link(port):
 
 
 def save_download(link, remote, target, progress=None):
-    data, digest = download(link, remote, progress)
+    data, digest = download(link, remote, progress,
+                            script_prefix=LIGHT_OFF_DURING_TRANSFER)
     if target.exists():
         raise RuntimeError('拒绝覆盖本地文件: ' + str(target))
     partial = target.with_suffix(target.suffix + '.partial')
