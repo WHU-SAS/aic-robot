@@ -4,6 +4,26 @@
 
 第0版可行性演示已跑通：K230提取特征，PC解算位姿、FK/IK并控制机械臂；现作为参考演示保留。
 
+## 功能演示
+
+### ① 自主追踪抓取
+
+追踪蓝色方块，接近后完成抓取。
+
+https://github.com/user-attachments/assets/8727d0c5-af14-46ac-8d45-5f98477f9e53
+
+### ② 夹取失败重试
+
+夹取失败后重新定位，再次尝试抓取。
+
+https://github.com/user-attachments/assets/ede22e75-522a-4e8c-8239-ee370f32e1b9
+
+### ③ 目标重搜与追踪
+
+方块被移开后重新搜索，找到目标并恢复追踪。
+
+https://github.com/user-attachments/assets/4cd675e8-9e65-4bd4-8ff4-0e870b1a4405
+
 ## 当前情况
 
 机械臂本阶段版本采用5号侧面旋转和0mm经验补偿；“回准备位”发送位1，“思达思达”先立即发送行驶用位2，再进入任务，均不等待准备位到位。小车接近、停车验窗后复用同帧精定位抓取；整车全链路及成功率仍待验证。见[整车完整任务](docs/guides/robot-task.md)。
