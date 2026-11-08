@@ -1,0 +1,52 @@
+SOURCE-VISIBLE COPYRIGHT AND PERMISSIONS NOTICE
+
+Copyright (c) 2026 the respective aic-robot contributors.
+All rights reserved, except as stated below.
+
+1. Scope
+
+This notice applies only to original project material for which the respective
+aic-robot contributors hold the relevant rights, and only where that material
+is not already covered by a separate license or permission notice. It does not
+claim ownership of third-party code, models, documentation, images, or other
+materials.
+
+2. No general software license
+
+Making source code visible does not grant a general license to run, reuse,
+copy, modify, distribute, sublicense, or commercially exploit original project
+material. No such additional permission is granted by this notice. Obtain
+separate permission from the relevant rights holders before doing so, unless
+the activity is otherwise permitted by applicable law or an existing license.
+
+This project is not offered as a whole under an open-source license.
+
+3. GitHub platform permissions
+
+Nothing in this notice restricts rights granted under GitHub's applicable
+Terms of Service, including viewing public repository content and forking it
+through GitHub's functionality. This notice cannot technically prevent cloning,
+downloading, or copying publicly accessible content.
+
+4. Third-party and separately licensed material
+
+Third-party material and material already covered by another license remain
+subject to their applicable notices and licenses. This includes, without
+limitation, the FEETECH SDK and the TI/CMSIS components under third_party/.
+Those licenses are not replaced or narrowed by this notice. Existing copyright,
+license, attribution, and redistribution notices must be preserved.
+
+This notice neither supplies missing publication permissions for third-party
+assets nor establishes that every model, image, or vendor document may be
+redistributed. Those permissions must be verified separately before publication.
+
+5. Permission requests
+
+Requests for additional permissions may be directed to the WHU-SAS repository
+maintainers, who must involve the relevant rights holders where necessary.
+
+6. Disclaimer
+
+To the extent permitted by applicable law, original project material is
+provided AS IS, without warranties. The rights holders are not liable for
+claims or damages arising from its use.
