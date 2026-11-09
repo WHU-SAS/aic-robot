@@ -9,6 +9,6 @@
   <img src="https://raw.githubusercontent.com/WHU-SAS/aic-robot/main/docs/showcase/images/03-parking-window.png" width="460" alt="停车区域与方块底面中心示意，使用历史配置">
 </p>
 
-[项目仓库](https://github.com/WHU-SAS/aic-robot) · [更多图片与说明](https://github.com/WHU-SAS/aic-robot/tree/main/docs/showcase) · [实物抓取演示（2倍速）](https://github.com/user-attachments/assets/8727d0c5-af14-46ac-8d45-5f98477f9e53)
+[项目仓库](https://github.com/WHU-SAS/aic-robot) · [更多图片与说明](https://github.com/WHU-SAS/aic-robot/tree/main/docs/showcase)
 
 图片包含开发实物及历史示意，重复运行稳定性与精度仍在验证。
