@@ -6,6 +6,36 @@
 
 **技术关键词：** 嵌入式视觉 · 几何定位与坐标变换 · 编码器闭环 · 差速底盘 · 机械臂运动学 · 车臂协同。
 
+## 实机任务演示
+
+三段整车实机视频分别展示正常流程与两种异常恢复，**均为2倍速播放**；下列时长为视频播放时长，不代表实际任务耗时。展示副本经过压缩，原片保留本机。
+
+### 1. 自主追踪抓取 · 约9秒 · 2倍速
+
+追踪方块 → 接近停车 → 定位抓取 → 抬升。
+
+https://github.com/user-attachments/assets/8727d0c5-af14-46ac-8d45-5f98477f9e53
+
+[本地展示文件／下载](videos/01-autonomous-tracking-grasp.mp4)
+
+### 2. 夹取失败重试 · 约14秒 · 2倍速
+
+首次夹取未成功后，恢复观察、重新定位并再次尝试抓取。
+
+https://github.com/user-attachments/assets/ede22e75-522a-4e8c-8239-ee370f32e1b9
+
+[本地展示文件／下载](videos/02-grasp-retry.mp4)
+
+### 3. 目标重搜与追踪 · 约13秒 · 2倍速
+
+方块被人为移开后，机器人重新搜索，找到目标并恢复追踪。
+
+https://github.com/user-attachments/assets/4cd675e8-9e65-4bd4-8ff4-0e870b1a4405
+
+[本地展示文件／下载](videos/03-target-search-reacquisition.mp4)
+
+视频展示单次实物运行场景，重复运行稳定性、任务成功率和精度仍需单独验证与统计。
+
 ## 粗定位演示视频
 
 [![点击查看蓝块粗定位演示](images/02-blue-block-tracking.jpg)](videos/blue-cube-coarse-localization.mp4)
@@ -66,6 +96,8 @@
 
 ## 用于项目展示
 
+个人简介建议先展示三段实机任务视频，再选取2～3张图片说明视觉与几何定位。整个目录可复制使用：`images/`为7张图片，`videos/`为4段视频，`sources.json`保留来源、倍速及哈希记录。
+
 可以直接复制 [项目展示片段](profile-snippet.md)，其中使用GitHub图片地址，适合用于项目页面、汇报材料或仓库README。需要自行排版时，可从 `images/` 选择图片；建议以蓝块识别截图配合停车区域图展示项目，技术细节可补充高光棱线对照、立方体模型拟合。
 
-图片与视频来源、文件尺寸和SHA256见 [素材清单](sources.json)。本目录仅公开精选副本，原始实验归档继续保留本机。素材适用仓库的[版权与权限说明](../../LICENSE)。
+图片与视频来源、文件尺寸和SHA256见 [素材清单](sources.json)。本目录仅公开精选副本，原始实验归档继续保留本机。素材适用仓库的[版权与权限说明](https://github.com/WHU-SAS/aic-robot/blob/main/LICENSE)。

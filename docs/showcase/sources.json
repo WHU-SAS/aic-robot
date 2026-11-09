@@ -1,5 +1,5 @@
 {
-  "description": "用户授权公开的精选展示副本；原始归档保留本机。图片及已制作的视频按原字节复制，本次未重新剪辑或改写检测数据。",
+  "description": "统一项目展示素材：7张精选图片、3段2倍速整车实机视频及1段原速粗定位离线标注视频；原片与实验归档继续保留本机。",
   "images": [
     {
       "file": "images/07-far-detection-samples.jpg",
@@ -120,6 +120,64 @@
       ],
       "note": "K230原片的电脑离线检测与数据叠加；两段桌面移动原速剪接，非板端实时录屏，毫米数为桌面条件下的粗估计。",
       "processing": "既有演示视频逐字节复制，本次未重编码或重新剪辑"
+    },
+    {
+      "file": "videos/01-autonomous-tracking-grasp.mp4",
+      "title": "自主追踪抓取",
+      "source": "show/1_自主追踪抓取.mp4",
+      "source_sha256": "6448bedc084437bd27e391360b0c52c82721fea2a3bdc541a9d5d39bc74f5358",
+      "sha256": "b5d7107207d88933fb092f09f8eb4fd71005766b9b115e1704b4cd83a32f2597",
+      "bytes": 3488580,
+      "dimensions_px": [
+        1280,
+        720
+      ],
+      "decoded_frames": 271,
+      "fps": 30.0,
+      "duration_s": 9.033333333333333,
+      "playback_speed": 2,
+      "asset_url": "https://github.com/user-attachments/assets/8727d0c5-af14-46ac-8d45-5f98477f9e53",
+      "note": "用户拍摄的整车实机演示，视频已为2倍速；播放时长不代表实际任务耗时。",
+      "processing": "复制2026-11-08已压缩的展示副本（H.264、1280×720）；本次未重编码或再次变速，原片继续保留本机show/。"
+    },
+    {
+      "file": "videos/02-grasp-retry.mp4",
+      "title": "夹取失败重试",
+      "source": "show/2_夹取失败重试.mp4",
+      "source_sha256": "5deb3ecb26270b5a26522619d88f6cef56768d43b47e5a477e94381af3fceb5a",
+      "sha256": "51a06a72b637bfeae0bf4afa9b55b04253a45e8c2ada5219dd53eaa04668b31e",
+      "bytes": 4452187,
+      "dimensions_px": [
+        1280,
+        720
+      ],
+      "decoded_frames": 424,
+      "fps": 30.0,
+      "duration_s": 14.133333333333333,
+      "playback_speed": 2,
+      "asset_url": "https://github.com/user-attachments/assets/ede22e75-522a-4e8c-8239-ee370f32e1b9",
+      "note": "用户拍摄的整车实机演示，视频已为2倍速；播放时长不代表实际任务耗时。",
+      "processing": "复制2026-11-08已压缩的展示副本（H.264、1280×720）；本次未重编码或再次变速，原片继续保留本机show/。"
+    },
+    {
+      "file": "videos/03-target-search-reacquisition.mp4",
+      "title": "目标重搜与追踪",
+      "source": "show/3_目标重搜与追踪.mp4",
+      "source_sha256": "529e7e9a6c9a6faf3324842638aa2a819902b8a8cbe42767b153195c15e4627e",
+      "sha256": "9d17f2f838e04aea04ac1067d9f8befe09dccab47d1290c79ce47bfd4c9337cf",
+      "bytes": 5124150,
+      "dimensions_px": [
+        1280,
+        720
+      ],
+      "decoded_frames": 386,
+      "fps": 30.0,
+      "duration_s": 12.866666666666667,
+      "playback_speed": 2,
+      "asset_url": "https://github.com/user-attachments/assets/4cd675e8-9e65-4bd4-8ff4-0e870b1a4405",
+      "note": "用户拍摄的整车实机演示，视频已为2倍速；播放时长不代表实际任务耗时。",
+      "processing": "复制2026-11-08已压缩的展示副本（H.264、1280×720）；本次未重编码或再次变速，原片继续保留本机show/。"
     }
-  ]
+  ],
+  "updated_date": "2026-11-09"
 }
