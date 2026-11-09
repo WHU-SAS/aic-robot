@@ -6,6 +6,7 @@
 
 <p>
   <img src="https://raw.githubusercontent.com/WHU-SAS/aic-robot/main/docs/showcase/images/03-parking-window.png" width="460" alt="停车区域与方块底面中心示意，使用历史配置">
+  <img src="https://raw.githubusercontent.com/WHU-SAS/aic-robot/main/docs/showcase/images/09-cube-model-projection.png" width="320" alt="五个测量角点与20mm立方体模型重投影">
 </p>
 
 [粗定位演示（9.2秒，原速）](https://github.com/WHU-SAS/aic-robot/blob/main/docs/showcase/videos/blue-cube-coarse-localization.mp4) · [项目仓库](https://github.com/WHU-SAS/aic-robot) · [更多图片与说明](https://github.com/WHU-SAS/aic-robot/tree/main/docs/showcase)

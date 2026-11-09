@@ -52,6 +52,58 @@
       "note": "目标重新入画后的PC离线标注截图；不等同于整车动态追踪现场验收。",
       "source_sha256": "7141bf1501d134197ed20789591b7c5905ee6844245478973c7fd1c548765499",
       "processing": "原文件逐字节复制"
+    },
+    {
+      "file": "images/06-camera-calibration.jpg",
+      "source": "data/vision/residual_followup_20261104/root_plane_stats/charuco_contact.jpg",
+      "sha256": "412d3e49409616b7cfd7c4210bfe8eeff4d72b8ea84eb856708f5dd7135852cf",
+      "source_sha256": "412d3e49409616b7cfd7c4210bfe8eeff4d72b8ea84eb856708f5dd7135852cf",
+      "bytes": 489627,
+      "dimensions_px": [
+        1200,
+        1650
+      ],
+      "note": "历史ChArUco标定板多姿态采集总览；仅展示标定素材，不作为最终标定精度验收。",
+      "processing": "既有图片逐字节复制，未重新拟合、重绘或改写图中数据"
+    },
+    {
+      "file": "images/07-far-detection-samples.jpg",
+      "source": "data/car/far_review_20261024_141214/revised_boxes.jpg",
+      "sha256": "ac569063d1854b1ffe736c8f839d26cffd2bdea725bc8e75466a7ae9b649014b",
+      "source_sha256": "ac569063d1854b1ffe736c8f839d26cffd2bdea725bc8e75466a7ae9b649014b",
+      "bytes": 513821,
+      "dimensions_px": [
+        1280,
+        1296
+      ],
+      "note": "历史30张远距离照片的PC检测总览；图中毫米数是估计值，不是外部实测真值。",
+      "processing": "既有图片逐字节复制，未重新拟合、重绘或改写图中数据"
+    },
+    {
+      "file": "images/08-highlight-edge-localization.png",
+      "source": "data/vision/lit_validation/20261104_100443_212133/improvement_ridge_01/frame_01_raw_left_measured_right.png",
+      "sha256": "3ff4b3acf81f466bfa163eddc6bb562f89713abef3b4e4b40955d7d73d294a56",
+      "source_sha256": "3ff4b3acf81f466bfa163eddc6bb562f89713abef3b4e4b40955d7d73d294a56",
+      "bytes": 764465,
+      "dimensions_px": [
+        1356,
+        1032
+      ],
+      "note": "补光正视图的原图与高光棱线/侧面测量对照；为离线诊断叠图，该样本恢复物理面定位，不代表全体场景的准确率。",
+      "processing": "既有图片逐字节复制，未重新拟合、重绘或改写图中数据"
+    },
+    {
+      "file": "images/09-cube-model-projection.png",
+      "source": "data/vision/residual_followup_20261104/cube5_projection_review_01/H034_cube5_projection.png",
+      "sha256": "aaeb3c07a921492928e09308506acbd2f19f0f3b753ffc7bccc9ae91ea1a2eba",
+      "source_sha256": "aaeb3c07a921492928e09308506acbd2f19f0f3b753ffc7bccc9ae91ea1a2eba",
+      "bytes": 383788,
+      "dimensions_px": [
+        720,
+        852
+      ],
+      "note": "历史H034五测量角点与20mm立方体模型投影；B*为模型推算点，虚线为模型遮挡边。重投影误差不是实物抓取误差。",
+      "processing": "既有图片逐字节复制，未重新拟合、重绘或改写图中数据"
     }
   ],
   "videos": [
