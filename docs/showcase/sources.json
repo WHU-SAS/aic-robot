@@ -1,19 +1,6 @@
 {
-  "description": "用户授权公开的精选展示副本；原始归档保留本机。实物照片仅移除定位等元数据，保持图像像素与显示方向；其余图片按原字节复制，未重绘或改写检测数据。",
+  "description": "用户授权公开的精选展示副本；原始归档保留本机。图片按原字节复制，未重绘或改写检测数据。",
   "images": [
-    {
-      "file": "images/01-robot-hardware.jpg",
-      "source": "data/arm/model_alignment/candidate_20261030_132849/physical_evidence/IMG_20261030_133702..jpg",
-      "sha256": "8e424f0eeab18928f38be6d65837fb332942d54e972bb253c30185280708a26a",
-      "bytes": 3313389,
-      "dimensions_px": [
-        1362,
-        4096
-      ],
-      "note": "开发阶段机器人硬件实物；展示机械臂、K230及底盘装配，不作为抓取结果。",
-      "source_sha256": "1e6fca0c46fb5f082a949a87ec67285e388ef3890859129dd5fceaf3601269e7",
-      "processing": "移除EXIF/XMP/IPTC及注释元数据；解码像素与显示方向验证不变"
-    },
     {
       "file": "images/02-blue-block-tracking.jpg",
       "source": "data/car/report_assets/live_blue_cube_20261024_164520/showcase_table_distance.jpg",
