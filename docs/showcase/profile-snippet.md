@@ -2,7 +2,7 @@
 
 基于K230、MSPM0与六轴机械臂，围绕20 mm蓝色方块，实现语音触发、视觉追踪、底盘接近、停车定位及抓取，并已演示目标重搜和夹取失败重试。
 
-**技术方向：** 嵌入式视觉、相机标定、编码器闭环控制、机械臂运动学与车臂协同。
+**技术方向：** 嵌入式视觉、几何定位、编码器闭环控制、机械臂运动学与车臂协同。
 
 <p>
   <img src="https://raw.githubusercontent.com/WHU-SAS/aic-robot/main/docs/showcase/images/03-parking-window.png" width="460" alt="停车区域与方块底面中心示意，使用历史配置">

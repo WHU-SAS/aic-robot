@@ -2,6 +2,19 @@
   "description": "用户授权公开的精选展示副本；原始归档保留本机。图片及已制作的视频按原字节复制，本次未重新剪辑或改写检测数据。",
   "images": [
     {
+      "file": "images/07-far-detection-samples.jpg",
+      "source": "data/car/far_review_20261024_141214/revised_boxes.jpg",
+      "sha256": "ac569063d1854b1ffe736c8f839d26cffd2bdea725bc8e75466a7ae9b649014b",
+      "source_sha256": "ac569063d1854b1ffe736c8f839d26cffd2bdea725bc8e75466a7ae9b649014b",
+      "bytes": 513821,
+      "dimensions_px": [
+        1280,
+        1296
+      ],
+      "note": "历史30张远距离照片的PC检测总览；图中毫米数是估计值，不是外部实测真值。",
+      "processing": "既有图片逐字节复制，未重新拟合、重绘或改写图中数据"
+    },
+    {
       "file": "images/02-blue-block-tracking.jpg",
       "source": "data/car/report_assets/live_blue_cube_20261024_164520/showcase_table_distance.jpg",
       "sha256": "873dcc53c316ecddcb38b0ca779f141bf518e735d555e630ead12984819dbc4f",
@@ -12,32 +25,6 @@
       ],
       "note": "K230原片的PC离线分析展示截图；距离为桌面支撑假设下的粗估计，不是实时板端录屏。",
       "source_sha256": "873dcc53c316ecddcb38b0ca779f141bf518e735d555e630ead12984819dbc4f",
-      "processing": "原文件逐字节复制"
-    },
-    {
-      "file": "images/03-parking-window.png",
-      "source": "data/car/workspace/overlay_20261024_001214_026101/demo_annotations/parking_window_demo.png",
-      "sha256": "b61c738223d33c39979c065b8ad732ea6fd51426843db44d59241ae2a995066c",
-      "bytes": 1574437,
-      "dimensions_px": [
-        1280,
-        960
-      ],
-      "note": "历史停车区域配置的演示标注；遮挡线及底面中心为示意，不代表当前窗口参数或实测误差。",
-      "source_sha256": "b61c738223d33c39979c065b8ad732ea6fd51426843db44d59241ae2a995066c",
-      "processing": "原文件逐字节复制"
-    },
-    {
-      "file": "images/04-physical-face-localization.jpg",
-      "source": "data/logs/last_pick_evidence_20261022_235747/side_policy_overlay.jpg",
-      "sha256": "bbf57750bc916b7c27ce0353478ce333bcce2c7dd3f78a47c0d8456f42aa7981",
-      "bytes": 69799,
-      "dimensions_px": [
-        580,
-        680
-      ],
-      "note": "历史侧面定位诊断叠图；展示面与边缘的提取，不以叠图认定抓取精度。",
-      "source_sha256": "bbf57750bc916b7c27ce0353478ce333bcce2c7dd3f78a47c0d8456f42aa7981",
       "processing": "原文件逐字节复制"
     },
     {
@@ -54,30 +41,17 @@
       "processing": "原文件逐字节复制"
     },
     {
-      "file": "images/06-camera-calibration.jpg",
-      "source": "data/vision/residual_followup_20261104/root_plane_stats/charuco_contact.jpg",
-      "sha256": "412d3e49409616b7cfd7c4210bfe8eeff4d72b8ea84eb856708f5dd7135852cf",
-      "source_sha256": "412d3e49409616b7cfd7c4210bfe8eeff4d72b8ea84eb856708f5dd7135852cf",
-      "bytes": 489627,
+      "file": "images/04-physical-face-localization.jpg",
+      "source": "data/logs/last_pick_evidence_20261022_235747/side_policy_overlay.jpg",
+      "sha256": "bbf57750bc916b7c27ce0353478ce333bcce2c7dd3f78a47c0d8456f42aa7981",
+      "bytes": 69799,
       "dimensions_px": [
-        1200,
-        1650
+        580,
+        680
       ],
-      "note": "历史ChArUco标定板多姿态采集总览；仅展示标定素材，不作为最终标定精度验收。",
-      "processing": "既有图片逐字节复制，未重新拟合、重绘或改写图中数据"
-    },
-    {
-      "file": "images/07-far-detection-samples.jpg",
-      "source": "data/car/far_review_20261024_141214/revised_boxes.jpg",
-      "sha256": "ac569063d1854b1ffe736c8f839d26cffd2bdea725bc8e75466a7ae9b649014b",
-      "source_sha256": "ac569063d1854b1ffe736c8f839d26cffd2bdea725bc8e75466a7ae9b649014b",
-      "bytes": 513821,
-      "dimensions_px": [
-        1280,
-        1296
-      ],
-      "note": "历史30张远距离照片的PC检测总览；图中毫米数是估计值，不是外部实测真值。",
-      "processing": "既有图片逐字节复制，未重新拟合、重绘或改写图中数据"
+      "note": "历史侧面定位诊断叠图；展示面与边缘的提取，不以叠图认定抓取精度。",
+      "source_sha256": "bbf57750bc916b7c27ce0353478ce333bcce2c7dd3f78a47c0d8456f42aa7981",
+      "processing": "原文件逐字节复制"
     },
     {
       "file": "images/08-highlight-edge-localization.png",
@@ -104,6 +78,19 @@
       ],
       "note": "历史H034五测量角点与20mm立方体模型投影；B*为模型推算点，虚线为模型遮挡边。重投影误差不是实物抓取误差。",
       "processing": "既有图片逐字节复制，未重新拟合、重绘或改写图中数据"
+    },
+    {
+      "file": "images/03-parking-window.png",
+      "source": "data/car/workspace/overlay_20261024_001214_026101/demo_annotations/parking_window_demo.png",
+      "sha256": "b61c738223d33c39979c065b8ad732ea6fd51426843db44d59241ae2a995066c",
+      "bytes": 1574437,
+      "dimensions_px": [
+        1280,
+        960
+      ],
+      "note": "历史停车区域配置的演示标注；遮挡线及底面中心为示意，不代表当前窗口参数或实测误差。",
+      "source_sha256": "b61c738223d33c39979c065b8ad732ea6fd51426843db44d59241ae2a995066c",
+      "processing": "原文件逐字节复制"
     }
   ],
   "videos": [
