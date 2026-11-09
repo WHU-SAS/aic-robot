@@ -52,7 +52,7 @@ K230 通过 UART 与 MSPM0 通信，并通过 URT-2 连接机械臂舵机。硬�
 
 | 想了解什么 | 从这里开始 |
 | --- | --- |
-| **个人简介展示素材** | [精选图片、简要介绍与可复制片段](docs/showcase/README.md) |
+| **项目展示素材** | [精选图片、简要介绍与可复制片段](docs/showcase/README.md) |
 | **整车运行与部署** | [完整任务指南](docs/guides/robot-task.md) · [当前追踪流程](docs/guides/full-process-tracking.md) |
 | **视觉与抓取实现** | [视觉模块](docs/guides/vision.md) · [机械臂基线与参数](docs/guides/arm/BASELINE.md) |
 | **硬件与接线** | [硬件型号、供电和连接](docs/hardware/connections.md) |
