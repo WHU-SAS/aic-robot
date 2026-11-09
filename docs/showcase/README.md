@@ -4,6 +4,16 @@
 
 **技术关键词：** 嵌入式视觉 · 相机标定与坐标变换 · 编码器闭环 · 差速底盘 · 机械臂运动学 · 车臂协同。
 
+## 粗定位演示视频
+
+[![点击查看蓝块粗定位演示](images/02-blue-block-tracking.jpg)](videos/blue-cube-coarse-localization.mp4)
+
+[查看视频](videos/blue-cube-coarse-localization.mp4) · [原文件播放／下载](https://raw.githubusercontent.com/WHU-SAS/aic-robot/main/docs/showcase/videos/blue-cube-coarse-localization.mp4)
+
+蓝块在桌面上移动时，画面逐帧显示检测框、像素中心、蓝色面积，以及摄像头垂足到方块底面中心估计点的桌面距离与虚线。
+
+约 **9.2秒，原速**，由此前录像的两段桌面移动片段剪接而成。**K230采集原片，电脑后期逐帧检测并叠加数据，并非板端实时录屏。** 毫米距离是桌面接触条件下的粗估计，不作为机械臂精定位坐标。
+
 ## 精选图片
 
 ### 1. 蓝块识别与粗定位
@@ -36,4 +46,4 @@
 
 可以直接复制 [个人简介片段](profile-snippet.md)，其中使用GitHub图片地址，适合粘贴到个人主页或GitHub Profile README。需要自行排版时，可从 `images/` 选择图片；建议以蓝块识别截图配合停车区域图展示项目，技术细节再补充物理面定位截图。
 
-原图来源、文件尺寸和SHA256见 [素材清单](sources.json)。本目录仅公开精选副本，原始实验归档继续保留本机。素材适用仓库的[版权与权限说明](../../LICENSE)。
+图片与视频来源、文件尺寸和SHA256见 [素材清单](sources.json)。本目录仅公开精选副本，原始实验归档继续保留本机。素材适用仓库的[版权与权限说明](../../LICENSE)。

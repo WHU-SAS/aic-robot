@@ -1,5 +1,5 @@
 {
-  "description": "用户授权公开的精选展示副本；原始归档保留本机。图片按原字节复制，未重绘或改写检测数据。",
+  "description": "用户授权公开的精选展示副本；原始归档保留本机。图片及已制作的视频按原字节复制，本次未重新剪辑或改写检测数据。",
   "images": [
     {
       "file": "images/02-blue-block-tracking.jpg",
@@ -52,6 +52,35 @@
       "note": "目标重新入画后的PC离线标注截图；不等同于整车动态追踪现场验收。",
       "source_sha256": "7141bf1501d134197ed20789591b7c5905ee6844245478973c7fd1c548765499",
       "processing": "原文件逐字节复制"
+    }
+  ],
+  "videos": [
+    {
+      "file": "videos/blue-cube-coarse-localization.mp4",
+      "source": "data/car/report_assets/live_blue_cube_20261024_164520/blue_cube_demo_tabletop.mp4",
+      "sha256": "a13c8526c9c82502ca0eb15a891b51d4b42067063e618fbaccf8e3e4c23f0311",
+      "source_sha256": "a13c8526c9c82502ca0eb15a891b51d4b42067063e618fbaccf8e3e4c23f0311",
+      "bytes": 2065495,
+      "dimensions_px": [
+        1280,
+        1040
+      ],
+      "decoded_frames": 276,
+      "fps": 30.00543576734916,
+      "duration_s": 9.198333333333332,
+      "playback_speed": 1,
+      "source_intervals_s": [
+        [
+          1.033,
+          8.0
+        ],
+        [
+          11.6,
+          13.8
+        ]
+      ],
+      "note": "K230原片的电脑离线检测与数据叠加；两段桌面移动原速剪接，非板端实时录屏，毫米数为桌面条件下的粗估计。",
+      "processing": "既有演示视频逐字节复制，本次未重编码或重新剪辑"
     }
   ]
 }

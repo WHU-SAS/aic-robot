@@ -8,6 +8,6 @@
   <img src="https://raw.githubusercontent.com/WHU-SAS/aic-robot/main/docs/showcase/images/03-parking-window.png" width="460" alt="停车区域与方块底面中心示意，使用历史配置">
 </p>
 
-[项目仓库](https://github.com/WHU-SAS/aic-robot) · [更多图片与说明](https://github.com/WHU-SAS/aic-robot/tree/main/docs/showcase)
+[粗定位演示（9.2秒，原速）](https://github.com/WHU-SAS/aic-robot/blob/main/docs/showcase/videos/blue-cube-coarse-localization.mp4) · [项目仓库](https://github.com/WHU-SAS/aic-robot) · [更多图片与说明](https://github.com/WHU-SAS/aic-robot/tree/main/docs/showcase)
 
-图片包含算法标注及历史示意，重复运行稳定性与精度仍在验证。
+视频为K230原片经电脑后期叠加检测框与估距；图片包含算法标注及历史示意。重复运行稳定性与精度仍在验证。
